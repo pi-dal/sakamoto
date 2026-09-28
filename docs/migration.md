@@ -16,6 +16,15 @@ The LaunchDaemon controls TUN as root. A user-owned socket (`0600`) allows the T
 
 **Never replace the root plist while sakamoto is connected.** Its process may keep TUN routes active; never remove a live socket underneath it. New binaries detect the old live socket and stay on the legacy directory until migration is deliberate.
 
+For the original `dev.pi-dal` launchd labels, the one-command path is:
+
+```bash
+bash scripts/migrate-legacy.sh --check   # read-only preflight
+bash scripts/migrate-legacy.sh           # prompts for macOS sudo before disconnecting
+```
+
+This interactive script backs up the old plists, disconnects the old VPN, waits for the system HTTP/HTTPS proxy to restore, replaces launchd services, starts the new VPN, tests the exit IP and a 204 URL, then rolls back to the old service if any step fails. It does **not** change Shadowrocket or Tailscale. If you have different old launchd labels, use the manual sequence below.
+
 1. Back up the old state and verify backup permissions: `cp -Rp ~/.config/sakamoto ~/.config/sakamoto.backup` (contains secrets).
 2. Use the TUI to disconnect sakamoto. Ensure the watcher has restored Wi-Fi HTTP/HTTPS proxy settings (`networksetup -getwebproxy Wi-Fi` and `-getsecurewebproxy Wi-Fi`). You may reconnect Shadowrocket temporarily to keep networking while migrating.
 3. Copy **source files**, not active sockets or logs, to `~/.sakamoto`: `sakamoto.yaml`, `nodes.txt`, your `macOS.conf` and its included files. Point `nodes_file:` and `conf:` at the new absolute locations. Re-import or generate under the new directory to build a new `config.json` and `rules/`. Check with `sing-box check`.
