@@ -23,7 +23,7 @@ Shows traffic, connections and logs. Click a connection to inspect the route and
 
 Click boolean switches or values to edit; `Enter` saves and `Esc` cancels. Relevant options:
 
-- **Reality 自动回落:** on/off switch for the fallback watcher.
+- **未命中策略 (experiment):** `off` directs unmatched traffic, `on` proxies unmatched traffic, `auto` learns hostnames only after repeated corroborated direct timeouts and a healthy proxy. **直连失败阈值** defaults to 3; auto may briefly reconnect the TUN when a hostname is learned. See [configuration and limitations](configuration.md#experimental-unmatched-domain-policy). Regenerate and reconnect after changing modes.
 - **自动回落链:** comma-separated priority, e.g. `RealityAuto,OthersAuto`; manual choice remains untouched.
 - **系统代理（浏览器）:** requires **开启 HTTP/SOCKS**. While sakamoto is connected, the watcher saves and sets macOS HTTP/HTTPS proxy; on disconnect it restores the previous values. A user-specific `proxy-restore.json` is local-only.
 - **iCloud 同步节点源:** off by default. Enabling requires a second confirmation because node links may contain credentials. Configure its directory/files in Settings and see [iCloud notes](icloud.md).

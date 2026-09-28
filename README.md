@@ -29,7 +29,7 @@ For TUN and always-on fallback, install the macOS services *once*: `bash scripts
 - **Home:** connected/verified state, live proxy chain and SOCKS exit, node groups with latency; left-click any node to select it, right-click for test/details, mouse wheel to scroll.
 - **Config:** import a `.conf` URL/file, browse General/rules/DNS, manage source subscriptions and manual node links; edited or deleted sources are saved locally. Generate changes, then disconnect/reconnect to apply.
 - **Data:** traffic, active connections, logs and close-connection action.
-- **Settings:** clickable toggles and editable values; Reality fallback order can be set as `RealityAuto,OthersAuto`. A manual selection is respected by the fallback watcher.
+- **Settings:** clickable toggles and editable values; Reality fallback order can be set as `RealityAuto,OthersAuto`. Experimental unmatched policy supports `off` (direct unmatched), `on` (proxy unmatched) and `auto` (learn from corroborated repeated direct timeouts). See [privacy limits and ruleset reference](docs/configuration.md#experimental-unmatched-domain-policy). A manual node selection is respected by the fallback watcher.
 
 **Fallback semantics:** `RealityAuto` gets fresh URL tests, then `OthersAuto` is selected when Reality is unavailable; switching back needs `recover_after` consecutive healthy checks. The watcher runs without an open TUI. Explicit node selection is not overridden.
 
@@ -59,7 +59,7 @@ go build ./cmd/sakamoto
 
 Code-quality baseline: `fuck-u-code analyze . -f json` improved from **65.9** to **about 78** after splitting oversized modules and handling unchecked I/O; the Go linter reports **0 issues**. The installed `fuck-u-code` shell parser may fall back to regex; treat its score as a trend, not a correctness proof. CI enforces tests, vet and the pinned Go linter.
 
-On macOS sign your local build ad hoc when copying to a different location: `codesign -s - -f ./sakamoto`. Do not commit generated binary, actual node links, subscription URLs, API secret, `.srs`, logs or generated `config.json`.
+On macOS sign your local build ad hoc when copying to a different location: `codesign -s - -f ./sakamoto`. Rotate an old/placeholder API credential with `sakamoto rotate-api` (brief reconnect; key never printed). Do not commit generated binary, actual node links, subscription URLs, API secret, `auto-proxy.json` (visited domains), `.srs`, logs or generated `config.json`.
 
 ## License and attribution
 

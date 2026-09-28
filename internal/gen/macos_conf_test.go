@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/pi-dal/sakamoto/internal/config"
+	"github.com/pi-dal/sakamoto/internal/experiment"
 )
 
 func TestMacOSConfIncludesAdRulesAndHosts(t *testing.T) {
@@ -109,6 +110,93 @@ func TestMacOSConfIncludesAdRulesAndHosts(t *testing.T) {
 	for _, r := range configNoSTUN.Route.Rules {
 		if r["protocol"] == "stun" {
 			t.Fatal("block_stun=false should not reject STUN")
+		}
+	}
+	cfg.Experiment.Mode = "on"
+	out3 := filepath.Join(dir, "always-proxy")
+	if err := Run(Options{ConfPath: main, NodesFile: nodes, SRJSONPath: cfg.SRJSONPath, Cfg: cfg, OutDir: out3, Quiet: true}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err = os.ReadFile(filepath.Join(out3, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var always struct {
+		Route struct {
+			Final string           `json:"final"`
+			Rules []map[string]any `json:"rules"`
+		} `json:"route"`
+	}
+	if err := json.Unmarshal(raw, &always); err != nil {
+		t.Fatal(err)
+	}
+	if always.Route.Final == "direct" {
+		t.Fatal("on must proxy unmatched domains")
+	}
+	cfg.Experiment.Mode = "auto"
+	out4 := filepath.Join(dir, "auto")
+	if err := os.MkdirAll(out4, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := experiment.Save(out4, experiment.State{Domains: []string{"learned.example"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run(Options{ConfPath: main, NodesFile: nodes, SRJSONPath: cfg.SRJSONPath, Cfg: cfg, OutDir: out4, Quiet: true}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err = os.ReadFile(filepath.Join(out4, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var auto struct {
+		Route struct {
+			Final string           `json:"final"`
+			Rules []map[string]any `json:"rules"`
+		} `json:"route"`
+	}
+	if err := json.Unmarshal(raw, &auto); err != nil {
+		t.Fatal(err)
+	}
+	if auto.Route.Final != "direct" {
+		t.Fatal("auto must keep unmatched DIRECT until learned")
+	}
+	learnedAt, proxyAt, directAt := -1, -1, -1
+	for i, r := range auto.Route.Rules {
+		if r["domain"] != nil {
+			learnedAt = i
+		}
+		if r["outbound"] == "direct" {
+			directAt = i
+		}
+		if set, ok := r["rule_set"].([]any); ok && len(set) == 1 && set[0] == "rs-proxy" {
+			proxyAt = i
+		}
+	}
+	if directAt < 0 || learnedAt <= directAt || proxyAt <= learnedAt {
+		t.Fatalf("auto rule order invalid: direct=%d learned=%d proxy=%d", directAt, learnedAt, proxyAt)
+	}
+	if _, err := exec.LookPath("sing-box"); err == nil {
+		exit, err := experiment.ProxyOutbound(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		undo, err := experiment.Stage(out4, "second.example", exit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		learned, err := experiment.Load(out4)
+		if err != nil || len(learned.Domains) != 2 {
+			t.Fatal("promotion not persisted", learned, err)
+		}
+		if output, err := exec.Command("sing-box", "check", "-D", out4, "-c", filepath.Join(out4, "config.json")).CombinedOutput(); err != nil {
+			t.Fatalf("promoted config invalid: %v %s", err, output)
+		}
+		if err := undo(); err != nil {
+			t.Fatal(err)
+		}
+		learned, err = experiment.Load(out4)
+		if err != nil || len(learned.Domains) != 1 {
+			t.Fatal("rollback not persisted", learned, err)
 		}
 	}
 }

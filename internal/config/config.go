@@ -3,9 +3,13 @@ package config
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -36,6 +40,10 @@ type Config struct {
 	SocksExit     string      `yaml:"socks_exit"`    // 链式出口节点 tag（该 socks 节点自动 detour 到 MainProxy）
 	BlockQUIC     bool        `yaml:"block_quic"`    // 拒 UDP:443 强制 TCP（默认 true）
 	BlockSTUN     bool        `yaml:"block_stun"`    // 拒 STUN 防 WebRTC 泄露（默认 true，对齐 UDPSocketDisableSTUN）
+	Experiment    struct {
+		Mode      string `yaml:"mode"`      // off: 保持来源 FINAL; on: 未命中走代理; auto: 失败达阈值的域名走代理
+		Threshold int    `yaml:"threshold"` // auto: 不同尝试连续失败次数（默认 3）
+	} `yaml:"experiment"`
 
 	// —— 对齐 Shadowrocket 应用设置层 ——
 	ChainEnabled bool   `yaml:"chain_enabled"` // ChainProxyEnabled：socks 出口 detour MainProxy（默认 true）
@@ -102,10 +110,7 @@ func Default() *Config {
 		TestSettle:      5 * time.Second,
 	}
 	c.API.URL = "http://127.0.0.1:9090"
-	secret := make([]byte, 24)
-	if _, err := rand.Read(secret); err == nil {
-		c.API.Secret = hex.EncodeToString(secret)
-	}
+	c.API.Secret, _ = NewAPISecret() // generation failure is rejected by ValidateAPISecret before use
 	home, _ := os.UserHomeDir()
 	c.ConfPath = filepath.Join(home, "Downloads", "sr_top500_banlist_ad.conf")
 	c.SRJSONPath = filepath.Join(home, "Documents", "Shadowrocket.json")
@@ -113,6 +118,8 @@ func Default() *Config {
 	c.AllowHosts = []string{} // 默认空：手动节点全走 nodes.txt，避免 SR 备份里的过期节点
 	c.BlockQUIC = true
 	c.BlockSTUN = true // 对齐 SR UDPSocketDisableSTUN=true
+	c.Experiment.Mode = "off"
+	c.Experiment.Threshold = 3
 	c.ChainEnabled = true
 	c.StrictRoute = false // TunnelEnforceRoutesKey=false
 	c.TunStack = "gvisor"
@@ -149,15 +156,86 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(b, c); err != nil {
 		return nil, err
 	}
+	// Old sidecars have no experiment setting: retain a previously generated
+	// proxy final rather than silently changing them to the new off=direct mode.
+	var marker struct {
+		Experiment *yaml.Node `yaml:"experiment"`
+	}
+	if err := yaml.Unmarshal(b, &marker); err != nil {
+		return nil, err
+	}
+	if marker.Experiment == nil {
+		raw, e := os.ReadFile(filepath.Join(filepath.Dir(path), "config.json"))
+		if e == nil {
+			var prior struct {
+				Route struct {
+					Final string `json:"final"`
+				} `json:"route"`
+			}
+			if json.Unmarshal(raw, &prior) == nil && prior.Route.Final != "" && prior.Route.Final != "direct" {
+				c.Experiment.Mode = "on"
+			}
+		}
+	}
+	if err := c.ValidateExperiment(); err != nil {
+		return nil, err
+	}
+	if err := c.ValidateAPIEndpoint(); err != nil {
+		return nil, err
+	}
 	return c, nil
+}
+
+// NewAPISecret creates 32 bytes of cryptographically random API key material.
+func NewAPISecret() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// ValidateAPISecret rejects placeholders and short keys rather than exposing
+// the unauthenticated loopback API when a template is left unchanged.
+func ValidateAPISecret(secret string) error {
+	s := strings.TrimSpace(secret)
+	if len(s) < 32 || strings.EqualFold(s, "replace_with_random_secret") || strings.EqualFold(s, "change-me") {
+		return errors.New("API secret must be a unique random value of at least 32 characters; run sakamoto rotate-api")
+	}
+	return nil
 }
 
 // DefaultPath 返回默认配置路径 ~/.config/sakamoto/sakamoto.yaml
 func DefaultPath() string { return filepath.Join(DefaultDir(), "sakamoto.yaml") }
 
+// ValidateAPIEndpoint prevents the credential from being sent to a remote host.
+func (c *Config) ValidateAPIEndpoint() error {
+	u, err := url.Parse(c.API.URL)
+	if err != nil || u.Scheme != "http" || (u.Hostname() != "127.0.0.1" && u.Hostname() != "::1") || u.Port() == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+		return errors.New("api.url must be a loopback HTTP endpoint with explicit port")
+	}
+	return nil
+}
+
+// ValidateExperiment rejects unknown modes instead of silently widening direct access.
+func (c *Config) ValidateExperiment() error {
+	switch c.Experiment.Mode {
+	case "off", "on", "auto":
+	default:
+		return errors.New("experiment.mode must be off, on, or auto")
+	}
+	if c.Experiment.Threshold < 1 || c.Experiment.Threshold > 20 {
+		return errors.New("experiment.threshold must be 1–20")
+	}
+	return nil
+}
+
+// MarshalYAML serializes the sidecar without writing secrets to stdout.
+func (c *Config) MarshalYAML() ([]byte, error) { return yaml.Marshal(c) }
+
 // Save 写回 yaml（TUI 编辑用）。
 func (c *Config) Save(path string) error {
-	b, err := yaml.Marshal(c)
+	b, err := c.MarshalYAML()
 	if err != nil {
 		return err
 	}

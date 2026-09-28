@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/pi-dal/sakamoto/internal/config"
+	"github.com/pi-dal/sakamoto/internal/experiment"
 	"github.com/pi-dal/sakamoto/internal/icloud"
 	"github.com/pi-dal/sakamoto/internal/sbclient"
 	"github.com/pi-dal/sakamoto/internal/svc"
@@ -131,6 +132,29 @@ func (w *Watcher) runOnce(ctx context.Context) error {
 	w.emit("info", "已连接 sing-box api")
 
 	groupsCh, errCh := c.SubscribeGroups(ctx)
+	var connectionCh <-chan *daemon.ConnectionEvents
+	var connectionErrors <-chan error
+	var logCh <-chan *daemon.Log
+	var logErrors <-chan error
+	var autoCancel context.CancelFunc
+	defer func() {
+		if autoCancel != nil {
+			autoCancel()
+		}
+	}()
+	tracker := experiment.NewTracker(w.cfg.Experiment.Threshold)
+	startAuto := func() {
+		if autoCancel != nil {
+			return
+		}
+		var subCtx context.Context
+		subCtx, autoCancel = context.WithCancel(ctx)
+		connectionCh, connectionErrors = c.SubscribeConnections(subCtx, 500)
+		logCh, logErrors = c.SubscribeLog(subCtx)
+	}
+	if w.cfg.Experiment.Mode == "auto" {
+		startAuto()
+	}
 	tick := time.NewTicker(w.cfg.CheckInterval)
 	defer tick.Stop()
 	var settle *time.Timer
@@ -147,6 +171,33 @@ func (w *Watcher) runOnce(ctx context.Context) error {
 			return ctx.Err()
 		case err := <-errCh:
 			return err
+		case err := <-connectionErrors:
+			return err
+		case err := <-logErrors:
+			return err
+		case events, ok := <-connectionCh:
+			if !ok {
+				return fmt.Errorf("auto connection stream closed")
+			}
+			if w.cfg.Experiment.Mode == "auto" && events != nil {
+				for _, ev := range events.Events {
+					tracker.Connection(ev, time.Now())
+				}
+			}
+		case entry, ok := <-logCh:
+			if !ok {
+				return fmt.Errorf("auto log stream closed")
+			}
+			if w.cfg.Experiment.Mode == "auto" && entry != nil {
+				for _, msg := range entry.Messages {
+					if msg.Level != daemon.LogLevel_ERROR {
+						continue
+					}
+					if domain := tracker.Failure(msg.Message, time.Now(), w.proxyHealthy()); domain != "" {
+						w.learnDomain(ctx, domain)
+					}
+				}
+			}
 		case g, ok := <-groupsCh:
 			if !ok {
 				return fmt.Errorf("groups stream closed")
@@ -157,6 +208,20 @@ func (w *Watcher) runOnce(ctx context.Context) error {
 				continue
 			}
 			if latest, err := config.Load(w.cfgPath); err == nil {
+				if latest.Experiment.Mode == "auto" && autoCancel == nil {
+					startAuto()
+				}
+				if latest.Experiment.Mode != "auto" && autoCancel != nil {
+					autoCancel()
+					autoCancel = nil
+					connectionCh = nil
+					connectionErrors = nil
+					logCh = nil
+					logErrors = nil
+				}
+				if latest.Experiment.Threshold != w.cfg.Experiment.Threshold {
+					tracker = experiment.NewTracker(latest.Experiment.Threshold)
+				}
 				w.cfg = latest
 			}
 			if !w.cfg.FallbackEnabled || len(w.cfg.Fallbacks) == 0 {
@@ -231,6 +296,71 @@ func (w *Watcher) evaluate(ctx context.Context, c *sbclient.Client, started int6
 			}
 		}
 	}
+}
+
+// proxyHealthy requires a recent successful URL test of the selected exit
+// group; during a general outage a direct timeout must not poison routing.
+func (w *Watcher) proxyHealthy() bool {
+	if w.lastSnap == nil {
+		return false
+	}
+	main := findGroup(w.lastSnap, "MainProxy")
+	if main == nil || main.Selected == "" {
+		return false
+	}
+	return aliveFresh(w.lastSnap, main.Selected, time.Now().Add(-2*time.Minute).Unix())
+}
+
+func (w *Watcher) learnDomain(ctx context.Context, domain string) {
+	if ctx.Err() != nil {
+		return
+	}
+	dir := filepath.Dir(w.cfgPath)
+	candidate, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	if err != nil {
+		w.emit("error", "auto 读取配置失败: %v", err)
+		return
+	}
+	outbound, err := experiment.ProxyOutbound(candidate)
+	if err != nil {
+		w.emit("error", "auto 查找代理出口失败: %v", err)
+		return
+	}
+	rollback, err := experiment.Stage(dir, domain, outbound)
+	if err != nil {
+		w.emit("error", "auto 规则校验失败: %v", err)
+		return
+	}
+	if rollback == nil {
+		return
+	}
+	w.emit("info", "%s: 直连连续失败，已写入代理规则，正在重连应用", domain)
+	reconnectErr := svc.Reconnect()
+	if reconnectErr == nil {
+		probeCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+		defer cancel()
+		for probeCtx.Err() == nil {
+			c, e := w.dialFn(probeCtx)
+			if e == nil {
+				c.Close()
+				w.emit("switch", "%s: 自动走代理已生效", domain)
+				return
+			}
+			select {
+			case <-probeCtx.Done():
+			case <-time.After(300 * time.Millisecond):
+			}
+		}
+		reconnectErr = fmt.Errorf("API did not recover after auto route update")
+	}
+	if restoreErr := rollback(); restoreErr != nil {
+		w.emit("error", "auto 回滚失败: %v", restoreErr)
+		return
+	}
+	if restoreErr := svc.Reconnect(); restoreErr != nil {
+		w.emit("error", "auto 恢复旧连接失败: %v", restoreErr)
+	}
+	w.emit("error", "%s: auto 未生效，已回滚: %v", domain, reconnectErr)
 }
 
 func pickFallback(snap *daemon.Groups, chain []string, started int64) (string, int) {

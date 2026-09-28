@@ -11,6 +11,10 @@ fallbacks:
 chain_enabled: true
 block_quic: true
 block_stun: true
+# Experimental unmatched policy: off preserves the imported FINAL rule.
+experiment:
+  mode: off  # off | on | auto
+  threshold: 3
 tun_stack: gvisor
 log_level: info
 tailscale_optimize: true

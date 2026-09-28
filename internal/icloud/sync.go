@@ -49,7 +49,7 @@ func atomic(path string, data []byte) error {
 }
 func safeName(name string) bool {
 	return name != "" && name == filepath.Base(name) && !strings.HasPrefix(name, ".") &&
-		name != "config.json" && name != "sakamoto.yaml" && name != "proxy-restore.json" &&
+		name != "config.json" && name != "sakamoto.yaml" && name != "proxy-restore.json" && name != "auto-proxy.json" &&
 		!strings.HasSuffix(name, ".srs") && !strings.HasSuffix(name, ".log")
 }
 func Sync(localDir string, cfg *config.Config) ([]string, error) {

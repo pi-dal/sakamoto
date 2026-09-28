@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/pi-dal/sakamoto/internal/config"
+	"github.com/pi-dal/sakamoto/internal/experiment"
 )
 
 // ---------------- 主流程 ----------------
@@ -41,6 +42,15 @@ func Run(o Options) error {
 	cfg := o.Cfg
 	if cfg == nil {
 		cfg = config.Default()
+	}
+	if err := config.ValidateAPISecret(cfg.API.Secret); err != nil {
+		return err
+	}
+	if err := cfg.ValidateAPIEndpoint(); err != nil {
+		return err
+	}
+	if err := cfg.ValidateExperiment(); err != nil {
+		return err
 	}
 	out := o.OutDir
 	if out == "" {
@@ -263,9 +273,22 @@ func Run(o Options) error {
 		})
 	}
 
-	finalTag := exitTag
-	if strings.EqualFold(strings.TrimSpace(p.final), "DIRECT") {
-		finalTag = "direct"
+	finalTag := "direct"
+	if cfg.Experiment.Mode == "on" {
+		finalTag = exitTag
+	}
+	if cfg.Experiment.Mode == "auto" {
+		learned, err := experiment.Load(out)
+		if err != nil {
+			return fmt.Errorf("load auto-proxy rules: %w", err)
+		}
+		if len(learned.Domains) > 0 {
+			// Explicit DIRECT/REJECT stay authoritative: learn only the fallback case.
+			at := len(routeRules) - 1
+			routeRules = append(routeRules, nil)
+			copy(routeRules[at+1:], routeRules[at:])
+			routeRules[at] = map[string]any{"domain": learned.Domains, "action": "route", "outbound": exitTag}
+		}
 	}
 	config := map[string]any{
 		"log": map[string]any{"level": cfg.LogLevel, "timestamp": true},
@@ -283,7 +306,7 @@ func Run(o Options) error {
 		},
 		"services": []map[string]any{{
 			"type": "api", "listen": "127.0.0.1", "listen_port": 9090,
-			"secret": cfg.API.Secret, "dashboard": map[string]any{"enabled": true},
+			"secret": cfg.API.Secret, "dashboard": map[string]any{"enabled": false},
 		}},
 	}
 	b, err := json.MarshalIndent(config, "", "  ")

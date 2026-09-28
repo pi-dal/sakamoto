@@ -4,6 +4,7 @@ package svc
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -164,6 +165,9 @@ func (s *Server) start() string {
 	if s.child != nil && s.child.ProcessState == nil {
 		return "already running"
 	}
+	if err := validateAPIService(s.cfgPath); err != nil {
+		return "start failed: " + err.Error()
+	}
 	cmd := exec.Command("/opt/homebrew/bin/sing-box", "run",
 		"-c", s.cfgPath, "-D", s.workDir)
 	cmd.Stdout = logWriter{s}
@@ -176,6 +180,45 @@ func (s *Server) start() string {
 	s.restarts++
 	go s.waitLoop(cmd, s.restarts)
 	return fmt.Sprintf("connected (pid %d)", cmd.Process.Pid)
+}
+
+// validateAPIService fails closed before a root child could expose an API with
+// a placeholder secret, a LAN listener, or a browser dashboard.
+func validateAPIService(path string) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var c struct {
+		Services []struct {
+			Type      string `json:"type"`
+			Listen    string `json:"listen"`
+			Secret    string `json:"secret"`
+			Dashboard struct {
+				Enabled bool `json:"enabled"`
+			} `json:"dashboard"`
+		} `json:"services"`
+	}
+	if err := json.Unmarshal(b, &c); err != nil {
+		return err
+	}
+	count := 0
+	for _, s := range c.Services {
+		if s.Type != "api" {
+			continue
+		}
+		count++
+		if s.Listen != "127.0.0.1" || s.Dashboard.Enabled {
+			return fmt.Errorf("API must listen on loopback without dashboard; run sakamoto rotate-api")
+		}
+		if err := config.ValidateAPISecret(s.Secret); err != nil {
+			return err
+		}
+	}
+	if count != 1 {
+		return fmt.Errorf("exactly one authenticated API service required")
+	}
+	return nil
 }
 
 // waitLoop 子进程退出后自动重启（KeepAlive 兜底，退避防抖）。

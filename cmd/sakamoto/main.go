@@ -12,6 +12,7 @@ import (
 
 	"github.com/pi-dal/sakamoto/internal/config"
 	"github.com/pi-dal/sakamoto/internal/sbclient"
+	"github.com/pi-dal/sakamoto/internal/security"
 	"github.com/pi-dal/sakamoto/internal/svc"
 	"github.com/pi-dal/sakamoto/internal/tui"
 	"github.com/pi-dal/sakamoto/internal/watch"
@@ -26,6 +27,7 @@ const usage = `sakamoto — Shadowrocket 复刻版 sing-box 控制面
   sakamoto daemon       root 监督进程（LaunchDaemon 拉起；管 sing-box 子进程，
                         提供 connect/disconnect socket —— 等价 SR 的 VPN 开关）
   sakamoto watch        fallback 降级守护（LaunchAgent；链首优先自动降级回切）
+  sakamoto rotate-api   轮换本机 API 密钥（连接中会短暂重连）
   sakamoto version      版本
   sakamoto help         本说明
 
@@ -68,6 +70,11 @@ func main() {
 		if err := runWatch(ctx, *cfgPath); err != nil {
 			fatal("watch", err)
 		}
+	case "rotate-api":
+		if err := security.RotateAPI(*cfgPath); err != nil {
+			fatal("rotate-api", err)
+		}
+		fmt.Println("API 密钥已轮换；请重新打开 TUI。密钥不会打印。")
 	case "version":
 		fmt.Println("sakamoto", version)
 	case "help", "-h", "--help":
@@ -142,7 +149,11 @@ func runWatch(ctx context.Context, path string) error {
 		return err
 	}
 	dial := func(ctx context.Context) (*sbclient.Client, error) {
-		return sbclient.Dial(ctx, cfg.API.URL, cfg.API.Secret)
+		latest, err := config.Load(path)
+		if err != nil {
+			return nil, err
+		}
+		return sbclient.Dial(ctx, latest.API.URL, latest.API.Secret)
 	}
 	w := watch.New(cfg, dial)
 	w.SetConfigPath(path)

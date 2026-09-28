@@ -248,6 +248,12 @@ func TestMouseConfigAndSettingEditor(t *testing.T) {
 		t.Fatal("section detail missing")
 	}
 	m.page = settingsPage
+	for i, r := range m.cfgRows {
+		if r.label == "监听端口" {
+			m.cfgCursor = i
+			break
+		}
+	}
 	m.View()
 	var port hit
 	for _, h := range m.hits {
@@ -271,6 +277,38 @@ func TestMouseConfigAndSettingEditor(t *testing.T) {
 	loaded, err := config.Load(m.cfgPath)
 	if err != nil || loaded.MixedInbound.Port != 12081 {
 		t.Fatal("port not persisted", err)
+	}
+}
+
+func TestExperimentalPolicyEditableAndPersistent(t *testing.T) {
+	m := testModel(t)
+	var mode, threshold cfgRow
+	for _, r := range m.cfgRows {
+		if r.label == "未命中策略" {
+			mode = r
+		}
+		if r.label == "直连失败阈值" {
+			threshold = r
+		}
+	}
+	if mode.edit == nil || threshold.edit == nil {
+		t.Fatal("experiment settings missing")
+	}
+	if err := mode.edit("auto"); err != nil {
+		t.Fatal(err)
+	}
+	if err := threshold.edit("4"); err != nil {
+		t.Fatal(err)
+	}
+	if err := threshold.edit("0"); err == nil {
+		t.Fatal("invalid threshold accepted")
+	}
+	if err := m.cfg.Save(m.cfgPath); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := config.Load(m.cfgPath)
+	if err != nil || loaded.Experiment.Mode != "auto" || loaded.Experiment.Threshold != 4 {
+		t.Fatalf("experiment settings not saved: %v %v", loaded, err)
 	}
 }
 

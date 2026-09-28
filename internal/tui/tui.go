@@ -299,7 +299,7 @@ func (m *model) buildSettings() {
 				return fmt.Errorf("至少一个源文件")
 			}
 			for _, p := range parts {
-				if p != filepath.Base(p) || p == "config.json" || p == "sakamoto.yaml" || strings.HasSuffix(p, ".srs") || strings.HasSuffix(p, ".log") {
+				if p != filepath.Base(p) || p == "config.json" || p == "sakamoto.yaml" || p == "auto-proxy.json" || p == "proxy-restore.json" || strings.HasSuffix(p, ".srs") || strings.HasSuffix(p, ".log") {
 					return fmt.Errorf("仅允许源文件名，不能同步生成文件或 API 密钥")
 				}
 			}
@@ -308,6 +308,16 @@ func (m *model) buildSettings() {
 		}},
 		toggle("强制路由", &c.StrictRoute),
 		choice("TUN 栈", &c.TunStack, "system", "gvisor", "mixed"),
+		{label: "实验 · 未命中规则"},
+		choice("未命中策略", &c.Experiment.Mode, "off", "on", "auto"),
+		{label: "直连失败阈值", value: func() string { return fmt.Sprint(c.Experiment.Threshold) }, edit: func(s string) error {
+			v, err := strconv.Atoi(s)
+			if err != nil || v < 1 || v > 20 {
+				return fmt.Errorf("连续失败阈值需 1–20")
+			}
+			c.Experiment.Threshold = v
+			return nil
+		}},
 		{label: "UDP · 隐私"},
 		toggle("阻止 STUN / WebRTC", &c.BlockSTUN),
 		toggle("阻止 QUIC (UDP 443)", &c.BlockQUIC),

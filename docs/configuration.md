@@ -7,6 +7,7 @@
 ├── sakamoto.yaml       # user settings and source declarations
 ├── nodes.txt           # manual proxy share links, one per line
 ├── config.json         # generated sing-box configuration
+├── auto-proxy.json     # local-only learned domains (experimental auto mode)
 ├── rules/              # generated binary rule sets
 ├── imports/            # cached remote Shadowrocket conf files
 └── logs/
@@ -23,6 +24,9 @@ fallback_enabled: true
 chain_enabled: true
 block_stun: true
 block_quic: true
+experiment:
+  mode: off          # off | on | auto
+  threshold: 3      # 1–20 spaced direct failures
 tun_stack: gvisor
 system_proxy:
   enabled: true
@@ -39,6 +43,17 @@ fallbacks:
 - Never commit `sakamoto.yaml`, `nodes.txt`, `config.json`, `proxy-restore.json`, or generated rule sets.
 - Subscription URLs, UUIDs, passwords, Reality public keys, SOCKS credentials, and server addresses are secrets or operational metadata.
 - The public repository contains parsers and examples only. Use `nodes.example.txt` and `sakamoto.example.yaml` as templates.
+- The native API listens only on `127.0.0.1`, uses a private credential, and has its web dashboard disabled. Template or short API secrets are rejected when generating. Run `sakamoto rotate-api` to generate a new 32-byte random secret, validate the candidate, reconnect briefly, and roll back if reconnection fails. It never prints the secret. Restart an already-open TUI afterward; do not paste the YAML or generated JSON into issues.
+
+## Experimental unmatched-domain policy
+
+In Settings choose **未命中策略** and **直连失败阈值**, or set `experiment.mode`/`experiment.threshold` in YAML. `off` (the default for new setups) **always** sends unmatched traffic direct. Existing sidecars without this setting whose already-generated `route.final` was a proxy are migrated to `on` when loaded, to avoid silently widening direct traffic. `on` forces unmatched traffic through the generated proxy exit; explicit source `REJECT`, `DIRECT`, local-network, and Tailscale bypasses retain priority. `auto` starts with unmatched traffic direct. When three **separate** TCP direct dial timeouts to the same observed hostname occur at least 10 seconds apart within 30 minutes, and the chosen proxy has a fresh successful URL test, it saves the hostname in private `auto-proxy.json`, checks the generated config, and reconnects to apply it. A successful direct response resets its counter. The threshold is configurable from 1 to 20. Learned rules go after explicit DIRECT and before explicit PROXY; they survive regeneration, and are ignored while mode is off/on. Removing a name from `auto-proxy.json` followed by generation/reconnection reverses it.
+
+**Limits:** sing-box 1.14 does not expose a connection failure reason or hot route update in its API. The experiment correlates timeout error logs with rule-free (`FINAL`) direct connection events; it does not learn IP-only/TUN connections whose hostname is unknown, connection refusals, DNS failures, or sites merely returning an error page. A successful *proxy health test* does not prove that a particular destination works through the proxy. Auto-learning briefly drops active connections when it safely restarts the TUN; failure validation restores previous files and tries to reconnect. It does not fix macOS system-DNS leaks, IPv6 bypasses or WebRTC/TURN beyond the separate STUN rule. `on` is the stronger default-route privacy choice, but still leaves explicitly direct/excluded traffic direct.
+
+### External ruleset reference
+
+[`senshinya/singbox_ruleset`](https://github.com/senshinya/singbox_ruleset) is a GPL-3.0 collection of `.srs` files built daily from `blackmatrix7/ios_rule_script`. It is not silently imported: its workflow currently compiles with sing-box `1.10.0-beta.5` and force-pushes `main` every day. Treat it as an optional source for **individual** service lists, review their semantics/overlap with the imported Shadowrocket rules, pin or verify downloaded bytes, and run `sing-box check` before activation. Do not swap an entire service collection in for `FINAL` or assume that a daily build guarantees privacy.
 
 ## Fallback policy
 

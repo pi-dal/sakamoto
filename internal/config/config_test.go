@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -20,5 +21,44 @@ func TestDefaultDirOverrideAndRandomSecret(t *testing.T) {
 	}
 	if !a.FallbackEnabled || a.TunStack != "gvisor" {
 		t.Fatal("safe defaults lost")
+	}
+	for _, weak := range []string{"", "change-me", "REPLACE_WITH_RANDOM_SECRET", "12345678"} {
+		if ValidateAPISecret(weak) == nil {
+			t.Fatalf("weak secret accepted: %q", weak)
+		}
+	}
+	if err := ValidateAPISecret(a.API.Secret); err != nil {
+		t.Fatal(err)
+	}
+	for _, endpoint := range []string{"https://remote.example:9090", "http://localhost:9090", "http://127.0.0.1:9090/path", "http://user@127.0.0.1:9090"} {
+		a.API.URL = endpoint
+		if err := a.ValidateAPIEndpoint(); err == nil {
+			t.Fatalf("unsafe API endpoint accepted: %q", endpoint)
+		}
+	}
+	a.API.URL = "http://127.0.0.1:9090"
+	if err := a.ValidateAPIEndpoint(); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestLegacyProxyFinalStaysProxy(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sakamoto.yaml")
+	if err := os.WriteFile(path, []byte("api:\n  url: http://127.0.0.1:9090\n  secret: legacy-long-enough-random-secret-value\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"route":{"final":"Exit"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil || cfg.Experiment.Mode != "on" {
+		t.Fatalf("legacy proxy downgraded: %v %v", cfg, err)
+	}
+	if err := os.WriteFile(path, []byte("experiment:\n  mode: off\n  threshold: 3\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil || cfg.Experiment.Mode != "off" {
+		t.Fatalf("explicit off lost: %v %v", cfg, err)
 	}
 }

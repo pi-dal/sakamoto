@@ -2,6 +2,7 @@
 .sakamoto/
 config.json
 proxy-restore.json
+auto-proxy.json
 *.srs
 *.db
 *.log
