@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -145,6 +146,7 @@ func normTarget(t string) string {
 type parsedConf struct {
 	bk      buckets
 	general map[string]string
+	hosts   map[string]string
 	rawRoot string
 	errors  []error
 	geoip   [][2]string // (cc, target)
@@ -241,6 +243,24 @@ func parseConf(path string, hc *http.Client) (*parsedConf, error) {
 	return parseConfRec(path, hc, map[string]bool{})
 }
 
+var mergedGeneralKeys = map[string]bool{
+	"tun-excluded-routes": true, "bypass-tun": true, "skip-proxy": true,
+	"dns-server": true, "fallback-dns-server": true, "always-real-ip": true,
+}
+
+func joinUniqueCSV(primary, inherited string) string {
+	seen := map[string]bool{}
+	var result []string
+	for _, item := range append(splitCSV(primary), splitCSV(inherited)...) {
+		key := strings.ToLower(item)
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, item)
+		}
+	}
+	return strings.Join(result, ",")
+}
+
 func parseConfRec(path string, hc *http.Client, seen map[string]bool) (*parsedConf, error) {
 	if len(seen) >= 8 {
 		return nil, fmt.Errorf("配置 include 超过 8 层，已停止递归")
@@ -261,7 +281,7 @@ func parseConfRec(path string, hc *http.Client, seen map[string]bool) (*parsedCo
 	if err != nil {
 		return nil, err
 	}
-	p := &parsedConf{bk: buckets{}, general: map[string]string{}, rawRoot: string(body)}
+	p := &parsedConf{bk: buckets{}, general: map[string]string{}, hosts: map[string]string{}, rawRoot: string(body)}
 	section := ""
 	var includes []string
 	sc := bufio.NewScanner(strings.NewReader(string(body)))
@@ -300,9 +320,18 @@ func parseConfRec(path string, hc *http.Client, seen map[string]bool) (*parsedCo
 			if line != "" && !strings.HasPrefix(line, "#") {
 				p.pgroups = append(p.pgroups, line)
 			}
-		case "script", "script-url", "host":
+		case "host":
+			if name, ip, ok := strings.Cut(line, "="); ok {
+				name, ip = strings.ToLower(strings.TrimSpace(name)), strings.TrimSpace(ip)
+				if name != "" && net.ParseIP(ip) != nil {
+					p.hosts[name] = ip
+				} else if line != "" {
+					p.scripts = append(p.scripts, "Host: "+line)
+				}
+			}
+		case "script", "script-url":
 			if line != "" && !strings.HasPrefix(line, "#") {
-				p.scripts = append(p.scripts, line) // Script/Host 无等价，报告用
+				p.scripts = append(p.scripts, line)
 			}
 		}
 	}
@@ -337,8 +366,15 @@ func parseConfRec(path string, hc *http.Client, seen map[string]bool) (*parsedCo
 			}
 		}
 		for k, v := range sub.general {
-			if _, ok := p.general[k]; !ok {
-				p.general[k] = v // 本文件优先
+			if current, ok := p.general[k]; !ok {
+				p.general[k] = v
+			} else if mergedGeneralKeys[k] {
+				p.general[k] = joinUniqueCSV(current, v)
+			}
+		}
+		for name, ip := range sub.hosts {
+			if _, ok := p.hosts[name]; !ok {
+				p.hosts[name] = ip
 			}
 		}
 		p.geoip = append(p.geoip, sub.geoip...)

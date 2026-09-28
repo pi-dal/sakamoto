@@ -89,6 +89,8 @@ func exitFromConfig(cfgPath string) string {
 		} `json:"route"`
 		Outbounds []struct {
 			Tag        string `json:"tag"`
+			Type       string `json:"type"`
+			Detour     string `json:"detour"`
 			Server     string `json:"server"`
 			ServerPort int    `json:"server_port"`
 		} `json:"outbounds"`
@@ -96,9 +98,14 @@ func exitFromConfig(cfgPath string) string {
 	if json.Unmarshal(data, &cfg) != nil {
 		return "配置错误"
 	}
-	for _, outbound := range cfg.Outbounds {
-		if outbound.Tag == cfg.Route.Final && outbound.Server != "" {
-			return fmt.Sprintf("%s:%d", outbound.Server, outbound.ServerPort)
+	for _, o := range cfg.Outbounds {
+		if o.Type == "socks" && o.Detour == "MainProxy" && o.Server != "" {
+			return fmt.Sprintf("%s:%d", o.Server, o.ServerPort)
+		}
+	}
+	for _, o := range cfg.Outbounds {
+		if o.Tag == cfg.Route.Final && o.Server != "" {
+			return fmt.Sprintf("%s:%d", o.Server, o.ServerPort)
 		}
 	}
 	return cfg.Route.Final

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -163,10 +164,23 @@ func Run(o Options) error {
 	}
 	// DNS 规则只用纯域名规则集（ip_cidr 规则集需响应期匹配，走 private-ip-answer 那条）
 	var dnsDirectSets []string
-	if _, ok := p.bk["direct"]; ok {
-		dnsDirectSets = []string{"rs-direct-domains"}
+	if direct, ok := p.bk["direct"]; ok && len(direct["domain"])+len(direct["domain_suffix"])+len(direct["domain_keyword"]) > 0 {
+		tag := "rs-direct"
+		if len(direct["ip_cidr"]) > 0 {
+			tag = "rs-direct-domains"
+		}
+		dnsDirectSets = []string{tag}
 	}
 	dnsRules := []map[string]any{}
+	if len(p.hosts) > 0 {
+		dnsServers = append(dnsServers, map[string]any{"type": "hosts", "tag": "sr-hosts", "predefined": p.hosts})
+		names := make([]string, 0, len(p.hosts))
+		for name := range p.hosts {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		dnsRules = append(dnsRules, map[string]any{"domain": names, "action": "route", "server": "sr-hosts"})
+	}
 	if ts.Present {
 		// *.ts.net → Tailscale quad100（MagicDNS 设备名可解析）；必须排在通用 direct 规则前
 		dnsServers = append(dnsServers, map[string]any{
@@ -242,6 +256,10 @@ func Run(o Options) error {
 		})
 	}
 
+	finalTag := exitTag
+	if strings.EqualFold(strings.TrimSpace(p.final), "DIRECT") {
+		finalTag = "direct"
+	}
 	config := map[string]any{
 		"log": map[string]any{"level": cfg.LogLevel, "timestamp": true},
 		"dns": map[string]any{
@@ -253,7 +271,7 @@ func Run(o Options) error {
 		"outbounds": outbounds,
 		"route": map[string]any{
 			"rules": routeRules,
-			"final": exitTag, "auto_detect_interface": true, "rule_set": srsEntries,
+			"final": finalTag, "auto_detect_interface": true, "rule_set": srsEntries,
 			"default_domain_resolver": map[string]any{"server": localPublic, "strategy": "ipv4_only"},
 		},
 		"services": []map[string]any{{
@@ -323,7 +341,7 @@ func Run(o Options) error {
 			reportf("  ? [General] 未映射键: %s = %s\n", k, v)
 		}
 	}
-	reportf("→ %s  出口链: 流量→%s→detour→MainProxy→节点\n", cfgPath, exitTag)
+	reportf("→ %s  最终规则=%s，代理出口=%s（detour→MainProxy）\n", cfgPath, finalTag, exitTag)
 	reportf("   fallback 链: %v\n", chain)
 	return nil
 }
