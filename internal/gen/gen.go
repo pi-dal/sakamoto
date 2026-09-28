@@ -207,10 +207,17 @@ func Run(o Options) error {
 		{"rule_set": directSets, "action": "route", "outbound": "direct"},
 		{"rule_set": []string{"rs-proxy"}, "action": "route", "outbound": exitTag},
 	}
+	var udpProtections []map[string]any
+	if cfg.BlockSTUN {
+		// STUN (UDP) 可让网页获取公网映射地址；阻断已识别的 STUN 包。
+		udpProtections = append(udpProtections, map[string]any{"protocol": "stun", "action": "reject"})
+	}
 	if cfg.BlockQUIC {
-		// 拒 UDP:443 强制回落 TCP/TLS（代理下 QUIC 走 UDP-over-TCP 白损性能）
-		routeRules = append([]map[string]any{routeRules[0], routeRules[1], routeRules[2],
-			{"network": "udp", "port": 443, "action": "reject"}}, routeRules[3:]...)
+		// 拒 UDP:443 强制回落 TCP/TLS（代理下 QUIC 走 UDP-over-TCP 白损性能）。
+		udpProtections = append(udpProtections, map[string]any{"network": "udp", "port": 443, "action": "reject"})
+	}
+	if len(udpProtections) > 0 {
+		routeRules = append(append(append([]map[string]any{}, routeRules[:2]...), udpProtections...), routeRules[2:]...)
 	}
 	bypass := splitCSV(p.general["bypass-tun"])
 	bypass = append(bypass, splitCSV(p.general["tun-excluded-routes"])...)

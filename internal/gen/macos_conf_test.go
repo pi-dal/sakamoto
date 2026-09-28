@@ -72,6 +72,9 @@ func TestMacOSConfIncludesAdRulesAndHosts(t *testing.T) {
 	if generated.Route.Final != "direct" {
 		t.Fatalf("FINAL,DIRECT not preserved: %q", generated.Route.Final)
 	}
+	if len(generated.Route.Rules) < 4 || generated.Route.Rules[0]["action"] != "sniff" || generated.Route.Rules[1]["action"] != "hijack-dns" || generated.Route.Rules[2]["protocol"] != "stun" || generated.Route.Rules[2]["action"] != "reject" {
+		t.Fatalf("block_stun must reject sniffed STUN before direct rules: %v", generated.Route.Rules[:min(4, len(generated.Route.Rules))])
+	}
 	if !slices.Contains(generated.Inbounds[0].Exclude, "100.64.0.0/10") || !slices.Contains(generated.Inbounds[0].Exclude, "10.0.0.0/8") {
 		t.Fatal("tun exclusions lost")
 	}
@@ -84,6 +87,28 @@ func TestMacOSConfIncludesAdRulesAndHosts(t *testing.T) {
 	if _, err := exec.LookPath("sing-box"); err == nil {
 		if output, err := exec.Command("sing-box", "check", "-c", filepath.Join(out, "config.json")).CombinedOutput(); err != nil {
 			t.Fatalf("sing-box invalid: %v %s", err, output)
+		}
+	}
+	cfg.BlockSTUN = false
+	out2 := filepath.Join(dir, "stun-allowed")
+	if err := Run(Options{ConfPath: main, NodesFile: nodes, SRJSONPath: cfg.SRJSONPath, Cfg: cfg, OutDir: out2, Quiet: true}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err = os.ReadFile(filepath.Join(out2, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var configNoSTUN struct {
+		Route struct {
+			Rules []map[string]any `json:"rules"`
+		} `json:"route"`
+	}
+	if err := json.Unmarshal(raw, &configNoSTUN); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range configNoSTUN.Route.Rules {
+		if r["protocol"] == "stun" {
+			t.Fatal("block_stun=false should not reject STUN")
 		}
 	}
 }
