@@ -1,0 +1,112 @@
+package gen
+
+import (
+	"encoding/base64"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestShadowrocketVLESSCredentialsAndGRPC(t *testing.T) {
+	const id = "11111111-2222-3333-4444-555555555555"
+	encode := func(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
+	links := []string{
+		"vless://" + encode("none:"+id+"@203.0.113.5:443") + "?remarks=Vision&tls=1&peer=example.com&xtls=2&pbk=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&sid=abcd&fingerprint=chrome",
+		"vless://" + encode(":"+id+"@203.0.113.6:443") + "?remarks=Azure&tls=1&pbk=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"vless://" + encode("none:"+id+"@203.0.113.7:443") + "?remarks=gPRC&obfs=grpc&path=grpc&tls=1&pbk=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"vless://" + id + "@203.0.113.8:443#standard",
+	}
+	nodes := parseShareLines(links)
+	if len(nodes) != 4 {
+		t.Fatalf("parsed %d nodes", len(nodes))
+	}
+	for _, n := range nodes {
+		if n["uuid"] != id {
+			t.Errorf("wrong VLESS uuid for %s: %v", n["tag"], n["uuid"])
+		}
+	}
+	if nodes[0]["flow"] != "xtls-rprx-vision" {
+		t.Fatal("vision flow lost")
+	}
+	transport, _ := nodes[2]["transport"].(map[string]any)
+	if transport["type"] != "grpc" || transport["service_name"] != "grpc" {
+		t.Fatalf("grpc service_name lost: %v", transport)
+	}
+}
+
+func TestIncludeMergesParentAndAdRules(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "macOS.conf")
+	ad := filepath.Join(dir, "ad.conf")
+	if err := os.WriteFile(ad, []byte("[General]\nipv6=false\n[Rule]\nDOMAIN-SUFFIX,ads.example,REJECT\nFINAL,MainProxy\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(root, []byte("[General]\ninclude=ad.conf\n[Rule]\nDOMAIN-SUFFIX,app.example,DIRECT\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := parseConf(root, &http.Client{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.bk["reject"]["domain_suffix"]["ads.example"] || !p.bk["direct"]["domain_suffix"]["app.example"] {
+		t.Fatal("parent or include rules missing")
+	}
+	if p.final != "MainProxy" || p.general["ipv6"] != "false" {
+		t.Fatal("inherited general/final missing")
+	}
+}
+func TestRemoteConfFollowsRelativeInclude(t *testing.T) {
+	calls := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls[r.URL.Path]++
+		switch r.URL.Path {
+		case "/profiles/macOS.conf":
+			w.Write([]byte("[General]\ninclude=ad.conf\n[Rule]\nDOMAIN-SUFFIX,app.example,PROXY\n"))
+		case "/profiles/ad.conf":
+			w.Write([]byte("[Rule]\nDOMAIN-SUFFIX,ads.example,REJECT\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	p, err := parseConf(server.URL+"/profiles/macOS.conf", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls["/profiles/ad.conf"] != 1 || !p.bk["reject"]["domain_suffix"]["ads.example"] || !p.bk["proxy"]["domain_suffix"]["app.example"] {
+		t.Fatal("remote include not merged")
+	}
+}
+func TestRemoteImportRejectsMissingIncludeAndHTML(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/macOS.conf" {
+			w.Write([]byte("[General]\ninclude=missing.conf\n"))
+			return
+		}
+		if r.URL.Path == "/html" {
+			w.Write([]byte("<html>not a conf</html>"))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	for _, path := range []string{"/macOS.conf", "/html"} {
+		if _, err := parseConf(server.URL+path, server.Client()); err == nil {
+			t.Fatalf("%s accepted invalid config", path)
+		}
+	}
+}
+func TestMissingIncludeCannotSilentlyDropAdRules(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "macOS.conf")
+	if err := os.WriteFile(root, []byte("[General]\ninclude=missing-ad.conf\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := parseConf(root, &http.Client{})
+	if err == nil || !strings.Contains(err.Error(), "missing-ad.conf") {
+		t.Fatalf("missing include must fail: %v", err)
+	}
+}

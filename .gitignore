@@ -1,0 +1,16 @@
+# Local runtime state and user secrets
+.sakamoto/
+config.json
+proxy-restore.json
+*.srs
+*.db
+*.log
+
+# Local build outputs
+/sakamoto
+/async
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,38 @@
+api:
+  url: http://127.0.0.1:9090
+  secret: REPLACE_WITH_RANDOM_SECRET
+check_interval: 30s
+recover_after: 2
+test_settle: 5s
+fallback_enabled: true
+fallbacks:
+  MainProxy: [RealityAuto, OthersAuto]
+
+chain_enabled: true
+block_quic: true
+block_stun: true
+tun_stack: gvisor
+log_level: info
+tailscale_optimize: true
+system_proxy:
+  enabled: true
+  service: Wi-Fi
+mixed_inbound:
+  enabled: true
+  port: 2334
+  allow_lan: false
+urltest:
+  url: https://www.gstatic.com/generate_204
+  interval: 10m
+  tolerance: 100
+
+# Point this at your own exported file or URL.
+conf: /path/to/macOS.conf
+nodes_file: /absolute/path/to/.sakamoto/nodes.txt
+srjson: /path/to/Shadowrocket.json
+allow_hosts: []
+subscriptions: []
+icloud:
+  enabled: false
+  directory: /absolute/path/to/iCloudDrive/sakamoto
+  files: [nodes.txt]

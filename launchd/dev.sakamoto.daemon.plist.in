@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+    <key>Label</key><string>dev.sakamoto.daemon</string>
+    <key>ProgramArguments</key><array><string>@BIN@</string><string>daemon</string></array>
+    <key>EnvironmentVariables</key><dict>
+        <key>SAKAMOTO_HOME</key><string>@HOME@</string>
+        <key>SAKAMOTO_DIR</key><string>@DIR@</string>
+        <key>SAKAMOTO_USER</key><string>@USER@</string>
+    </dict>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>StandardOutPath</key><string>@DIR@/logs/daemon.out.log</string>
+    <key>StandardErrorPath</key><string>@DIR@/logs/daemon.err.log</string>
+</dict></plist>
