@@ -8,7 +8,53 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/pi-dal/sakamoto/internal/config"
 )
+
+func TestSingleNonRealityNodeStillHasFallbackGroup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nodes.txt")
+	if err := os.WriteFile(path, []byte("hysteria2://secret@203.0.113.10:443#only-hy2\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Subscriptions = nil
+	groups, _, _, members, err := buildOutbounds(Options{NodesFile: path, SRJSONPath: "/missing-backup"}, cfg, &http.Client{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groups) < 2 || members[0] != "OthersAuto" {
+		t.Fatalf("single-node fallback missing: %v", members)
+	}
+}
+
+func TestFailedSubscriptionDoesNotSilentlyDropNodes(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }))
+	defer server.Close()
+	cfg := config.Default()
+	cfg.Subscriptions = []config.SubSource{{Name: "test", URL: server.URL}}
+	_, _, _, _, err := buildOutbounds(Options{}, cfg, server.Client())
+	if err == nil {
+		t.Fatal("failed subscription must not silently generate partial config")
+	}
+}
+
+func TestDirectOverridesAreCompiledBeforeRuleSets(t *testing.T) {
+	p := &parsedConf{bk: buckets{}, general: map[string]string{
+		"skip-proxy":     "*.local.test,10.0.0.0/8",
+		"always-real-ip": "*.ts.net,controlplane.tailscale.com",
+	}}
+	entries, err := buildRules(p, t.TempDir(), &http.Client{}, tailscaleInfo{Present: true, MagicDNSSuffix: "example.ts.net"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.bk["direct"]["domain_suffix"]["ts.net"] || !p.bk["direct"]["ip_cidr"]["fd7a:115c:a1e0::/48"] {
+		t.Fatal("direct overrides missing before compile")
+	}
+	if len(entries) == 0 {
+		t.Fatal("no compiled rule sets")
+	}
+}
 
 func TestShadowrocketVLESSCredentialsAndGRPC(t *testing.T) {
 	const id = "11111111-2222-3333-4444-555555555555"
@@ -64,9 +110,9 @@ func TestRemoteConfFollowsRelativeInclude(t *testing.T) {
 		calls[r.URL.Path]++
 		switch r.URL.Path {
 		case "/profiles/macOS.conf":
-			w.Write([]byte("[General]\ninclude=ad.conf\n[Rule]\nDOMAIN-SUFFIX,app.example,PROXY\n"))
+			_, _ = w.Write([]byte("[General]\ninclude=ad.conf\n[Rule]\nDOMAIN-SUFFIX,app.example,PROXY\n"))
 		case "/profiles/ad.conf":
-			w.Write([]byte("[Rule]\nDOMAIN-SUFFIX,ads.example,REJECT\n"))
+			_, _ = w.Write([]byte("[Rule]\nDOMAIN-SUFFIX,ads.example,REJECT\n"))
 		default:
 			http.NotFound(w, r)
 		}
@@ -83,11 +129,11 @@ func TestRemoteConfFollowsRelativeInclude(t *testing.T) {
 func TestRemoteImportRejectsMissingIncludeAndHTML(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/macOS.conf" {
-			w.Write([]byte("[General]\ninclude=missing.conf\n"))
+			_, _ = w.Write([]byte("[General]\ninclude=missing.conf\n"))
 			return
 		}
 		if r.URL.Path == "/html" {
-			w.Write([]byte("<html>not a conf</html>"))
+			_, _ = w.Write([]byte("<html>not a conf</html>"))
 			return
 		}
 		http.NotFound(w, r)

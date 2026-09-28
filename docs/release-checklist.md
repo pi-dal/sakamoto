@@ -23,7 +23,7 @@ Manually inspect diffs and screenshots too: credentials may be base64 encoded in
 
 ## Functional gate
 
-- `go test ./...`, `go vet ./...` and `go build ./cmd/sakamoto` pass.
+- `go test ./...`, `go test -race ./...`, `go vet ./...`, pinned golangci-lint v2.14.0 and `go build ./cmd/sakamoto` pass.
 - Fresh macOS install from `sakamoto.example.yaml` and `nodes.example.txt` is documented, with explicit root consent.
 - Legacy migration does not interrupt an active VPN. New plist templates contain placeholders, not a real person's home path.
 - Config import follows relative includes, fails closed on missing rule sets, and restores the previous working config after failure.

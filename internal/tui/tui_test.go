@@ -464,9 +464,9 @@ func TestMouseImportRemoteConfWithInclude(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/macOS.conf":
-			w.Write([]byte("[General]\ninclude=ad.conf\n[Rule]\nDOMAIN-SUFFIX,app.example,PROXY\n"))
+			_, _ = w.Write([]byte("[General]\ninclude=ad.conf\n[Rule]\nDOMAIN-SUFFIX,app.example,PROXY\n"))
 		case "/ad.conf":
-			w.Write([]byte("[Rule]\nDOMAIN-SUFFIX,ads.example,REJECT\n"))
+			_, _ = w.Write([]byte("[Rule]\nDOMAIN-SUFFIX,ads.example,REJECT\n"))
 		default:
 			http.NotFound(w, r)
 		}
@@ -550,7 +550,7 @@ func TestFailedImportKeepsLastWorkingConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("[Rule]\nDOMAIN-SUFFIX,ads.example,REJECT\n"))
+		_, _ = w.Write([]byte("[Rule]\nDOMAIN-SUFFIX,ads.example,REJECT\n"))
 	}))
 	defer server.Close()
 	if err := importSource(m.cfgPath, server.URL+"/macOS.conf"); err == nil {
@@ -566,6 +566,22 @@ func TestFailedImportKeepsLastWorkingConfig(t *testing.T) {
 	loaded, err := config.Load(m.cfgPath)
 	if err != nil || loaded.ConfPath == server.URL+"/macOS.conf" {
 		t.Fatal("failed import saved source", err)
+	}
+	// A normal Config-page refresh must provide the same rollback guarantee.
+	localConf := filepath.Join(filepath.Dir(m.cfgPath), "local.conf")
+	if err := os.WriteFile(localConf, []byte("[Rule]\nDOMAIN-SUFFIX,ads.example,REJECT\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	loaded.ConfPath = localConf
+	if err := loaded.Save(m.cfgPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := regenerate(m.cfgPath); err == nil {
+		t.Fatal("invalid outbound should fail refresh validation")
+	}
+	refreshed, err := os.ReadFile(filepath.Join(filepath.Dir(m.cfgPath), "config.json"))
+	if err != nil || string(refreshed) != string(before) {
+		t.Fatal("refresh corrupted last working config", err)
 	}
 }
 

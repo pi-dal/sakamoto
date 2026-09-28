@@ -12,8 +12,10 @@ func Send(cmd string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("svc 未运行（先用 sudo 起 LaunchDaemon）: %w", err)
 	}
-	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	defer func() { _ = conn.Close() }()
+	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return "", err
+	}
 	if _, err := fmt.Fprintln(conn, cmd); err != nil {
 		return "", err
 	}

@@ -80,6 +80,19 @@ func importSource(cfgPath, source string) error {
 		return err
 	}
 	cfg.ConfPath = source
+	return applyGeneratedConfig(cfgPath, cfg, true)
+}
+
+// regenerate validates and rolls back updates just like imports. A failed
+// refresh must never leave a partially updated rules/ and config.json pair.
+func regenerate(cfgPath string) error {
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return err
+	}
+	return applyGeneratedConfig(cfgPath, cfg, false)
+}
+func applyGeneratedConfig(cfgPath string, cfg *config.Config, saveSource bool) error {
 	dir := filepath.Dir(cfgPath)
 	previous, err := snapshotGenerated(dir)
 	if err != nil {
@@ -91,7 +104,7 @@ func importSource(cfgPath, source string) error {
 			restoreGenerated(dir, previous)
 		}
 	}()
-	if err := gen.Run(gen.Options{ConfPath: source, SRJSONPath: cfg.SRJSONPath, NodesFile: cfg.NodesFile,
+	if err := gen.Run(gen.Options{ConfPath: cfg.ConfPath, SRJSONPath: cfg.SRJSONPath, NodesFile: cfg.NodesFile,
 		AllowHosts: strings.Join(cfg.AllowHosts, ","), Cfg: cfg, OutDir: dir, Quiet: true}); err != nil {
 		return err
 	}
@@ -99,8 +112,10 @@ func importSource(cfgPath, source string) error {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("sing-box 校验失败: %v: %s", err, strings.TrimSpace(string(out)))
 	}
-	if err := cfg.Save(cfgPath); err != nil {
-		return fmt.Errorf("转换成功但保存来源失败: %w", err)
+	if saveSource {
+		if err := cfg.Save(cfgPath); err != nil {
+			return fmt.Errorf("转换成功但保存来源失败: %w", err)
+		}
 	}
 	commit = true
 	return nil

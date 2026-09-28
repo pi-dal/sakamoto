@@ -43,6 +43,7 @@ For TUN and always-on fallback, install the macOS services *once*: `bash scripts
 - [macOS installation and legacy-directory migration](docs/migration.md)
 - [iCloud Drive sync (optional)](docs/icloud.md)
 - [Agent-readable development notes](skills.md)
+- [Code quality review and remaining refactoring plan](docs/code-quality.md)
 - [Public release readiness](docs/release-checklist.md)
 
 **Limitations:** sing-box does not implement Shadowrocket's HTTP URL/Header/Body rewrite, MITM, or JavaScript response scripts. Import reports these differences; do not claim feature parity. DNS/domain and GeoIP rules require checking against your *current* Shadowrocket export; compiled `.db.rule` data alone is not the original `.conf`.
@@ -52,8 +53,11 @@ For TUN and always-on fallback, install the macOS services *once*: `bash scripts
 ```bash
 go test ./...
 go vet ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run ./...
 go build ./cmd/sakamoto
 ```
+
+Code-quality baseline: `fuck-u-code analyze . -f json` improved from **65.9** to **about 78** after splitting oversized modules and handling unchecked I/O; the Go linter reports **0 issues**. The installed `fuck-u-code` shell parser may fall back to regex; treat its score as a trend, not a correctness proof. CI enforces tests, vet and the pinned Go linter.
 
 On macOS sign your local build ad hoc when copying to a different location: `codesign -s - -f ./sakamoto`. Do not commit generated binary, actual node links, subscription URLs, API secret, `.srs`, logs or generated `config.json`.
 

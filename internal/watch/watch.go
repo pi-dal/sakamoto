@@ -262,30 +262,6 @@ func aliveFresh(snap *daemon.Groups, tag string, started int64) bool {
 	return false
 }
 
-// alive: legacy 只读状态查询；watch 降级只能用 aliveFresh。
-func alive(delay map[string]int32, snap *daemon.Groups, tag string) bool {
-	if g := findGroup(snap, tag); g != nil {
-		for _, it := range g.Items {
-			if it.UrlTestDelay > 0 {
-				return true
-			}
-		}
-		return false
-	}
-	return delay[tag] > 0
-}
-
-// delayMap 汇总所有组内 item 的最近测试延迟。
-func delayMap(snap *daemon.Groups) map[string]int32 {
-	m := map[string]int32{}
-	for _, g := range snap.Group {
-		for _, it := range g.Items {
-			m[it.Tag] = it.UrlTestDelay
-		}
-	}
-	return m
-}
-
 func findGroup(snap *daemon.Groups, tag string) *daemon.Group {
 	for _, g := range snap.Group {
 		if g.Tag == tag {

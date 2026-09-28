@@ -25,13 +25,13 @@ func Dial(ctx context.Context, serverURL, secret string) (*Client, error) {
 	}
 	c := &Client{conn: conn, svc: daemon.NewStartedServiceClient(conn)}
 	if _, err := c.svc.GetVersion(ctx, &emptypb.Empty{}); err != nil {
-		conn.Close()
+		_ = conn.Close() // original dial error takes precedence
 		return nil, fmt.Errorf("connect %s: %w", serverURL, err)
 	}
 	return c, nil
 }
 
-func (c *Client) Close() { c.conn.Close() }
+func (c *Client) Close() { _ = c.conn.Close() }
 
 func (c *Client) Version(ctx context.Context) (string, error) {
 	v, err := c.svc.GetVersion(ctx, &emptypb.Empty{})

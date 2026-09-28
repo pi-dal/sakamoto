@@ -82,7 +82,7 @@ func DefaultDir() string {
 	// LaunchDaemon is migrated. Do not silently detach the TUI from a live VPN.
 	old := legacyDir()
 	if c, err := net.DialTimeout("unix", filepath.Join(old, "svc.sock"), 150*time.Millisecond); err == nil {
-		c.Close()
+		_ = c.Close() // probe only: no data to flush
 		return old
 	}
 	home, _ := os.UserHomeDir()
@@ -136,7 +136,6 @@ func Load(path string) (*Config, error) {
 	if os.IsNotExist(err) && path == DefaultPath() {
 		legacy := filepath.Join(legacyDir(), "sakamoto.yaml")
 		if old, oldErr := os.ReadFile(legacy); oldErr == nil {
-			path = legacy
 			b = old
 			err = nil
 		}

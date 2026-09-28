@@ -13,30 +13,42 @@ func TestSyncUploadDownloadAndConflict(t *testing.T) {
 	root := t.TempDir()
 	local := filepath.Join(root, "local")
 	remote := filepath.Join(root, "cloud")
-	os.Mkdir(local, 0700)
-	os.Mkdir(remote, 0700)
+	if err := os.Mkdir(local, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(remote, 0700); err != nil {
+		t.Fatal(err)
+	}
 	c := config.Default()
 	c.ICloud.Enabled = true
 	c.ICloud.Directory = remote
 	c.ICloud.Files = []string{"nodes.txt"}
 	src := filepath.Join(local, "nodes.txt")
 	dst := filepath.Join(remote, "nodes.txt")
-	os.WriteFile(src, []byte("one\n"), 0600)
+	if err := os.WriteFile(src, []byte("one\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if _, e := Sync(local, c); e != nil {
 		t.Fatal(e)
 	}
 	if b, _ := os.ReadFile(dst); string(b) != "one\n" {
 		t.Fatal("upload failed")
 	}
-	os.WriteFile(dst, []byte("two\n"), 0600)
+	if err := os.WriteFile(dst, []byte("two\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if _, e := Sync(local, c); e != nil {
 		t.Fatal(e)
 	}
 	if b, _ := os.ReadFile(src); string(b) != "two\n" {
 		t.Fatal("download failed")
 	}
-	os.WriteFile(src, []byte("local\n"), 0600)
-	os.WriteFile(dst, []byte("remote\n"), 0600)
+	if err := os.WriteFile(src, []byte("local\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst, []byte("remote\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if _, e := Sync(local, c); e == nil || !strings.Contains(e.Error(), "冲突") {
 		t.Fatal("conflict must not overwrite either side", e)
 	}

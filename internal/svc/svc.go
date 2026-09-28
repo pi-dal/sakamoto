@@ -51,7 +51,7 @@ func (s *Server) Run() error {
 	if err != nil {
 		return err
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 	// 只授权指定用户。绝不能让其他本机账户控制 root 进程。
 	if name := os.Getenv("SAKAMOTO_USER"); name != "" {
 		u, err := user.Lookup(name)
@@ -103,7 +103,7 @@ func (s *Server) monitorVPNConflict() {
 }
 
 func (s *Server) handle(c net.Conn) {
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	sc := bufio.NewScanner(c)
 	if !sc.Scan() {
 		return
@@ -122,7 +122,7 @@ func (s *Server) handle(c net.Conn) {
 	default:
 		reply = "unknown: " + cmd
 	}
-	fmt.Fprintf(c, "%s\n", reply)
+	_, _ = fmt.Fprintf(c, "%s\n", reply) // client may disconnect before receiving reply
 }
 
 func (s *Server) appendLog(l string) {
