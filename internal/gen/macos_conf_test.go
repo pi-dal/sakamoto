@@ -1,6 +1,7 @@
 package gen
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/pi-dal/sakamoto/internal/config"
 	"github.com/pi-dal/sakamoto/internal/experiment"
+	"github.com/sagernet/sing-box/experimental/clashmode"
+	"github.com/sagernet/sing-box/option"
 )
 
 func TestMacOSConfIncludesAdRulesAndHosts(t *testing.T) {
@@ -21,7 +24,7 @@ func TestMacOSConfIncludesAdRulesAndHosts(t *testing.T) {
 	if err := os.WriteFile(main, []byte("[General]\ninclude=ad.conf\ntun-excluded-routes=100.64.0.0/10\n[Rule]\nDOMAIN-SUFFIX,arena.example,PROXY\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(ad, []byte("[General]\ntun-excluded-routes=10.0.0.0/8\n[Rule]\nDOMAIN-SUFFIX,ads.example,REJECT\nDOMAIN-SUFFIX,local.example,DIRECT\nFINAL,DIRECT\n[Host]\ndevice.example.ts.net=192.0.2.10\n"), 0600); err != nil {
+	if err := os.WriteFile(ad, []byte("[General]\ntun-excluded-routes=10.0.0.0/8\nprivate-ip-answer=true\n[Rule]\nDOMAIN-SUFFIX,ads.example,REJECT\nDOMAIN-SUFFIX,local.example,DIRECT\nFINAL,DIRECT\n[Host]\ndevice.example.ts.net=192.0.2.10\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	p, err := parseConf(main, &http.Client{})
@@ -72,6 +75,86 @@ func TestMacOSConfIncludesAdRulesAndHosts(t *testing.T) {
 	}
 	if generated.Route.Final != "direct" {
 		t.Fatalf("FINAL,DIRECT not preserved: %q", generated.Route.Final)
+	}
+	globalAt, directModeAt, rejectAt, splitDirectAt, proxyAt := -1, -1, -1, -1, -1
+	for i, r := range generated.Route.Rules {
+		if r["clash_mode"] == "Global" {
+			globalAt = i
+			if r["outbound"] == "direct" {
+				t.Fatal("Global mode must use the proxy exit")
+			}
+		}
+		if r["clash_mode"] == "Direct" {
+			directModeAt = i
+			if r["outbound"] != "direct" {
+				t.Fatal("Direct mode must not use a proxy")
+			}
+		}
+		if sets, ok := r["rule_set"].([]any); ok && len(sets) == 1 && sets[0] == "rs-reject" {
+			rejectAt = i
+		}
+		if sets, ok := r["rule_set"].([]any); ok && len(sets) > 0 && sets[0] == "rs-direct" {
+			splitDirectAt = i
+		}
+		if sets, ok := r["rule_set"].([]any); ok && len(sets) == 1 && sets[0] == "rs-proxy" {
+			proxyAt = i
+		}
+	}
+	if rejectAt < 0 || globalAt <= rejectAt || directModeAt <= globalAt || splitDirectAt <= directModeAt || proxyAt <= splitDirectAt {
+		t.Fatalf("mode rules must override split routing but preserve reject safety: reject=%d global=%d direct=%d split=%d proxy=%d", rejectAt, globalAt, directModeAt, splitDirectAt, proxyAt)
+	}
+	globalDNSDetour := false
+	for _, server := range generated.DNS.Servers {
+		if server["tag"] == "mode-global-dns" {
+			globalDNSDetour = server["detour"] != nil && server["detour"] != "direct"
+		}
+	}
+	if !globalDNSDetour {
+		t.Fatal("Global DNS must use the selected proxy chain")
+	}
+	modeDirectDNS, ruleDirectDNS := -1, -1
+	globalEvaluate, responseReject, globalDNSRoute := -1, -1, -1
+	for i, r := range generated.DNS.Rules {
+		if r["clash_mode"] == "Direct" && r["server"] != nil {
+			modeDirectDNS = i
+		}
+		if r["clash_mode"] == "Rule" && r["rule_set"] != nil {
+			ruleDirectDNS = i
+		}
+		if r["clash_mode"] == "Global" && r["action"] == "evaluate" {
+			globalEvaluate = i
+		}
+		if r["match_response"] == true && r["ip_is_private"] == true {
+			responseReject = i
+		}
+		if r["clash_mode"] == "Global" && r["action"] == "route" {
+			globalDNSRoute = i
+		}
+	}
+	if globalEvaluate < 0 || responseReject <= globalEvaluate || globalDNSRoute <= responseReject {
+		t.Fatal("Global DNS must preserve private-answer rejection", generated.DNS.Rules)
+	}
+	if modeDirectDNS < 0 || ruleDirectDNS <= modeDirectDNS {
+		t.Fatalf("Direct DNS must precede Rule-only local DNS: %+v", generated.DNS.Rules)
+	}
+	// Parse native route rules without needing the DNS transport registry.
+	parsed := option.Options{Route: &option.RouteOptions{}}
+	for _, r := range generated.Route.Rules {
+		encoded, err := json.Marshal(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var native option.Rule
+		if err := native.UnmarshalJSONContext(context.Background(), encoded); err != nil {
+			t.Fatal(err)
+		}
+		parsed.Route.Rules = append(parsed.Route.Rules, native)
+	}
+	modes := clashmode.CalculateModeList(parsed)
+	for _, mode := range []string{"Global", "Direct"} {
+		if !slices.Contains(modes, mode) {
+			t.Fatalf("native API would not expose %s mode: %v", mode, modes)
+		}
 	}
 	if len(generated.Route.Rules) < 4 || generated.Route.Rules[0]["action"] != "sniff" || generated.Route.Rules[1]["action"] != "hijack-dns" || generated.Route.Rules[2]["protocol"] != "stun" || generated.Route.Rules[2]["action"] != "reject" {
 		t.Fatalf("block_stun must reject sniffed STUN before direct rules: %v", generated.Route.Rules[:min(4, len(generated.Route.Rules))])

@@ -323,6 +323,18 @@ func (m *model) View() string {
 	return b.String()
 }
 func (m *model) renderHome(b *strings.Builder, startY int) {
+	mode := m.mode
+	if mode == "" {
+		mode = "Offline"
+	}
+	modeButton := "[ Mode: " + mode + " ]"
+	style := muted
+	if m.hovered("routing-mode", 0) {
+		style = focus
+	}
+	b.WriteString(" " + style.Render(modeButton) + "  m: Rule / Global / Direct\n")
+	m.addHit(1, 1+lipgloss.Width(modeButton), startY, "routing-mode", 0)
+	startY++
 	if len(m.rows) == 0 {
 		b.WriteString(" No nodes yet. Check subscriptions or regenerate in Config.\n")
 		return

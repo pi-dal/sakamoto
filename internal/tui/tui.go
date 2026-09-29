@@ -45,6 +45,7 @@ type statusMsg *daemon.Status
 type connsMsg *daemon.ConnectionEvents
 type logMsg *daemon.Log
 type connectedMsg struct{ client *sbclient.Client }
+type modeMsg string
 type errMsg error
 type tickMsg struct{}
 type serviceMsg struct {
@@ -60,6 +61,7 @@ type actionMsg struct {
 	text       string
 	err        error
 	apiRotated bool
+	mode       string
 }
 type testDispatchMsg struct {
 	batch  *testBatch
@@ -153,6 +155,7 @@ func pump(ctx context.Context, path string, p *tea.Program) {
 		} else {
 			p.Send(connectedMsg{c})
 			g, ge := c.SubscribeGroups(ctx)
+			mode, modeErr := c.SubscribeClashMode(ctx)
 			s, se := c.SubscribeStatus(ctx, 1000)
 			cs, ce := c.SubscribeConnections(ctx, 2000)
 			ls, le := c.SubscribeLog(ctx)
@@ -164,6 +167,11 @@ func pump(ctx context.Context, path string, p *tea.Program) {
 						break stream
 					}
 					p.Send(groupsMsg(v))
+				case v, ok := <-mode:
+					if !ok {
+						break stream
+					}
+					p.Send(modeMsg(v.Mode))
 				case v, ok := <-s:
 					if !ok {
 						break stream
@@ -180,6 +188,8 @@ func pump(ctx context.Context, path string, p *tea.Program) {
 					}
 					p.Send(logMsg(v))
 				case <-ge:
+					break stream
+				case <-modeErr:
 					break stream
 				case <-se:
 					break stream

@@ -6,6 +6,7 @@ Launch with `sakamoto`. The status bar distinguishes *TUN started* from *network
 
 - **Connect / Disconnect** toggles sakamoto TUN. Disconnect Shadowrocket VPN first; Tailscale can remain connected. A pending `sakamoto rotate-api` key is applied before the next normal TUI connection (not while the TUN is already connected).
 - The chain summary shows the current entry selection and SOCKS exit.
+- Click **Mode** or press `m` to cycle **Rule → Global → Direct**. The TUI checks that the native core exposes the requested mode and verifies the result; an old generated config is reported as needing regeneration/reconnection rather than showing a false success. Global sends ordinary public traffic through the selected chain, including domains otherwise marked DIRECT. Direct sends ordinary public traffic directly. Both retain private/Tailscale exclusions, ad rejects and enabled STUN/QUIC blocks. Changing modes affects new connections; existing streams are not forcibly closed.
 - **Test all** tests each distinct protocol node rather than treating groups as nodes; wait for the final success/failure count.
 - Left-click a node for manual selection. Right-click for **Use / Test / Details**. Wheel scrolls the list. A filled dot means selected, not reachable.
 
@@ -36,4 +37,4 @@ The About tab includes a face-focused, high-resolution grayscale half-block port
 
 ## Keyboard fallback
 
-`Tab`/`1–5`: tabs; arrows/`j,k`: move; `Enter`: select/edit; `Esc`: back; `c`: connect/disconnect; `u`: test all; `a`: import config on Config; `n`: add node on Config; `g`: regenerate; `q`: quit. The terminal must support SGR mouse input for pointer interactions (tested with Ghostty).
+`Tab`/`1–5`: tabs; arrows/`j,k`: move; `Enter`: select/edit; `Esc`: back; `c`: connect/disconnect; `u`: test all; `a`: import config on Config; `n`: add node on Config; `g`: regenerate; `m`: cycle Rule/Global/Direct; `q`: quit. The terminal must support SGR mouse input for pointer interactions (tested with Ghostty).

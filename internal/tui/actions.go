@@ -55,6 +55,8 @@ func (m *model) click(x, y int) tea.Cmd {
 			return m.toggleConnection()
 		case "testall":
 			return m.testAll()
+		case "routing-mode":
+			return m.cycleMode()
 		case "node":
 			m.cursor = h.index
 			m.menuRow = -1
@@ -528,18 +530,50 @@ func (m *model) testAll() tea.Cmd {
 		return testDispatchMsg{batch: batch, errors: errors}
 	}
 }
+func nextMode(current string) string {
+	switch strings.ToLower(strings.TrimSpace(current)) {
+	case "rule":
+		return "Global"
+	case "global":
+		return "Direct"
+	default:
+		return "Rule"
+	}
+}
 func (m *model) cycleMode() tea.Cmd {
 	if m.conn == nil {
 		return nil
 	}
-	next := map[string]string{"rule": "global", "global": "direct", "direct": "rule"}[m.mode]
-	if next == "" {
-		next = "rule"
-	}
 	c := m.conn
 	return func() tea.Msg {
-		err := c.SetClashMode(context.Background(), next)
-		return actionMsg{text: "Mode: " + next, err: err}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		before, err := c.ClashModeStatus(ctx)
+		if err != nil {
+			return actionMsg{err: fmt.Errorf("read routing mode: %w", err)}
+		}
+		next := nextMode(before.CurrentMode)
+		available := false
+		for _, mode := range before.ModeList {
+			if strings.EqualFold(mode, next) {
+				available = true
+				break
+			}
+		}
+		if !available {
+			return actionMsg{err: fmt.Errorf("%s mode is unavailable; regenerate config and reconnect the TUN", next)}
+		}
+		if err := c.SetClashMode(ctx, next); err != nil {
+			return actionMsg{err: fmt.Errorf("set %s mode: %w", next, err)}
+		}
+		after, err := c.ClashModeStatus(ctx)
+		if err != nil {
+			return actionMsg{err: fmt.Errorf("verify %s mode: %w", next, err)}
+		}
+		if !strings.EqualFold(after.CurrentMode, next) {
+			return actionMsg{err: fmt.Errorf("%s mode was not applied (core reports %s)", next, after.CurrentMode)}
+		}
+		return actionMsg{text: "Mode: " + after.CurrentMode, mode: after.CurrentMode}
 	}
 }
 func (m *model) toggleSetting(i int) tea.Cmd {

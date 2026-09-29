@@ -94,6 +94,34 @@ func (c *Client) ClashModeStatus(ctx context.Context) (*daemon.ClashModeStatus, 
 	return c.svc.GetClashModeStatus(ctx, &emptypb.Empty{})
 }
 
+// SubscribeClashMode keeps the TUI synchronized with changes from the native
+// API, including mode switches made outside the current TUI session.
+func (c *Client) SubscribeClashMode(ctx context.Context) (<-chan *daemon.ClashMode, <-chan error) {
+	ch := make(chan *daemon.ClashMode, 8)
+	errCh := make(chan error, 1)
+	go func() {
+		defer close(ch)
+		stream, err := c.svc.SubscribeClashMode(ctx, &emptypb.Empty{})
+		if err != nil {
+			errCh <- err
+			return
+		}
+		for {
+			mode, err := stream.Recv()
+			if err != nil {
+				errCh <- err
+				return
+			}
+			select {
+			case ch <- mode:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return ch, errCh
+}
+
 // SubscribeLog streams sing-box service log messages.
 func (c *Client) SubscribeLog(ctx context.Context) (<-chan *daemon.Log, <-chan error) {
 	ch := make(chan *daemon.Log, 32)

@@ -30,6 +30,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if ms, err := m.conn.ClashModeStatus(context.Background()); err == nil {
 			m.mode = ms.CurrentMode
 		}
+	case modeMsg:
+		m.mode = string(v)
 	case errMsg:
 		m.conn = nil
 		m.status = nil
@@ -172,6 +174,9 @@ func (m *model) onImport(v importMsg) {
 	m.notice = "Import generated a sing-box config; reconnect to apply"
 }
 func (m *model) onAction(v actionMsg) {
+	if v.err == nil && v.mode != "" {
+		m.mode = v.mode
+	}
 	if v.apiRotated {
 		if latest, err := config.Load(m.cfgPath); err == nil {
 			m.cfg.API.Secret = latest.API.Secret

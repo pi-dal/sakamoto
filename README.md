@@ -27,7 +27,7 @@ For TUN and always-on fallback, install the macOS services *once*: `bash "$(brew
 
 ## Interface
 
-- **Home:** connected/verified state, live proxy chain and SOCKS exit, node groups with latency; left-click any node to select it, right-click for test/details, mouse wheel to scroll.
+- **Home:** connected/verified state, live proxy chain and SOCKS exit, node groups with latency; left-click any node to select it, right-click for test/details, mouse wheel to scroll. Click **Mode** or press `m` to switch Rule/Global/Direct through the native API; [mode rules and exclusions](docs/configuration.md#rule-global-and-direct-routing-modes) are explicit.
 - **Config:** import a `.conf` URL/file, browse General/rules/DNS, manage source subscriptions and manual node links; edited or deleted sources are saved locally. Generate changes, then disconnect/reconnect to apply.
 - **Data:** traffic, active connections, logs and close-connection action.
 - **Settings:** clickable toggles and editable values; Reality fallback order can be set as `RealityAuto,OthersAuto`. Experimental unmatched policy supports `off` (direct unmatched), `on` (proxy unmatched) and `auto` (learn from corroborated repeated direct timeouts). See [privacy limits and ruleset reference](docs/configuration.md#experimental-unmatched-domain-policy). A manual node selection is respected by the fallback watcher.

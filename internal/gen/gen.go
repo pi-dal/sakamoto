@@ -181,6 +181,21 @@ func Run(o Options) error {
 		}
 		dnsDirectSets = []string{tag}
 	}
+	// Global DNS uses the same protocol as the primary remote resolver but
+	// always detours through the selected proxy chain, even if the imported
+	// resolver lacked Shadowrocket's #proxy suffix. Bootstrap remains local.
+	const globalDNS = "mode-global-dns"
+	for _, server := range dnsServers {
+		if server["tag"] == remoteTags[0] {
+			global := make(map[string]any, len(server)+2)
+			for key, value := range server {
+				global[key] = value
+			}
+			global["tag"], global["detour"], global["domain_resolver"] = globalDNS, exitTag, localPublic
+			dnsServers = append(dnsServers, global)
+			break
+		}
+	}
 	dnsRules := []map[string]any{}
 	if len(p.hosts) > 0 {
 		dnsServers = append(dnsServers, map[string]any{"type": "hosts", "tag": "sr-hosts", "predefined": p.hosts})
@@ -198,15 +213,22 @@ func Run(o Options) error {
 		dnsRules = append(dnsRules, map[string]any{
 			"domain_suffix": []string{"ts.net"}, "server": "ts-dns"})
 	}
+	// Direct mode keeps DNS off the chained proxy. Internal hosts and Tailscale
+	// rules above retain precedence in every mode.
+	dnsRules = append(dnsRules, map[string]any{"clash_mode": "Direct", "action": "route", "server": localPublic})
 	if len(dnsDirectSets) > 0 {
-		dnsRules = append(dnsRules, map[string]any{"rule_set": dnsDirectSets, "server": localPublic})
+		// Explicit DIRECT domains use local DNS only in Rule mode. Otherwise
+		// Global would proxy traffic after resolving those names locally.
+		dnsRules = append(dnsRules, map[string]any{"clash_mode": "Rule", "rule_set": dnsDirectSets, "server": localPublic})
 	}
 	// private-ip-answer: evaluate remote DNS first, then reject private answers.
 	if strings.EqualFold(p.general["private-ip-answer"], "true") {
 		dnsRules = append(dnsRules,
-			map[string]any{"action": "evaluate", "server": remoteTags[0]},
+			map[string]any{"clash_mode": "Global", "action": "evaluate", "server": globalDNS},
+			map[string]any{"clash_mode": "Rule", "action": "evaluate", "server": remoteTags[0]},
 			map[string]any{"match_response": true, "ip_is_private": true, "action": "reject"})
 	}
+	dnsRules = append(dnsRules, map[string]any{"clash_mode": "Global", "action": "route", "server": globalDNS})
 
 	// 7) route + tun
 	routeRules := []map[string]any{
@@ -214,6 +236,10 @@ func Run(o Options) error {
 		{"protocol": "dns", "action": "hijack-dns"}, // Globally hijack DNS traffic routed through sing-box.
 		{"ip_is_private": true, "action": "route", "outbound": "direct"},
 		{"rule_set": []string{"rs-reject"}, "action": "reject"},
+		// Global and Direct take precedence over the ordinary split-routing
+		// buckets; private routes and reject/security rules above remain active.
+		{"clash_mode": "Global", "action": "route", "outbound": exitTag},
+		{"clash_mode": "Direct", "action": "route", "outbound": "direct"},
 		{"rule_set": directSets, "action": "route", "outbound": "direct"},
 		{"rule_set": []string{"rs-proxy"}, "action": "route", "outbound": exitTag},
 	}
