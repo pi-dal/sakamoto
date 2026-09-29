@@ -1,6 +1,6 @@
 # Importing Shadowrocket configurations
 
-Open `sakamoto`, go to **Config**, then click **导入配置**.
+Open `sakamoto`, go to **Config**, then click **Import config**.
 
 Paste either:
 

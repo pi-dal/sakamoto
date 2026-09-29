@@ -7,7 +7,7 @@
 3. In the TUI's Config tab, import your current Shadowrocket `.conf` URL/file and its relative `include` rule file. The import fails if required include/rule-set data cannot load or if `sing-box check` fails; last working config is restored.
 4. Verify `sing-box check -c ~/.sakamoto/config.json`.
 5. Run `bash "$(brew --prefix)/share/sakamoto/scripts/install-macos.sh"` interactively to install the rendered macOS LaunchDaemon and LaunchAgent. It does not connect automatically.
-6. Disconnect Shadowrocket VPN (Tailscale may remain connected). Run `sakamoto`, click **连接**, and wait for *已验证可用*. Check the browser, DNS, SOCKS exit, and Tailscale before retiring Shadowrocket.
+6. Disconnect Shadowrocket VPN (Tailscale may remain connected). Run `sakamoto`, click **Connect**, and wait for *Network reachable*. Check the browser, DNS, SOCKS exit, and Tailscale before retiring Shadowrocket.
 
 The LaunchDaemon controls TUN as root. A user-owned socket (`0600`) allows the TUI to request connect/disconnect without repeated sudo. The watcher handles group fallback and optional macOS HTTP/HTTPS proxy restore.
 

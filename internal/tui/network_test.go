@@ -51,11 +51,11 @@ func TestClassifyNetworkProbeNeverCallsSingleFailureAnOutage(t *testing.T) {
 		path         string
 		fails        bool
 	}{
-		{nil, nil, true, "系统路由与浏览器入口", false},
-		{e, nil, true, "浏览器入口（系统路由待确认）", false},
-		{nil, e, true, "系统路由（浏览器入口待确认）", false},
+		{nil, nil, true, "system routing and browser proxy", false},
+		{e, nil, true, "browser proxy (system routing unverified)", false},
+		{nil, e, true, "system routing (browser proxy unverified)", false},
 		{e, e, true, "", true},
-		{nil, nil, false, "系统路由", false},
+		{nil, nil, false, "system routing", false},
 		{e, nil, false, "", true},
 	} {
 		result := classifyNetworkProbe(tc.route, tc.mixed, tc.enabled)
@@ -69,10 +69,10 @@ func TestFailedProbeRetriesAndNeverPermanentlyMarksNetworkDown(t *testing.T) {
 	m.serviceState = "connected"
 	m.netChecking = true
 	m.onNetwork(networkMsg{err: errors.New("one probe timed out")})
-	if m.networkState != "待确认" || m.networkProbeFailures != 1 || !m.nextNetworkProbe.After(time.Now()) {
+	if m.networkState != "Unverified" || m.networkProbeFailures != 1 || !m.nextNetworkProbe.After(time.Now()) {
 		t.Fatal("failed probe should schedule retry")
 	}
-	if strings.Contains(m.View(), "网络不可用") {
+	if strings.Contains(m.View(), "Network unavailable") {
 		t.Fatal("UI still declares network unusable after one probe failure")
 	}
 	if cmd := m.onService(serviceMsg{state: "connected"}); cmd != nil {
@@ -82,8 +82,8 @@ func TestFailedProbeRetriesAndNeverPermanentlyMarksNetworkDown(t *testing.T) {
 	if cmd := m.onService(serviceMsg{state: "connected"}); cmd == nil || !m.netChecking {
 		t.Fatal("failed probe not retried")
 	}
-	m.onNetwork(networkMsg{path: "浏览器入口（系统路由待确认）"})
-	if !strings.HasPrefix(m.networkState, "可用") || m.networkProbeFailures != 0 || !m.nextNetworkProbe.After(time.Now()) {
+	m.onNetwork(networkMsg{path: "browser proxy (system routing unverified)"})
+	if !strings.HasPrefix(m.networkState, "Available") || m.networkProbeFailures != 0 || !m.nextNetworkProbe.After(time.Now()) {
 		t.Fatal("successful retry did not recover status")
 	}
 	m.onService(serviceMsg{state: "disconnected"})

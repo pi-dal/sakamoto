@@ -17,7 +17,7 @@ import (
 
 // buildRules resolves all direct overrides BEFORE compiling SRS so DNS and route sets agree.
 func buildRules(p *parsedConf, rulesDir string, hc *http.Client, ts tailscaleInfo) ([]map[string]any, error) {
-	// 0) skip-proxy → direct 桶（必须在编译前注入：域名+网段都是「不走代理」）
+	// 0) Add skip-proxy domains and prefixes to direct before compiling SRS.
 	for _, it := range splitCSV(p.general["skip-proxy"]) {
 		switch {
 		case strings.HasPrefix(it, "*."):
@@ -27,7 +27,7 @@ func buildRules(p *parsedConf, rulesDir string, hc *http.Client, ts tailscaleInf
 		case net.ParseIP(it) != nil:
 			bkAdd(p.bk, "direct", "ip_cidr", it+"/32")
 		default:
-			bkAdd(p.bk, "direct", "domain", it) // localhost / captive.apple.com 等
+			bkAdd(p.bk, "direct", "domain", it) // Includes localhost and captive.apple.com.
 		}
 	}
 
@@ -39,13 +39,13 @@ func buildRules(p *parsedConf, rulesDir string, hc *http.Client, ts tailscaleInf
 		}
 	}
 	if ts.Present {
-		reportf("  + Tailscale 检测到: MagicDNS=%s\n", ts.MagicDNSSuffix)
+		reportf("  + Tailscale detected: MagicDNS=%s\n", ts.MagicDNSSuffix)
 		for _, cidr := range []string{"100.64.0.0/10", "fd7a:115c:a1e0::/48"} {
 			bkAdd(p.bk, "direct", "ip_cidr", cidr)
 		}
 	}
 
-	// 1) 规则集：3 桶 → srs（原生编译，无需 exec sing-box）
+	// 1) Compile reject/proxy/direct buckets to SRS without spawning sing-box.
 	var srsEntries []map[string]any
 	for _, b := range []string{"reject", "proxy", "direct"} {
 		m := p.bk[b]
@@ -90,9 +90,9 @@ func buildRules(p *parsedConf, rulesDir string, hc *http.Client, ts tailscaleInf
 		}
 		srsEntries = append(srsEntries, map[string]any{
 			"type": "local", "tag": "rs-" + b, "format": "binary", "path": srsPath})
-		reportf("  rs-%s: %d 条\n", b, len(m["domain"])+len(m["domain_suffix"])+len(m["domain_keyword"])+len(m["ip_cidr"]))
+		reportf("  rs-%s: %d entries\n", b, len(m["domain"])+len(m["domain_suffix"])+len(m["domain_keyword"])+len(m["ip_cidr"]))
 
-		// 再出一个纯域名版（DNS 规则查询期匹配用；1.14 拒 dns rule 含 ip_cidr 且未 match_response）
+		// Also compile a domain-only set for DNS request-time matching.
 		if len(m["ip_cidr"]) > 0 {
 			hrDom := option.DefaultHeadlessRule{
 				Domain: hr.Domain, DomainSuffix: hr.DomainSuffix, DomainKeyword: hr.DomainKeyword}
@@ -116,7 +116,7 @@ func buildRules(p *parsedConf, rulesDir string, hc *http.Client, ts tailscaleInf
 		}
 	}
 
-	// 2) GeoIP → 本地 .srs
+	// 2) Cache GeoIP data as local .srs files.
 	for _, gp := range p.geoip {
 		cc, tgt := gp[0], gp[1]
 		srsPath := filepath.Join(rulesDir, "geoip-"+strings.ToLower(cc)+".srs")
@@ -124,29 +124,29 @@ func buildRules(p *parsedConf, rulesDir string, hc *http.Client, ts tailscaleInf
 			address := fmt.Sprintf("https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geoip/%s.srs", strings.ToLower(cc))
 			resp, err := hc.Get(address)
 			if err != nil {
-				return nil, fmt.Errorf("下载 geoip-%s: %w", cc, err)
+				return nil, fmt.Errorf("download geoip-%s: %w", cc, err)
 			}
 			if resp.StatusCode != http.StatusOK {
 				_ = resp.Body.Close()
-				return nil, fmt.Errorf("下载 geoip-%s: HTTP %d", cc, resp.StatusCode)
+				return nil, fmt.Errorf("download geoip-%s: HTTP %d", cc, resp.StatusCode)
 			}
 			data, readErr := io.ReadAll(io.LimitReader(resp.Body, maxConfBytes+1))
 			closeErr := resp.Body.Close()
 			if readErr != nil {
-				return nil, fmt.Errorf("读取 geoip-%s: %w", cc, readErr)
+				return nil, fmt.Errorf("read geoip-%s: %w", cc, readErr)
 			}
 			if closeErr != nil {
-				return nil, fmt.Errorf("关闭 geoip-%s 下载流: %w", cc, closeErr)
+				return nil, fmt.Errorf("close geoip-%s stream: %w", cc, closeErr)
 			}
 			if len(data) > maxConfBytes {
-				return nil, fmt.Errorf("geoip-%s 文件超过大小限制", cc)
+				return nil, fmt.Errorf("geoip-%s file exceeds the size limit", cc)
 			}
 			if err := os.WriteFile(srsPath, data, 0600); err != nil {
-				return nil, fmt.Errorf("保存 geoip-%s: %w", cc, err)
+				return nil, fmt.Errorf("save geoip-%s: %w", cc, err)
 			}
-			reportf("  geoip-%s.srs 下载完成\n", strings.ToLower(cc))
+			reportf("  geoip-%s.srs downloaded\n", strings.ToLower(cc))
 		} else if err != nil {
-			return nil, fmt.Errorf("读取 geoip-%s 缓存: %w", cc, err)
+			return nil, fmt.Errorf("read geoip-%s cache: %w", cc, err)
 		}
 		srsEntries = append(srsEntries, map[string]any{
 			"type": "local", "tag": "geoip-" + strings.ToLower(cc),

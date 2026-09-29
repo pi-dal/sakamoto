@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// ---------------- 节点 ----------------
+// ---------------- Legacy node export ----------------
 
 func splitPortRange(s string) (ports []string, single int) {
 	s = strings.TrimSpace(s)
@@ -23,7 +23,7 @@ func splitPortRange(s string) (ports []string, single int) {
 	return nil, parsed
 }
 
-// SRNode 是 Shadowrocket.json 的单条目（字段宽松解析）。
+// SRNode is one loosely decoded entry from Shadowrocket.json.
 type SRNode map[string]any
 
 func sstr(n SRNode, k string) string {

@@ -17,13 +17,13 @@ cp "$(brew --prefix)/share/sakamoto/nodes.example.txt" ~/.sakamoto/nodes.txt
 
 For a source build instead, clone this repository, run `go build -o sakamoto ./cmd/sakamoto`, and use the templates at the repository root. Replace the example API secret with a unique random value (`openssl rand -hex 32`) before generating a config.
 
-Edit `~/.sakamoto/sakamoto.yaml` to point `conf:` at your own Shadowrocket `.conf`, or open `sakamoto` → **Config → 导入配置** and paste its URL. If `include=ad.conf` is relative, the importer fetches it from the same URL directory. Add manual node share links to `nodes.txt` through **Config → 节点与订阅 → 添加节点**, then **更新生成**. Check the result:
+Edit `~/.sakamoto/sakamoto.yaml` to point `conf:` at your own Shadowrocket `.conf`, or open `sakamoto` → **Config → Import config** and paste its URL. If `include=ad.conf` is relative, the importer fetches it from the same URL directory. Add manual node share links to `nodes.txt` through **Config → Nodes & sources → Add node**, then **Regenerate**. Check the result:
 
 ```bash
 sing-box check -c ~/.sakamoto/config.json
 ```
 
-For TUN and always-on fallback, install the macOS services *once*: `bash "$(brew --prefix)/share/sakamoto/scripts/install-macos.sh"` (source builds: `SAKAMOTO_BIN="$PWD/sakamoto" bash scripts/install-macos.sh`). It asks for confirmation before installing a root LaunchDaemon and never automatically connects the VPN. Do **not** connect Shadowrocket and sakamoto TUN simultaneously. Then run `sakamoto` and click **连接**. Daily use requires only that one command; `daemon` and `watch` are launchd internals. `sakamoto help` lists keyboard shortcuts.
+For TUN and always-on fallback, install the macOS services *once*: `bash "$(brew --prefix)/share/sakamoto/scripts/install-macos.sh"` (source builds: `SAKAMOTO_BIN="$PWD/sakamoto" bash scripts/install-macos.sh`). It asks for confirmation before installing a root LaunchDaemon and never automatically connects the VPN. Do **not** connect Shadowrocket and sakamoto TUN simultaneously. Then run `sakamoto` and click **Connect**. Daily use requires only that one command; `daemon` and `watch` are launchd internals. `sakamoto help` lists keyboard shortcuts.
 
 ## Interface
 
@@ -31,6 +31,7 @@ For TUN and always-on fallback, install the macOS services *once*: `bash "$(brew
 - **Config:** import a `.conf` URL/file, browse General/rules/DNS, manage source subscriptions and manual node links; edited or deleted sources are saved locally. Generate changes, then disconnect/reconnect to apply.
 - **Data:** traffic, active connections, logs and close-connection action.
 - **Settings:** clickable toggles and editable values; Reality fallback order can be set as `RealityAuto,OthersAuto`. Experimental unmatched policy supports `off` (direct unmatched), `on` (proxy unmatched) and `auto` (learn from corroborated repeated direct timeouts). See [privacy limits and ruleset reference](docs/configuration.md#experimental-unmatched-domain-policy). A manual node selection is respected by the fallback watcher.
+- **About → Copyright:** a terminal-safe block portrait and a tribute explaining the name, plus software copyright, portrait attribution, license and non-affiliation statement.
 
 **Fallback semantics:** `RealityAuto` gets fresh URL tests, then `OthersAuto` is selected when Reality is unavailable; switching back needs `recover_after` consecutive healthy checks. The watcher runs without an open TUI. Explicit node selection is not overridden.
 
@@ -46,6 +47,7 @@ For TUN and always-on fallback, install the macOS services *once*: `bash "$(brew
 - [Agent-readable development notes](skills.md)
 - [Code quality review and remaining refactoring plan](docs/code-quality.md)
 - [Public release readiness](docs/release-checklist.md)
+- [Portrait attribution and CC BY 2.0 asset license](docs/portrait-license.md)
 
 **Limitations:** sing-box does not implement Shadowrocket's HTTP URL/Header/Body rewrite, MITM, or JavaScript response scripts. Import reports these differences; do not claim feature parity. DNS/domain and GeoIP rules require checking against your *current* Shadowrocket export; compiled `.db.rule` data alone is not the original `.conf`.
 
@@ -64,4 +66,4 @@ On macOS sign your local build ad hoc when copying to a different location: `cod
 
 ## License and attribution
 
-Copyright © 2026 Guanye Li (pi-dal). `sakamoto` is licensed under **GPL-3.0-or-later**; see [LICENSE](LICENSE). It links to [SagerNet/sing-box](https://github.com/SagerNet/sing-box), also GPL-3.0-or-later. See [NOTICE.md](NOTICE.md) for upstream attribution. This is an independent tool, not endorsed by SagerNet or Shadowrocket.
+Copyright © 2026 Guanye Li (pi-dal). `sakamoto` is licensed under **GPL-3.0-or-later**; see [LICENSE](LICENSE). It links to [SagerNet/sing-box](https://github.com/SagerNet/sing-box), also GPL-3.0-or-later. The About-page portrait assets are separately [CC BY 2.0](docs/portrait-license.md). See [NOTICE.md](NOTICE.md) for upstream and image attribution. This is an independent tool, not endorsed by SagerNet or Shadowrocket.

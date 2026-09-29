@@ -110,11 +110,11 @@ func applyGeneratedConfig(cfgPath string, cfg *config.Config, saveSource bool) e
 	}
 	cmd := exec.Command("sing-box", "check", "-c", filepath.Join(dir, "config.json"))
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("sing-box 校验失败: %v: %s", err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("sing-box validation failed: %v: %s", err, strings.TrimSpace(string(out)))
 	}
 	if saveSource {
 		if err := cfg.Save(cfgPath); err != nil {
-			return fmt.Errorf("转换成功但保存来源失败: %w", err)
+			return fmt.Errorf("conversion succeeded but saving the source failed: %w", err)
 		}
 	}
 	commit = true

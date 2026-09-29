@@ -50,19 +50,19 @@ func classifyNetworkProbe(routeErr, mixedErr error, mixedEnabled bool) networkMs
 	if routeErr == nil {
 		if mixedEnabled {
 			if mixedErr == nil {
-				return networkMsg{path: "系统路由与浏览器入口"}
+				return networkMsg{path: "system routing and browser proxy"}
 			}
-			return networkMsg{path: "系统路由（浏览器入口待确认）"}
+			return networkMsg{path: "system routing (browser proxy unverified)"}
 		}
-		return networkMsg{path: "系统路由"}
+		return networkMsg{path: "system routing"}
 	}
 	if mixedEnabled && mixedErr == nil {
-		return networkMsg{path: "浏览器入口（系统路由待确认）"}
+		return networkMsg{path: "browser proxy (system routing unverified)"}
 	}
 	if mixedEnabled {
-		return networkMsg{err: fmt.Errorf("系统路由: %v；浏览器入口: %v", routeErr, mixedErr)}
+		return networkMsg{err: fmt.Errorf("system routing: %v; browser proxy: %v", routeErr, mixedErr)}
 	}
-	return networkMsg{err: fmt.Errorf("系统路由: %w", routeErr)}
+	return networkMsg{err: fmt.Errorf("system routing: %w", routeErr)}
 }
 
 func diagnoseNetwork(cfg *config.Config) networkMsg {

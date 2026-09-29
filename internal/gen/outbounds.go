@@ -11,19 +11,19 @@ import (
 // buildOutbounds merges manual nodes before subscriptions, classifies automatic groups,
 // and keeps the SOCKS exit separate from the selectable entry nodes.
 func buildOutbounds(o Options, cfg *config.Config, hc *http.Client) ([]map[string]any, []map[string]any, string, []string, error) {
-	// 3) 节点
+	// 3) Nodes.
 	allow := map[string]bool{}
 	for _, h := range strings.Split(o.AllowHosts, ",") {
 		if h = strings.TrimSpace(h); h != "" {
 			allow[h] = true
 		}
 	}
-	// 3) 节点：手动（srjson 白名单 + nodes.txt）优先，订阅兜底；tag 去重
+	// Prefer allowlisted srjson and nodes.txt entries, then subscriptions; deduplicate tags.
 	var nodes []map[string]any
 	if len(allow) > 0 {
 		imported, err := srJSONNodes(o.SRJSONPath, allow)
 		if err != nil {
-			return nil, nil, "", nil, fmt.Errorf("读取 Shadowrocket 备份: %w", err)
+			return nil, nil, "", nil, fmt.Errorf("read Shadowrocket export: %w", err)
 		}
 		nodes = append(nodes, imported...)
 	}
@@ -50,9 +50,9 @@ func buildOutbounds(o Options, cfg *config.Config, hc *http.Client) ([]map[strin
 	for _, n := range nodes {
 		tags = append(tags, n["tag"].(string))
 	}
-	reportf("  节点: %v\n", tags)
+	reportf("  nodes: %v\n", tags)
 
-	// uTLS 指纹全局覆盖（对齐 SR Fingerprint=Safari15_5 全局生效）
+	// Apply the global uTLS fingerprint override to every eligible node.
 	if cfg.UTLSFingerprint != "" {
 		for _, n := range nodes {
 			if tls, ok := n["tls"].(map[string]any); ok && tls["enabled"] == true {
@@ -61,7 +61,7 @@ func buildOutbounds(o Options, cfg *config.Config, hc *http.Client) ([]map[strin
 		}
 	}
 
-	// 4) 分组：RealityAuto(urltest reality) + OthersAuto(urltest 其他) + ManualPick(selector)
+	// 4) Group Reality and other nodes for URL testing, plus manual selection.
 	var dataNodes, socksNodes []map[string]any
 	for _, n := range nodes {
 		if n["type"] == "socks" {
@@ -73,7 +73,7 @@ func buildOutbounds(o Options, cfg *config.Config, hc *http.Client) ([]map[strin
 	var realityTags, otherTags []string
 	for _, n := range dataNodes {
 		if isReality(n) || strings.Contains(strings.ToLower(n["tag"].(string)), "reality") {
-			realityTags = append(realityTags, n["tag"].(string)) // reality 协议 或 名字含 reality
+			realityTags = append(realityTags, n["tag"].(string)) // Reality protocol or a tag containing "reality".
 		} else {
 			otherTags = append(otherTags, n["tag"].(string))
 		}
@@ -97,13 +97,13 @@ func buildOutbounds(o Options, cfg *config.Config, hc *http.Client) ([]map[strin
 		manual = append(manual, n["tag"].(string))
 	}
 	if len(manual) == 0 {
-		manual = []string{"direct"} // 无数据节点时的占位，等订阅/链接进来后重跑 gen
+		manual = []string{"direct"} // Placeholder until nodes are imported and config regenerated.
 	}
 	groups = append(groups, map[string]any{"type": "selector", "tag": "ManualPick", "outbounds": manual})
 	mainMembers = append(mainMembers, "ManualPick")
 	main := map[string]any{"type": "selector", "tag": "MainProxy", "outbounds": mainMembers,
 		"default": mainMembers[0], "interrupt_exist_connections": true}
-	// socks = 全局链式出口：detour→MainProxy（chain_enabled=false 时不挂链，流量直连节点）
+	// Chain the SOCKS exit through MainProxy when chain_enabled is true.
 	for _, n := range nodes {
 		delete(n, "_chain")
 		if n["type"] == "socks" && cfg.ChainEnabled {
@@ -115,7 +115,7 @@ func buildOutbounds(o Options, cfg *config.Config, hc *http.Client) ([]map[strin
 	outbounds = append(outbounds, map[string]any{"type": "direct", "tag": "direct"})
 	exitTag := "MainProxy"
 	if cfg.ChainEnabled {
-		for _, s := range socksNodes { // 取 detour=MainProxy 的 socks 作链式出口
+		for _, s := range socksNodes { // Choose the SOCKS outbound detouring through MainProxy.
 			if s["detour"] == "MainProxy" {
 				exitTag = s["tag"].(string)
 				break

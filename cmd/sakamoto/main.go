@@ -20,27 +20,27 @@ import (
 
 const version = "0.1.0"
 
-const usage = `sakamoto — Shadowrocket 复刻版 sing-box 控制面
+const usage = `sakamoto — a macOS sing-box controller inspired by Shadowrocket
 
-用法:
-  sakamoto              打开 TUI（默认；切组/测速/开关/配置/日志全在这里）
-  sakamoto daemon       root 监督进程（LaunchDaemon 拉起；管 sing-box 子进程，
-                        提供 connect/disconnect socket —— 等价 SR 的 VPN 开关）
-  sakamoto watch        fallback 降级守护（LaunchAgent；链首优先自动降级回切）
-  sakamoto rotate-api   仅暂存新密钥；下次从 TUI 正常连接时应用，不中断当前 TUN
-  sakamoto rotate-api --apply-now  明确要求立即轮换（会短暂重连）
-  sakamoto rotate-api --status | --cancel  查看/取消待应用轮换
-  sakamoto version      版本
-  sakamoto help         本说明
+Usage:
+  sakamoto              Open the TUI (groups, tests, VPN, config and logs)
+  sakamoto daemon       Root supervisor (LaunchDaemon); manages sing-box and
+                        accepts connect/disconnect commands on a Unix socket
+  sakamoto watch        LaunchAgent for automatic proxy group fallback
+  sakamoto rotate-api   Stage a private API key; apply on the next TUI connect
+  sakamoto rotate-api --apply-now  Rotate immediately (brief reconnect)
+  sakamoto rotate-api --status | --cancel  Check/cancel a staged rotation
+  sakamoto version      Print the version
+  sakamoto help         Show this help
 
-TUI 快捷键:
-  tab/1-4   Home/Config/Data/Settings 四页（对齐 SR 四 Tab）
-  j/k       移动     enter  选中/切换    t  测延迟
-  c/空格    连接或断开                  u  全部测速
-  a         Config 页导入 conf URL/路径  g  更新并生成配置
-  e         编辑配置文件               Esc 返回/取消  q  退出
+TUI keys:
+  tab / 1–5   Home / Config / Data / Settings / About
+  j / k       Move       enter  Select      t  Test latency
+  c / space   Connect or disconnect       u  Test all nodes
+  a           Import conf URL/path in Config  g  Regenerate config
+  e           Edit config     Esc  Back/cancel   q  Quit
 
-节点维护: 往 ~/.sakamoto/nodes.txt 丢分享链接（SR 导出格式兼容），TUI 里 g 重建
+Add share links to ~/.sakamoto/nodes.txt and press g in the TUI to regenerate.
 `
 
 func main() {
@@ -74,7 +74,7 @@ func main() {
 		}
 	case "rotate-api":
 		if len(args) > 2 {
-			fatal("rotate-api", fmt.Errorf("只接受 --apply-now、--status 或 --cancel"))
+			fatal("rotate-api", fmt.Errorf("only --apply-now, --status, or --cancel is supported"))
 		}
 		option := ""
 		if len(args) == 2 {
@@ -85,29 +85,29 @@ func main() {
 			if err := security.StageAPI(*cfgPath); err != nil {
 				fatal("rotate-api", err)
 			}
-			fmt.Println("新 API 密钥已私有暂存；当前连接和 API 不变。下次从 TUI 正常连接时应用。")
+			fmt.Println("New API key staged privately; the active connection and API are unchanged. It applies on the next TUI connect.")
 		case "--apply-now":
 			if err := security.RotateAPI(*cfgPath); err != nil {
 				fatal("rotate-api", err)
 			}
-			fmt.Println("API 密钥已应用；连接中曾短暂重连。请重新打开 TUI。")
+			fmt.Println("API key applied after a brief reconnect. Reopen any TUI already running.")
 		case "--status":
 			pending, err := security.PendingAPI(*cfgPath)
 			if err != nil {
 				fatal("rotate-api", err)
 			}
 			if pending {
-				fmt.Println("API 轮换待应用；当前连接未改动")
+				fmt.Println("API rotation pending; the active connection is unchanged")
 			} else {
-				fmt.Println("没有待应用的 API 轮换")
+				fmt.Println("No pending API rotation")
 			}
 		case "--cancel":
 			if err := security.CancelPendingAPI(*cfgPath); err != nil {
 				fatal("rotate-api", err)
 			}
-			fmt.Println("待应用轮换已取消；当前连接未改动")
+			fmt.Println("Pending rotation canceled; the active connection is unchanged")
 		default:
-			fatal("rotate-api", fmt.Errorf("未知选项 %q", option))
+			fatal("rotate-api", fmt.Errorf("unknown option %q", option))
 		}
 	case "version":
 		fmt.Println("sakamoto", version)
@@ -157,7 +157,7 @@ func daemonDirectory() (string, error) {
 		}
 	}
 	if home == "" || home == "/var/root" {
-		return "", fmt.Errorf("无法确定登录用户目录；请在 plist 中设置 SAKAMOTO_HOME")
+		return "", fmt.Errorf("cannot determine the logged-in user's home; set SAKAMOTO_HOME in the plist")
 	}
 	if dir := os.Getenv("SAKAMOTO_DIR"); dir != "" {
 		return dir, nil

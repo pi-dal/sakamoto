@@ -9,7 +9,7 @@ icloud:
   files: [nodes.txt]
 ```
 
-You can toggle **Settings → iCloud 同步节点源** in the TUI after setting the directory in your local `sakamoto.yaml`. The watcher checks approximately once a minute and uploads/downloads only the listed source filenames; it stores last synced hashes in the **local-only** `icloud-state.json`. Do not put generated `config.json`, `.srs`, logs, proxy restore files or `sakamoto.yaml`/API secret in that list. Add a local `macOS.conf` to `files:` if you own that file and want it synced; `include` files can be listed by filename too.
+You can toggle **Settings → Sync node sources to iCloud** in the TUI after setting the directory in your local `sakamoto.yaml`. The watcher checks approximately once a minute and uploads/downloads only the listed source filenames; it stores last synced hashes in the **local-only** `icloud-state.json`. Do not put generated `config.json`, `.srs`, logs, proxy restore files or `sakamoto.yaml`/API secret in that list. Add a local `macOS.conf` to `files:` if you own that file and want it synced; `include` files can be listed by filename too.
 
 On first use:
 

@@ -1,5 +1,4 @@
-// Package watch 实现 sing-box 缺失的 fallback 组语义：
-// selector 的有序降级链，由控制面（gRPC api）驱动。
+// Package watch implements ordered fallback groups through sing-box's gRPC API.
 package watch
 
 import (
@@ -19,7 +18,7 @@ import (
 	"github.com/sagernet/sing-box/daemon"
 )
 
-// Event 上报给上层（TUI 或日志）。
+// Event reports a watcher transition to the TUI or logs.
 type Event struct {
 	Time    time.Time
 	Message string
@@ -32,7 +31,7 @@ type Watcher struct {
 	dialFn  func(ctx context.Context) (*sbclient.Client, error)
 
 	events   chan Event
-	healthy  map[string]int // 候选 tag → 连续健康次数（回切计票）
+	healthy  map[string]int // Candidate tag to consecutive healthy checks for recovery.
 	lastSnap *daemon.Groups
 }
 
@@ -48,17 +47,17 @@ func New(cfg *config.Config, dialFn func(ctx context.Context) (*sbclient.Client,
 
 func (w *Watcher) SetConfigPath(path string) { w.cfgPath = path }
 
-// Events 只读事件流（switch/error 事件 TUI 可展示）。
+// Events returns the read-only transition stream.
 func (w *Watcher) Events() <-chan Event { return w.events }
 
 func (w *Watcher) emit(level, format string, args ...any) {
 	select {
 	case w.events <- Event{Time: time.Now(), Level: level, Message: fmt.Sprintf(format, args...)}:
-	default: // 满了就丢，不阻塞主循环
+	default: // Drop when full instead of blocking the main loop.
 	}
 }
 
-// Run 阻塞运行；断流自动重连，ctx 取消即退出。
+// Run reconnects on stream failure and exits when ctx is canceled.
 func (w *Watcher) Run(ctx context.Context) error {
 	go w.proxyLoop(ctx)
 	backoff := time.Second
@@ -67,7 +66,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		w.emit("error", "连接断开: %v — %s 后重连", err, backoff)
+		w.emit("error", "API disconnected: %v; reconnecting in %s", err, backoff)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -91,7 +90,7 @@ func (w *Watcher) proxyLoop(ctx context.Context) {
 				lastSync = time.Now()
 				updates, syncErr := icloud.Sync(filepath.Dir(w.cfgPath), cfg)
 				if syncErr != nil {
-					w.emit("error", "iCloud 同步失败: %v", syncErr)
+					w.emit("error", "iCloud sync failed: %v", syncErr)
 				} else {
 					for _, item := range updates {
 						w.emit("info", "iCloud: %s", item)
@@ -102,18 +101,18 @@ func (w *Watcher) proxyLoop(ctx context.Context) {
 			connected := e == nil && strings.HasPrefix(status, "connected")
 			_, beforeErr := os.Stat(stateFile)
 			if err = sysproxy.Sync(stateFile, cfg, connected, sysproxy.Networksetup); err != nil {
-				w.emit("error", "系统代理同步失败: %v", err)
+				w.emit("error", "system proxy sync failed: %v", err)
 			} else {
 				_, afterErr := os.Stat(stateFile)
 				if os.IsNotExist(beforeErr) && afterErr == nil {
-					w.emit("info", "系统 HTTP/HTTPS 代理已启用，浏览器改走 %d", cfg.MixedInbound.Port)
+					w.emit("info", "system HTTP/HTTPS proxy enabled for browsers on port %d", cfg.MixedInbound.Port)
 				}
 				if beforeErr == nil && os.IsNotExist(afterErr) {
-					w.emit("info", "系统代理已恢复原设置")
+					w.emit("info", "previous system proxy settings restored")
 				}
 			}
 		} else {
-			w.emit("error", "读取控制配置失败: %v", err)
+			w.emit("error", "could not read sidecar config: %v", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -129,7 +128,7 @@ func (w *Watcher) runOnce(ctx context.Context) error {
 		return err
 	}
 	defer c.Close()
-	w.emit("info", "已连接 sing-box api")
+	w.emit("info", "connected to sing-box API")
 
 	groupsCh, errCh := c.SubscribeGroups(ctx)
 	var connectionCh <-chan *daemon.ConnectionEvents
@@ -202,7 +201,7 @@ func (w *Watcher) runOnce(ctx context.Context) error {
 			if !ok {
 				return fmt.Errorf("groups stream closed")
 			}
-			w.lastSnap = g // 持续读取测试结果，不能 Sleep 堵住订阅流
+			w.lastSnap = g // Consume results continuously; sleeping would stall the stream.
 		case <-tick.C:
 			if settleCh != nil || w.lastSnap == nil {
 				continue
@@ -231,7 +230,7 @@ func (w *Watcher) runOnce(ctx context.Context) error {
 			for _, chain := range w.cfg.Fallbacks {
 				for _, tag := range chain {
 					if err := c.URLTest(ctx, tag); err != nil {
-						w.emit("error", "测速 %s 失败: %v", tag, err)
+						w.emit("error", "URL test %s failed: %v", tag, err)
 					}
 				}
 			}
@@ -248,7 +247,7 @@ func (w *Watcher) runOnce(ctx context.Context) error {
 	}
 }
 
-// evaluate 使用结算期间推送的新快照判断有序回落，不测试旧缓存。
+// evaluate uses fresh group snapshots rather than stale cached delays.
 func (w *Watcher) evaluate(ctx context.Context, c *sbclient.Client, started int64) {
 	snap := w.lastSnap
 	if snap == nil {
@@ -262,12 +261,12 @@ func (w *Watcher) evaluate(ctx context.Context, c *sbclient.Client, started int6
 		cur := sel.Selected
 		curIdx := indexOf(chain, cur)
 		if curIdx < 0 {
-			continue // 手动选到了链外成员（如 ManualPick），尊重人工选择
+			continue // Respect a manual selection outside the fallback chain.
 		}
-		// 只认本轮测速后的结果；旧延迟不得阻止自动降级。
+		// Only current-round tests may prevent failover.
 		desired, desiredIdx := pickFallback(snap, chain, started)
 		if desired == "" {
-			w.emit("error", "%s: 降级链全部不可用", selTag)
+			w.emit("error", "%s: no healthy group in fallback chain", selTag)
 			continue
 		}
 		if desired == cur {
@@ -277,22 +276,22 @@ func (w *Watcher) evaluate(ctx context.Context, c *sbclient.Client, started int6
 			continue
 		}
 		if desiredIdx > curIdx {
-			// 当前死亡 → 立即降级
-			w.emit("switch", "%s: %s 不可用 → 切 %s", selTag, cur, desired)
+			// Fail over immediately when the current choice is unhealthy.
+			w.emit("switch", "%s: %s unhealthy; switching to %s", selTag, cur, desired)
 			if err := c.SelectOutbound(ctx, selTag, desired); err != nil {
-				w.emit("error", "%s: 切换失败: %v", selTag, err)
+				w.emit("error", "%s: switch failed: %v", selTag, err)
 			}
 		} else {
-			// 更优候选恢复 → 计票回切
+			// Count consecutive healthy checks before restoring a preferred group.
 			w.healthy[desired]++
 			if w.healthy[desired] >= w.cfg.RecoverAfter {
-				w.emit("switch", "%s: %s 已恢复 → 回切（%d 次连续健康）", selTag, desired, w.healthy[desired])
+				w.emit("switch", "%s: %s recovered after %d healthy checks; switching back", selTag, desired, w.healthy[desired])
 				if err := c.SelectOutbound(ctx, selTag, desired); err != nil {
-					w.emit("error", "%s: 回切失败: %v", selTag, err)
+					w.emit("error", "%s: switch-back failed: %v", selTag, err)
 				}
 				w.healthy[desired] = 0
 			} else {
-				w.emit("info", "%s: %s 恢复中（%d/%d）", selTag, desired, w.healthy[desired], w.cfg.RecoverAfter)
+				w.emit("info", "%s: %s recovering (%d/%d)", selTag, desired, w.healthy[desired], w.cfg.RecoverAfter)
 			}
 		}
 	}
@@ -318,23 +317,23 @@ func (w *Watcher) learnDomain(ctx context.Context, domain string) {
 	dir := filepath.Dir(w.cfgPath)
 	candidate, err := os.ReadFile(filepath.Join(dir, "config.json"))
 	if err != nil {
-		w.emit("error", "auto 读取配置失败: %v", err)
+		w.emit("error", "auto: could not read config: %v", err)
 		return
 	}
 	outbound, err := experiment.ProxyOutbound(candidate)
 	if err != nil {
-		w.emit("error", "auto 查找代理出口失败: %v", err)
+		w.emit("error", "auto: could not find proxy exit: %v", err)
 		return
 	}
 	rollback, err := experiment.Stage(dir, domain, outbound)
 	if err != nil {
-		w.emit("error", "auto 规则校验失败: %v", err)
+		w.emit("error", "auto: route validation failed: %v", err)
 		return
 	}
 	if rollback == nil {
 		return
 	}
-	w.emit("info", "%s: 直连连续失败，已写入代理规则，正在重连应用", domain)
+	w.emit("info", "%s: repeated direct timeouts; proxy rule saved, reconnecting to apply", domain)
 	reconnectErr := svc.Reconnect()
 	if reconnectErr == nil {
 		probeCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
@@ -343,7 +342,7 @@ func (w *Watcher) learnDomain(ctx context.Context, domain string) {
 			c, e := w.dialFn(probeCtx)
 			if e == nil {
 				c.Close()
-				w.emit("switch", "%s: 自动走代理已生效", domain)
+				w.emit("switch", "%s: automatic proxy route is active", domain)
 				return
 			}
 			select {
@@ -354,13 +353,13 @@ func (w *Watcher) learnDomain(ctx context.Context, domain string) {
 		reconnectErr = fmt.Errorf("API did not recover after auto route update")
 	}
 	if restoreErr := rollback(); restoreErr != nil {
-		w.emit("error", "auto 回滚失败: %v", restoreErr)
+		w.emit("error", "auto: rollback failed: %v", restoreErr)
 		return
 	}
 	if restoreErr := svc.Reconnect(); restoreErr != nil {
-		w.emit("error", "auto 恢复旧连接失败: %v", restoreErr)
+		w.emit("error", "auto: reconnect with previous config failed: %v", restoreErr)
 	}
-	w.emit("error", "%s: auto 未生效，已回滚: %v", domain, reconnectErr)
+	w.emit("error", "%s: auto route failed and was rolled back: %v", domain, reconnectErr)
 }
 
 func pickFallback(snap *daemon.Groups, chain []string, started int64) (string, int) {
@@ -372,7 +371,7 @@ func pickFallback(snap *daemon.Groups, chain []string, started int64) (string, i
 	return "", -1
 }
 
-// aliveFresh: tag 是组时任一成员在本轮成功即可；组本身的旧延迟不算数。
+// aliveFresh accepts a fresh successful member test, not a group's stale delay.
 func aliveFresh(snap *daemon.Groups, tag string, started int64) bool {
 	if g := findGroup(snap, tag); g != nil {
 		for _, it := range g.Items {

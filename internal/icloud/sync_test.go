@@ -49,7 +49,7 @@ func TestSyncUploadDownloadAndConflict(t *testing.T) {
 	if err := os.WriteFile(dst, []byte("remote\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, e := Sync(local, c); e == nil || !strings.Contains(e.Error(), "冲突") {
+	if _, e := Sync(local, c); e == nil || !strings.Contains(e.Error(), "changed on both sides") {
 		t.Fatal("conflict must not overwrite either side", e)
 	}
 	if b, _ := os.ReadFile(src); string(b) != "local\n" {

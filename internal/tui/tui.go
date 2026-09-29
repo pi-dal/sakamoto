@@ -1,4 +1,4 @@
-// Package tui 提供以连接状态为中心的 sing-box 终端界面。
+// Package tui provides a connection-centered terminal UI for sing-box.
 package tui
 
 import (
@@ -35,9 +35,10 @@ const (
 	configPage
 	dataPage
 	settingsPage
+	aboutPage
 )
 
-var tabs = []string{"Home", "Config", "Data", "Settings"}
+var tabs = []string{"Home", "Config", "Data", "Settings", "About"}
 
 type groupsMsg *daemon.Groups
 type statusMsg *daemon.Status
@@ -107,11 +108,13 @@ type model struct {
 	networkProbeFailures                            int
 	exitLabel                                       string
 	serviceErr                                      error
-	hits                                            []hit // 每次 View 重建，鼠标只作用于可见元素
+	hits                                            []hit // Rebuilt each view; mouse targets visible elements only.
 	prevHits                                        []hit
 	hoverX, hoverY                                  int
-	menuRow, detailRow                              int // -1=关闭，Home 右键菜单/节点详情
-	configDetail, detailScroll                      int // -1=Config 列表，≥0=对应分节详情
+	menuRow, detailRow                              int // -1 means closed; Home menu and node details.
+	configDetail, detailScroll                      int // -1 means Config list; >=0 selects a section.
+	aboutCopyright                                  bool
+	aboutScroll                                     int
 	sourceCursor, nodeCursor                        int
 	pendingDelete                                   string
 	editNode                                        gen.NodeEntry
@@ -189,7 +192,7 @@ func pump(ctx context.Context, path string, p *tea.Program) {
 				}
 			}
 			c.Close()
-			p.Send(errMsg(fmt.Errorf("控制核心已断开，正在重连")))
+			p.Send(errMsg(fmt.Errorf("core disconnected; reconnecting")))
 		}
 		select {
 		case <-time.After(2 * time.Second):
@@ -241,13 +244,13 @@ func (m *model) buildSettings() {
 					return nil
 				}
 			}
-			return fmt.Errorf("可选值：%s", strings.Join(allowed, " / "))
+			return fmt.Errorf("allowed values: %s", strings.Join(allowed, " / "))
 		}}
 	}
-	port := cfgRow{label: "监听端口", value: func() string { return fmt.Sprint(c.MixedInbound.Port) }, edit: func(s string) error {
+	port := cfgRow{label: "Listen port", value: func() string { return fmt.Sprint(c.MixedInbound.Port) }, edit: func(s string) error {
 		v, err := strconv.Atoi(s)
 		if err != nil || v < 1 || v > 65535 {
-			return fmt.Errorf("端口必须是 1–65535")
+			return fmt.Errorf("port must be between 1 and 65535")
 		}
 		c.MixedInbound.Port = v
 		return nil
@@ -256,106 +259,106 @@ func (m *model) buildSettings() {
 		return cfgRow{label: label, value: func() string { return p.String() }, edit: func(s string) error {
 			v, err := time.ParseDuration(s)
 			if err != nil || v < time.Second {
-				return fmt.Errorf("间隔至少 1 秒，例如 30s、10m")
+				return fmt.Errorf("interval must be at least 1 second (e.g. 30s or 10m)")
 			}
 			*p = v
 			return nil
 		}}
 	}
 	m.cfgRows = []cfgRow{
-		{label: "TUN · 网络"},
-		toggle("链式 SOCKS 出口", &c.ChainEnabled),
-		toggle("Tailscale 自动优化", &c.TailscaleOptimize),
-		toggle("iCloud 同步节点源", &c.ICloud.Enabled),
-		{label: "iCloud 目录", value: func() string { return c.ICloud.Directory }, edit: func(s string) error {
+		{label: "TUN · Network"},
+		toggle("Chain SOCKS exit", &c.ChainEnabled),
+		toggle("Optimize Tailscale", &c.TailscaleOptimize),
+		toggle("Sync node sources to iCloud", &c.ICloud.Enabled),
+		{label: "iCloud directory", value: func() string { return c.ICloud.Directory }, edit: func(s string) error {
 			if !filepath.IsAbs(s) {
-				return fmt.Errorf("iCloud 路径必须是绝对路径")
+				return fmt.Errorf("iCloud path must be absolute")
 			}
 			c.ICloud.Directory = s
 			return nil
 		}},
-		{label: "iCloud 同步文件", value: func() string { return strings.Join(c.ICloud.Files, ",") }, edit: func(s string) error {
+		{label: "iCloud source files", value: func() string { return strings.Join(c.ICloud.Files, ",") }, edit: func(s string) error {
 			parts := splitNonEmpty(s, ",")
 			if len(parts) == 0 {
-				return fmt.Errorf("至少一个源文件")
+				return fmt.Errorf("at least one source filename is required")
 			}
 			for _, p := range parts {
 				if p != filepath.Base(p) || p == "config.json" || p == "sakamoto.yaml" || p == "auto-proxy.json" || p == "api-rotation.pending.json" || p == "proxy-restore.json" || strings.HasSuffix(p, ".srs") || strings.HasSuffix(p, ".log") {
-					return fmt.Errorf("仅允许源文件名，不能同步生成文件或 API 密钥")
+					return fmt.Errorf("only source filenames are allowed; generated files and API keys cannot be synced")
 				}
 			}
 			c.ICloud.Files = parts
 			return nil
 		}},
-		toggle("强制路由", &c.StrictRoute),
-		choice("TUN 栈", &c.TunStack, "system", "gvisor", "mixed"),
-		{label: "实验 · 未命中规则"},
-		choice("未命中策略", &c.Experiment.Mode, "off", "on", "auto"),
-		{label: "直连失败阈值", value: func() string { return fmt.Sprint(c.Experiment.Threshold) }, edit: func(s string) error {
+		toggle("Strict routing", &c.StrictRoute),
+		choice("TUN stack", &c.TunStack, "system", "gvisor", "mixed"),
+		{label: "Experimental · Unmatched traffic"},
+		choice("Unmatched policy", &c.Experiment.Mode, "off", "on", "auto"),
+		{label: "Direct failure threshold", value: func() string { return fmt.Sprint(c.Experiment.Threshold) }, edit: func(s string) error {
 			v, err := strconv.Atoi(s)
 			if err != nil || v < 1 || v > 20 {
-				return fmt.Errorf("连续失败阈值需 1–20")
+				return fmt.Errorf("failure threshold must be between 1 and 20")
 			}
 			c.Experiment.Threshold = v
 			return nil
 		}},
-		{label: "UDP · 隐私"},
-		toggle("阻止 STUN / WebRTC", &c.BlockSTUN),
-		toggle("阻止 QUIC (UDP 443)", &c.BlockQUIC),
-		{label: "本地代理"},
-		toggle("开启 HTTP/SOCKS", &c.MixedInbound.Enabled),
-		toggle("系统代理（浏览器）", &c.SystemProxy.Enabled),
-		{label: "网络服务", value: func() string { return c.SystemProxy.Service }, edit: func(s string) error {
+		{label: "UDP · Privacy"},
+		toggle("Block STUN / WebRTC", &c.BlockSTUN),
+		toggle("Block QUIC (UDP 443)", &c.BlockQUIC),
+		{label: "Local proxy"},
+		toggle("Enable HTTP/SOCKS", &c.MixedInbound.Enabled),
+		toggle("System proxy (browser)", &c.SystemProxy.Enabled),
+		{label: "Network service", value: func() string { return c.SystemProxy.Service }, edit: func(s string) error {
 			if strings.TrimSpace(s) == "" {
-				return fmt.Errorf("请输入 macOS 网络服务名")
+				return fmt.Errorf("enter a macOS network service name")
 			}
 			c.SystemProxy.Service = s
 			return nil
 		}},
-		toggle("允许局域网连接", &c.MixedInbound.AllowLAN),
+		toggle("Allow LAN clients", &c.MixedInbound.AllowLAN),
 		port,
-		{label: "高级"},
-		choice("日志等级", &c.LogLevel, "error", "warn", "info", "debug"),
-		{label: "测速网址", value: func() string { return c.URLTest.URL }, edit: func(s string) error {
+		{label: "Advanced"},
+		choice("Log level", &c.LogLevel, "error", "warn", "info", "debug"),
+		{label: "Latency test URL", value: func() string { return c.URLTest.URL }, edit: func(s string) error {
 			v, err := url.Parse(s)
 			if err != nil || (v.Scheme != "http" && v.Scheme != "https") || v.Host == "" {
-				return fmt.Errorf("请输入有效 HTTP(S) 网址")
+				return fmt.Errorf("enter a valid HTTP(S) URL")
 			}
 			c.URLTest.URL = s
 			return nil
 		}},
-		{label: "测速间隔", value: func() string { return c.URLTest.Interval }, edit: func(s string) error {
+		{label: "Test interval", value: func() string { return c.URLTest.Interval }, edit: func(s string) error {
 			v, err := time.ParseDuration(s)
 			if err != nil || v < time.Second {
-				return fmt.Errorf("请输入至少 1 秒的间隔")
+				return fmt.Errorf("enter an interval of at least 1 second")
 			}
 			c.URLTest.Interval = s
 			return nil
 		}},
-		{label: "测速容差", value: func() string { return fmt.Sprint(c.URLTest.Tolerance) }, edit: func(s string) error {
+		{label: "Latency tolerance", value: func() string { return fmt.Sprint(c.URLTest.Tolerance) }, edit: func(s string) error {
 			v, err := strconv.Atoi(s)
 			if err != nil || v < 0 || v > 10000 {
-				return fmt.Errorf("容差需要在 0–10000 ms")
+				return fmt.Errorf("tolerance must be between 0 and 10000 ms")
 			}
 			c.URLTest.Tolerance = v
 			return nil
 		}},
-		{label: "uTLS 指纹", value: func() string { return c.UTLSFingerprint }, edit: func(s string) error { c.UTLSFingerprint = s; return nil }},
-		duration("健康检查间隔", &c.CheckInterval),
-		{label: "回切阈值", value: func() string { return fmt.Sprint(c.RecoverAfter) }, edit: func(s string) error {
+		{label: "uTLS fingerprint", value: func() string { return c.UTLSFingerprint }, edit: func(s string) error { c.UTLSFingerprint = s; return nil }},
+		duration("Health check interval", &c.CheckInterval),
+		{label: "Recovery threshold", value: func() string { return fmt.Sprint(c.RecoverAfter) }, edit: func(s string) error {
 			v, err := strconv.Atoi(s)
 			if err != nil || v < 1 || v > 20 {
-				return fmt.Errorf("连续健康次数需 1–20")
+				return fmt.Errorf("consecutive healthy checks must be between 1 and 20")
 			}
 			c.RecoverAfter = v
 			return nil
 		}},
-		{label: "订阅数", value: func() string { return fmt.Sprint(len(c.Subscriptions)) }},
-		toggle("Reality 自动回落", &c.FallbackEnabled),
-		{label: "自动回落链", value: func() string { return strings.Join(c.Fallbacks["MainProxy"], " → ") }, edit: func(s string) error {
+		{label: "Subscriptions", value: func() string { return fmt.Sprint(len(c.Subscriptions)) }},
+		toggle("Automatic fallback", &c.FallbackEnabled),
+		{label: "Fallback chain", value: func() string { return strings.Join(c.Fallbacks["MainProxy"], " → ") }, edit: func(s string) error {
 			parts := splitNonEmpty(s, ",")
 			if len(parts) == 0 {
-				return fmt.Errorf("至少需要一个自动组")
+				return fmt.Errorf("at least one automatic group is required")
 			}
 			c.Fallbacks["MainProxy"] = parts
 			return nil

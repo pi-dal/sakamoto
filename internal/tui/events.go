@@ -36,7 +36,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.groups = offlineGroups(m.cfgPath)
 		m.rebuildRows()
 		if m.serviceState == "connected" {
-			m.notice = "控制核心重连中"
+			m.notice = "Reconnecting to the core"
 		}
 	case groupsMsg:
 		m.groups = (*daemon.Groups)(v).Group
@@ -90,17 +90,17 @@ func (m *model) onService(v serviceMsg) tea.Cmd {
 	}
 	if m.serviceState == "connected" && m.shadowrocket && !m.conflictStopping {
 		m.conflictStopping = true
-		m.notice = "双 TUN 冲突：正在停用 sakamoto，保留 Shadowrocket VPN"
+		m.notice = "Two TUNs conflict; stopping sakamoto and keeping Shadowrocket VPN"
 		return func() tea.Msg {
 			_, err := svc.Send("disconnect")
-			return actionMsg{text: "已停用 sakamoto；请先断开 Shadowrocket VPN 再连接", err: err}
+			return actionMsg{text: "sakamoto stopped; disconnect Shadowrocket VPN before reconnecting", err: err}
 		}
 	}
 	if m.serviceState == "connected" && !m.shadowrocket && !m.netChecking &&
 		(previous != "connected" || wasSR || m.nextNetworkProbe.IsZero() || !time.Now().Before(m.nextNetworkProbe)) {
 		m.netChecking = true
 		if m.networkState == "" {
-			m.networkState = "检查中"
+			m.networkState = "Checking"
 		}
 		cfg := *m.cfg
 		return func() tea.Msg { return diagnoseNetwork(&cfg) }
@@ -122,13 +122,13 @@ func (m *model) onNetwork(v networkMsg) {
 			backoff = time.Minute
 		}
 		m.nextNetworkProbe = time.Now().Add(backoff)
-		m.networkState = "待确认"
-		m.notice = "TUN 已启动；探测暂时未通过，自动重试：" + v.err.Error()
+		m.networkState = "Unverified"
+		m.notice = "TUN running; probe did not pass yet, retrying: " + v.err.Error()
 	} else {
 		m.networkProbeFailures = 0
 		m.nextNetworkProbe = time.Now().Add(2 * time.Minute)
-		m.networkState = "可用 · " + v.path
-		m.notice = "网络探测通过：" + v.path
+		m.networkState = "Available · " + v.path
+		m.notice = "Network probe passed: " + v.path
 	}
 }
 func (m *model) onConnections(ev *daemon.ConnectionEvents) {
@@ -157,7 +157,7 @@ func (m *model) onLogs(l *daemon.Log) {
 func (m *model) onImport(v importMsg) {
 	m.importBusy = false
 	if v.err != nil {
-		m.notice = "导入失败：" + v.err.Error()
+		m.notice = "Import failed: " + v.err.Error()
 		return
 	}
 	m.importing = false
@@ -169,7 +169,7 @@ func (m *model) onImport(v importMsg) {
 		m.groups = offlineGroups(m.cfgPath)
 		m.rebuildRows()
 	}
-	m.notice = "已导入并生成 sing-box 配置；断开再连接后应用"
+	m.notice = "Import generated a sing-box config; reconnect to apply"
 }
 func (m *model) onAction(v actionMsg) {
 	if v.apiRotated {
@@ -221,29 +221,43 @@ func (m *model) onKey(v tea.KeyMsg) tea.Cmd {
 	case "q", "ctrl+c":
 		return tea.Quit
 	case "esc":
+		if m.page == aboutPage && m.aboutCopyright {
+			m.aboutCopyright = false
+			m.aboutScroll = 0
+			return nil
+		}
 		m.menuRow, m.detailRow, m.configDetail = -1, -1, -1
 		m.selectedConn = ""
 		m.pendingDelete = ""
 	case "tab":
 		m.menuRow, m.detailRow = -1, -1
-		m.page = (m.page + 1) % 4
+		m.page = (m.page + 1) % len(tabs)
+		m.aboutCopyright, m.aboutScroll = false, 0
 	case "shift+tab":
 		m.menuRow, m.detailRow = -1, -1
-		m.page = (m.page + 3) % 4
-	case "1", "2", "3", "4":
+		m.page = (m.page + len(tabs) - 1) % len(tabs)
+		m.aboutCopyright, m.aboutScroll = false, 0
+	case "1", "2", "3", "4", "5":
 		m.menuRow, m.detailRow = -1, -1
 		m.page = int(v.String()[0] - '1')
+		m.aboutCopyright, m.aboutScroll = false, 0
 	case "j", "down":
-		if m.page == settingsPage {
+		switch m.page {
+		case aboutPage:
+			m.aboutScroll++
+		case settingsPage:
 			m.settingsScroll++
 			m.cfgCursor = min(len(m.cfgRows)-1, m.cfgCursor+1)
-		} else {
+		default:
 			m.move(1)
 		}
 	case "k", "up":
-		if m.page == settingsPage {
+		switch m.page {
+		case aboutPage:
+			m.aboutScroll = max(0, m.aboutScroll-1)
+		case settingsPage:
 			m.cfgCursor = max(0, m.cfgCursor-1)
-		} else {
+		default:
 			m.move(-1)
 		}
 	case "enter":
@@ -254,6 +268,9 @@ func (m *model) onKey(v tea.KeyMsg) tea.Cmd {
 			return m.selectCurrent()
 		case configPage:
 			m.configDetail = 0
+		case aboutPage:
+			m.aboutCopyright = !m.aboutCopyright
+			m.aboutScroll = 0
 		}
 	case "c", " ":
 		return m.toggleConnection()
@@ -270,14 +287,14 @@ func (m *model) onKey(v tea.KeyMsg) tea.Cmd {
 			m.importing = true
 			m.importKind = "conf"
 			m.input = ""
-			m.notice = "输入 Shadowrocket .conf URL 或本地路径"
+			m.notice = "Enter a Shadowrocket .conf URL or local path"
 		}
 	case "n":
 		if m.page == configPage {
 			m.importing = true
 			m.importKind = "node"
 			m.input = ""
-			m.notice = "添加节点分享链接"
+			m.notice = "Add a node share link"
 		}
 	case "d":
 		if m.page == configPage && m.configDetail == 3 {

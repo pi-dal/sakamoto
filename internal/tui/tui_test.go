@@ -48,13 +48,13 @@ func TestDashboardMouse(t *testing.T) {
 	}
 	m.rebuildRows()
 	view := m.View()
-	if !strings.Contains(view, "默认：VMess-DMIT（待连接）  →  SOCKS 203.0.113.10:45510") {
+	if !strings.Contains(view, "Default: VMess-DMIT (offline)  →  SOCKS 203.0.113.10:45510") {
 		t.Fatalf("chain not visible: %s", view)
 	}
-	if !strings.Contains(view, "已断开") || !strings.Contains(view, "[ 连接 ]") {
+	if !strings.Contains(view, "Disconnected") || !strings.Contains(view, "[ Connect ]") {
 		t.Fatal("status/action missing")
 	}
-	// 点击标签页，点击范围需与 lipgloss 宽度一致。
+	// Tab click regions must align with lipgloss cell widths.
 	var tabHit hit
 	for _, h := range m.hits {
 		if h.action == "tab" && h.index == settingsPage {
@@ -71,7 +71,7 @@ func TestDashboardMouse(t *testing.T) {
 	before := m.cfg.BlockSTUN
 	var settingHit hit
 	for _, h := range m.hits {
-		if h.action == "setting" && m.cfgRows[h.index].label == "阻止 STUN / WebRTC" {
+		if h.action == "setting" && m.cfgRows[h.index].label == "Block STUN / WebRTC" {
 			settingHit = h
 			break
 		}
@@ -102,7 +102,7 @@ func TestListScrollingKeepsCursorAndClickableRows(t *testing.T) {
 	m.View()
 	m.scrollBy(10)
 	view := m.View()
-	if m.scroll == 0 || !strings.Contains(view, "节点") {
+	if m.scroll == 0 || !strings.Contains(view, "Node") {
 		t.Fatal("scroll did not move")
 	}
 	var nodeHit hit
@@ -131,16 +131,16 @@ func TestVPNConflictAndFailedNodeLabels(t *testing.T) {
 	m.groups = offlineGroups(m.cfgPath)
 	m.rebuildRows()
 	m.Update(serviceMsg{state: "connected", shadowrocket: true})
-	if !strings.Contains(m.View(), "VPN 冲突") {
+	if !strings.Contains(m.View(), "VPN conflict") {
 		t.Fatal("TUN conflict not visible")
 	}
 	m.Update(serviceMsg{state: "disconnected", shadowrocket: true})
-	if cmd := m.toggleConnection(); cmd != nil || !strings.Contains(m.notice, "先在 Shadowrocket 里断开") {
+	if cmd := m.toggleConnection(); cmd != nil || !strings.Contains(m.notice, "disconnect it before clicking Connect") {
 		t.Fatal("second TUN was not blocked", m.notice)
 	}
 	m.Update(serviceMsg{state: "connected", shadowrocket: false}) // do not execute network diagnostic command
 	m.lastTest = map[string]int32{"Realm": -1}
-	if !strings.Contains(m.View(), "失败/超时") {
+	if !strings.Contains(m.View(), "Failed/timed out") {
 		t.Fatal("tested-but-failed node shown as untested")
 	}
 }
@@ -212,7 +212,7 @@ func TestMouseHoverContextAndDetail(t *testing.T) {
 		t.Fatal("detail not opened")
 	}
 	view := m.View()
-	if !strings.Contains(view, "Realm") || !strings.Contains(view, "服务器") {
+	if !strings.Contains(view, "Realm") || !strings.Contains(view, "Server") {
 		t.Fatal("node details missing")
 	}
 	var back hit
@@ -244,12 +244,12 @@ func TestMouseConfigAndSettingEditor(t *testing.T) {
 		t.Fatal("config sections not clickable")
 	}
 	m.click(section.x0, section.y)
-	if m.configDetail != 3 || !strings.Contains(m.View(), "手动节点（点击后用上方按钮编辑/删除）") {
+	if m.configDetail != 3 || !strings.Contains(m.View(), "Manual nodes (select one, then use the buttons above)") {
 		t.Fatal("section detail missing")
 	}
 	m.page = settingsPage
 	for i, r := range m.cfgRows {
-		if r.label == "监听端口" {
+		if r.label == "Listen port" {
 			m.cfgCursor = i
 			break
 		}
@@ -257,7 +257,7 @@ func TestMouseConfigAndSettingEditor(t *testing.T) {
 	m.View()
 	var port hit
 	for _, h := range m.hits {
-		if h.action == "setting" && m.cfgRows[h.index].label == "监听端口" {
+		if h.action == "setting" && m.cfgRows[h.index].label == "Listen port" {
 			port = h
 			break
 		}
@@ -305,10 +305,10 @@ func TestExperimentalPolicyEditableAndPersistent(t *testing.T) {
 	m := testModel(t)
 	var mode, threshold cfgRow
 	for _, r := range m.cfgRows {
-		if r.label == "未命中策略" {
+		if r.label == "Unmatched policy" {
 			mode = r
 		}
-		if r.label == "直连失败阈值" {
+		if r.label == "Direct failure threshold" {
 			threshold = r
 		}
 	}
@@ -396,7 +396,7 @@ func TestMouseNodeEditDeleteAndFallbackSetting(t *testing.T) {
 	}
 	m.page = settingsPage
 	for i, r := range m.cfgRows {
-		if r.label == "Reality 自动回落" {
+		if r.label == "Automatic fallback" {
 			m.cfgCursor = i
 			break
 		}
@@ -404,7 +404,7 @@ func TestMouseNodeEditDeleteAndFallbackSetting(t *testing.T) {
 	m.View()
 	var fallback hit
 	for _, h := range m.hits {
-		if h.action == "setting" && m.cfgRows[h.index].label == "Reality 自动回落" {
+		if h.action == "setting" && m.cfgRows[h.index].label == "Automatic fallback" {
 			fallback = h
 			break
 		}
@@ -580,7 +580,7 @@ func TestMouseImportRemoteConfWithInclude(t *testing.T) {
 	if err != nil || loaded.ConfPath != m.cfg.ConfPath {
 		t.Fatal("source not saved", err)
 	}
-	// 失败时不改已保存的来源。
+	// Failed imports must not overwrite the saved source.
 	m.importing = true
 	m.input = server.URL + "/missing.conf"
 	cmd = m.handleImportInput(tea.KeyMsg{Type: tea.KeyEnter})
@@ -655,13 +655,13 @@ func TestExitReadsGeneratedConfig(t *testing.T) {
 		t.Fatal("offline group list missing")
 	}
 	v := m.View()
-	if !strings.Contains(v, "入口 默认：") || !strings.Contains(v, "Realm") {
+	if !strings.Contains(v, "Entry Default: ") || !strings.Contains(v, "Realm") {
 		t.Fatal("offline state not visible")
 	}
 	for _, h := range m.hits {
 		if h.action == "node" {
 			m.click(h.x0, h.y)
-			if m.notice != "先连接，再选择节点" {
+			if m.notice != "Connect before selecting a node" {
 				t.Fatalf("offline click: %q", m.notice)
 			}
 			return

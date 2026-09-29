@@ -1,5 +1,4 @@
-// Package svc — root 常驻监督进程：unix socket 接受 connect/disconnect/status，
-// 管理 sing-box 子进程（等价于 SR 的 VPN 开关，且免每次 sudo）。
+// Package svc supervises sing-box as root and accepts VPN controls over a Unix socket.
 package svc
 
 import (
@@ -24,7 +23,7 @@ const SockName = "svc.sock"
 
 func SockPath() string { return filepath.Join(config.DefaultDir(), SockName) }
 
-// Server 是 root 监督进程本体。
+// Server is the root supervisor process.
 type Server struct {
 	cfgPath  string
 	workDir  string
@@ -39,7 +38,7 @@ func NewServer(cfgPath, workDir string) *Server {
 	return &Server{cfgPath: cfgPath, workDir: workDir}
 }
 
-// Run 阻塞：起 socket 服务；不自动起 sing-box（首次 connect 才拉起）。
+// Run starts the control socket but waits for an explicit connect command.
 func (s *Server) Run() error {
 	sock := filepath.Join(s.workDir, SockName)
 	if err := os.MkdirAll(filepath.Dir(sock), 0o700); err != nil {
@@ -53,7 +52,7 @@ func (s *Server) Run() error {
 		return err
 	}
 	defer func() { _ = l.Close() }()
-	// 只授权指定用户。绝不能让其他本机账户控制 root 进程。
+	// Permit only the designated user to control this root process.
 	if name := os.Getenv("SAKAMOTO_USER"); name != "" {
 		u, err := user.Lookup(name)
 		if err != nil {
@@ -75,7 +74,7 @@ func (s *Server) Run() error {
 		return err
 	}
 	fmt.Println("daemon: listening", sock)
-	// Shadowrocket 在 sing-box 之后重新连接时，优先保留 Shadowrocket，撤销我们的 TUN。
+	// If Shadowrocket connects afterward, keep it and release our TUN.
 	go s.monitorVPNConflict()
 	for {
 		conn, err := l.Accept()
@@ -97,7 +96,7 @@ func (s *Server) monitorVPNConflict() {
 		running := s.child != nil && s.child.ProcessState == nil
 		s.mu.Unlock()
 		if running {
-			s.appendLog("Shadowrocket VPN 已连接，停止 sing-box 以避免双 TUN 冲突")
+			s.appendLog("Shadowrocket VPN connected; stopping sing-box to avoid two active TUNs")
 			s.stop()
 		}
 	}
@@ -158,7 +157,7 @@ func shadowrocketVPNConnected() bool {
 }
 func (s *Server) start() string {
 	if shadowrocketVPNConnected() {
-		return "start failed: 请先断开 Shadowrocket VPN（不能同时运行两个 TUN）"
+		return "start failed: disconnect Shadowrocket VPN first; two TUNs cannot run together"
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -235,13 +234,13 @@ func validateAPIService(path string) error {
 	return nil
 }
 
-// waitLoop 子进程退出后自动重启（KeepAlive 兜底，退避防抖）。
+// waitLoop restarts unexpected exits with backoff; intentional stops are excluded.
 func (s *Server) waitLoop(cmd *exec.Cmd, gen int) {
 	err := cmd.Wait()
 	s.appendLog(fmt.Sprintf("sing-box exited: %v", err))
 	time.Sleep(2 * time.Second)
 	s.mu.Lock()
-	if s.child == cmd && gen == s.restarts { // 仍是当前代，没被 disconnect 换掉
+	if s.child == cmd && gen == s.restarts { // Restart only if this process generation is still current.
 		s.mu.Unlock()
 		s.appendLog("auto-restart")
 		s.start()
@@ -256,9 +255,9 @@ func (s *Server) stop() string {
 	if s.child == nil || s.child.ProcessState != nil {
 		return "not running"
 	}
-	s.restarts++ // 让 waitLoop 判定代际失效，不再自动重启
+	s.restarts++ // Invalidate waitLoop's generation to prevent auto-restart.
 	pid := s.child.Process.Pid
-	// SIGTERM 让 sing-box 撤销 TUN 路由、释放 DNS，而不是 SIGKILL 硬切断。
+	// SIGTERM lets sing-box release TUN routes and DNS cleanly.
 	if err := s.child.Process.Signal(syscall.SIGTERM); err != nil {
 		return "disconnect failed: " + err.Error()
 	}

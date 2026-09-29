@@ -18,16 +18,16 @@ import (
 	"github.com/pi-dal/sakamoto/internal/experiment"
 )
 
-// ---------------- 主流程 ----------------
+// ---------------- Main generation pipeline ----------------
 
 type Options struct {
 	ConfPath   string
 	SRJSONPath string
-	NodesFile  string // 分享链接文件（可选）
-	AllowHosts string // 手动节点 host 白名单，逗号分隔
+	NodesFile  string // optional share-link file
+	AllowHosts string // comma-separated manual-node host allowlist
 	Cfg        *config.Config
-	OutDir     string // 输出目录（默认 ~/.config/sakamoto）
-	Quiet      bool   // TUI 调用时静默，避免生成过程写 stdout 破坏终端布局
+	OutDir     string // output directory (defaults to the active runtime)
+	Quiet      bool   // suppress stdout so generation does not disrupt the TUI
 }
 
 func Run(o Options) error {
@@ -61,7 +61,7 @@ func Run(o Options) error {
 		return err
 	}
 
-	hc := &http.Client{Timeout: 30 * time.Second} // 默认走 env HTTP(S)_PROXY
+	hc := &http.Client{Timeout: 30 * time.Second} // Honors HTTP(S)_PROXY from the environment.
 
 	p, err := parseConf(o.ConfPath, hc)
 	if err != nil {
@@ -91,7 +91,7 @@ func Run(o Options) error {
 		return err
 	}
 
-	// 6) [General] → DNS：dns-server 逐项解析（udp / https / #proxy 后缀 / tls）
+	// 6) Map [General] dns-server entries to UDP, HTTPS, or TLS resolvers.
 	var directSets []string
 	if _, ok := p.bk["direct"]; ok {
 		directSets = append(directSets, "rs-direct")
@@ -103,13 +103,13 @@ func Run(o Options) error {
 	}
 	var dnsServers []map[string]any
 	localTags, remoteTags := []string{}, []string{}
-	localPublic := "" // 第一个公网 UDP 解析器（私网 DNS 可能随 VPN 上下线，不做默认）
+	localPublic := "" // First public UDP resolver; private DNS can disappear with a VPN.
 	addServer := func(tag, typ, server string, detour bool) {
 		s := map[string]any{"tag": tag, "type": typ, "server": server}
 		if detour {
 			s["detour"] = exitTag
 			if localPublic != "" {
-				s["domain_resolver"] = localPublic // DoH 引导走公网本地 DNS
+				s["domain_resolver"] = localPublic // Bootstrap DoH using the public local resolver.
 			}
 		}
 		dnsServers = append(dnsServers, s)
@@ -120,7 +120,7 @@ func Run(o Options) error {
 		switch {
 		case strings.HasPrefix(d, "https://"):
 			host := strings.TrimPrefix(d, "https://")
-			host = strings.SplitN(host, "/", 2)[0] // 只留 host，路径默认 /dns-query
+			host = strings.SplitN(host, "/", 2)[0] // Keep the host; the default path is /dns-query.
 			tag := fmt.Sprintf("remote%d", len(remoteTags))
 			remoteTags = append(remoteTags, tag)
 			addServer(tag, "https", host, viaProxy)
@@ -128,7 +128,7 @@ func Run(o Options) error {
 			tag := fmt.Sprintf("remote%d", len(remoteTags))
 			remoteTags = append(remoteTags, tag)
 			addServer(tag, "tls", strings.TrimPrefix(d, "tls://"), viaProxy)
-		default: // 纯 IP → udp 本地池
+		default: // Bare IP: add to the local UDP resolver pool.
 			tag := fmt.Sprintf("local%d", len(localTags))
 			localTags = append(localTags, tag)
 			if localPublic == "" {
@@ -139,7 +139,7 @@ func Run(o Options) error {
 			addServer(tag, "udp", d, false)
 		}
 	}
-	for _, d := range splitCSV(p.general["fallback-dns-server"]) { // fallback 并进本地池
+	for _, d := range splitCSV(p.general["fallback-dns-server"]) { // Include fallback resolvers in the local pool.
 		tag := fmt.Sprintf("local%d", len(localTags))
 		localTags = append(localTags, tag)
 		if localPublic == "" {
@@ -157,7 +157,7 @@ func Run(o Options) error {
 	if localPublic == "" {
 		localPublic = localTags[0]
 	}
-	// DoH 服务器的域名解析钉到公网本地 DNS
+	// Pin DoH bootstrap resolution to public local DNS.
 	for _, s := range dnsServers {
 		if s["detour"] != nil {
 			s["domain_resolver"] = localPublic
@@ -168,11 +168,11 @@ func Run(o Options) error {
 		addServer("remote0", "https", "dns.google", true)
 		dnsServers[len(dnsServers)-1]["domain_resolver"] = localPublic
 	}
-	// 节点域名钉死本地公网 DNS（避免链式鸡生蛋）
+	// Resolve proxy server hostnames locally to avoid a detour bootstrap loop.
 	for _, n := range nodes {
 		n["domain_resolver"] = localPublic
 	}
-	// DNS 规则只用纯域名规则集（ip_cidr 规则集需响应期匹配，走 private-ip-answer 那条）
+	// DNS request rules use domain-only sets; IP CIDRs require response matching.
 	var dnsDirectSets []string
 	if direct, ok := p.bk["direct"]; ok && len(direct["domain"])+len(direct["domain_suffix"])+len(direct["domain_keyword"]) > 0 {
 		tag := "rs-direct"
@@ -192,7 +192,7 @@ func Run(o Options) error {
 		dnsRules = append(dnsRules, map[string]any{"domain": names, "action": "route", "server": "sr-hosts"})
 	}
 	if ts.Present {
-		// *.ts.net → Tailscale quad100（MagicDNS 设备名可解析）；必须排在通用 direct 规则前
+		// Resolve *.ts.net with Tailscale quad100 before generic direct rules.
 		dnsServers = append(dnsServers, map[string]any{
 			"tag": "ts-dns", "type": "udp", "server": "100.100.100.100"})
 		dnsRules = append(dnsRules, map[string]any{
@@ -201,7 +201,7 @@ func Run(o Options) error {
 	if len(dnsDirectSets) > 0 {
 		dnsRules = append(dnsRules, map[string]any{"rule_set": dnsDirectSets, "server": localPublic})
 	}
-	// private-ip-answer=true：先 evaluate 远程解析，应答含私网 IP 则 reject
+	// private-ip-answer: evaluate remote DNS first, then reject private answers.
 	if strings.EqualFold(p.general["private-ip-answer"], "true") {
 		dnsRules = append(dnsRules,
 			map[string]any{"action": "evaluate", "server": remoteTags[0]},
@@ -211,7 +211,7 @@ func Run(o Options) error {
 	// 7) route + tun
 	routeRules := []map[string]any{
 		{"action": "sniff"},
-		{"protocol": "dns", "action": "hijack-dns"}, // SR hijack-dns 的超集（全局劫持，更彻底）
+		{"protocol": "dns", "action": "hijack-dns"}, // Globally hijack DNS traffic routed through sing-box.
 		{"ip_is_private": true, "action": "route", "outbound": "direct"},
 		{"rule_set": []string{"rs-reject"}, "action": "reject"},
 		{"rule_set": directSets, "action": "route", "outbound": "direct"},
@@ -219,11 +219,11 @@ func Run(o Options) error {
 	}
 	var udpProtections []map[string]any
 	if cfg.BlockSTUN {
-		// STUN (UDP) 可让网页获取公网映射地址；阻断已识别的 STUN 包。
+		// Reject identified STUN packets that could expose a public mapped address.
 		udpProtections = append(udpProtections, map[string]any{"protocol": "stun", "action": "reject"})
 	}
 	if cfg.BlockQUIC {
-		// 拒 UDP:443 强制回落 TCP/TLS（代理下 QUIC 走 UDP-over-TCP 白损性能）。
+		// Reject UDP:443 to fall back to TCP/TLS instead of QUIC over TCP.
 		udpProtections = append(udpProtections, map[string]any{"network": "udp", "port": 443, "action": "reject"})
 	}
 	if len(udpProtections) > 0 {
@@ -238,7 +238,7 @@ func Run(o Options) error {
 			}
 		}
 	}
-	{ // bypass 去重保序
+	{ // Deduplicate exclusions without changing order.
 		seen := map[string]bool{}
 		dd := bypass[:0]
 		for _, x := range bypass {
@@ -251,7 +251,7 @@ func Run(o Options) error {
 	}
 	tun := map[string]any{
 		"type": "tun", "tag": "tun-in", "address": []string{"172.18.0.1/30"},
-		// strict_route 对齐 SR TunnelEnforceRoutesKey
+		// strict_route corresponds to Shadowrocket TunnelEnforceRoutesKey.
 		"auto_route": true, "strict_route": cfg.StrictRoute, "stack": cfg.TunStack,
 		"udp_timeout": "5m",
 	}
@@ -259,7 +259,7 @@ func Run(o Options) error {
 		tun["route_exclude_address"] = bypass
 	}
 	if inc := splitCSV(p.general["tun-included-routes"]); len(inc) > 0 {
-		tun["route_address"] = inc // SR tun-included-routes：只接管列出的网段（Tailscale 变体）
+		tun["route_address"] = inc // Only route listed prefixes through the TUN.
 	}
 	inbounds := []map[string]any{tun}
 	if cfg.MixedInbound.Enabled { // SR ProxyServerType/Port + ProxyShareEnabled
@@ -318,7 +318,7 @@ func Run(o Options) error {
 		return err
 	}
 
-	// 6) sakamoto.yaml 侧车：只在不存在时写模板（不覆盖用户编辑）
+	// 6) Write a sidecar template only if the user has not created one.
 	var chain []string
 	for _, t := range []string{"RealityAuto", "OthersAuto"} {
 		for _, m := range mainMembers {
@@ -334,31 +334,31 @@ func Run(o Options) error {
 		if len(chain) > 1 {
 			yamlText += "fallbacks:\n  MainProxy: [" + strings.Join(chain, ", ") + "]\n"
 		}
-		yamlText += "# 如需订阅，在 Config 页面添加；手动节点放在 nodes.txt。\nsubscriptions: []\n"
+		yamlText += "# Add subscriptions in Config; put manual share links in nodes.txt.\nsubscriptions: []\n"
 		if err := os.WriteFile(sidecarPath, []byte(yamlText), 0600); err != nil {
 			return fmt.Errorf("write template: %w", err)
 		}
-		reportf("→ %s (模板)\n", sidecarPath)
+		reportf("→ %s (template)\n", sidecarPath)
 	}
 
-	// 8) 迁移报告：不支持项如实列出
+	// 8) Report unsupported source features without claiming parity.
 	if len(p.rewrites) > 0 {
-		reportf("  ⚠ [URL Rewrite] %d 条已丢弃（sing-box 无 HTTP 改写层）: %s\n",
+		reportf("  ⚠ [URL Rewrite] %d entries omitted (sing-box has no HTTP rewriting layer): %s\n",
 			len(p.rewrites), strings.Join(p.rewrites, " | "))
 	}
 	if len(p.mitm) > 0 {
-		reportf("  ⚠ [MITM] 已丢弃（sing-box 不支持中间人解密）: %s\n", strings.Join(p.mitm, " | "))
+		reportf("  ⚠ [MITM] omitted (sing-box does not decrypt traffic): %s\n", strings.Join(p.mitm, " | "))
 	}
 	if len(p.proxies) > 0 {
-		reportf("  · [Proxy] %d 行未导入（节点由 nodes.txt/订阅提供）\n", len(p.proxies))
+		reportf("  · [Proxy] %d entries omitted (nodes come from nodes.txt/subscriptions)\n", len(p.proxies))
 	}
 	if len(p.pgroups) > 0 {
-		reportf("  · [Proxy Group] %d 行 → 已由 RealityAuto/OthersAuto/ManualPick/MainProxy 替代\n", len(p.pgroups))
+		reportf("  · [Proxy Group] %d entries replaced by RealityAuto/OthersAuto/ManualPick/MainProxy\n", len(p.pgroups))
 	}
 	if len(p.scripts) > 0 {
-		reportf("  ⚠ [Script]/[Host] %d 行已丢弃（sing-box 无脚本引擎/hosts 覆写）\n", len(p.scripts))
+		reportf("  ⚠ [Script]/[Host] %d entries omitted (no compatible script/host rewrite engine)\n", len(p.scripts))
 	}
-	// [General] 未知/未覆盖键如实报告，保证审计完整性
+	// Report every unmapped [General] option for auditability.
 	handled := map[string]bool{"ipv6": true, "prefer-ipv6": true, "bypass-system": true,
 		"bypass-tun": true, "skip-proxy": true, "dns-server": true,
 		"fallback-dns-server": true, "private-ip-answer": true, "dns-direct-system": true,
@@ -368,15 +368,15 @@ func Run(o Options) error {
 		"always-real-ip": true}
 	for k, v := range p.general {
 		if !handled[k] {
-			reportf("  ? [General] 未映射键: %s = %s\n", k, v)
+			reportf("  ? [General] unmapped option: %s = %s\n", k, v)
 		}
 	}
-	reportf("→ %s  最终规则=%s，代理出口=%s（detour→MainProxy）\n", cfgPath, finalTag, exitTag)
-	reportf("   fallback 链: %v\n", chain)
+	reportf("→ %s  final route=%s, proxy exit=%s (detour to MainProxy)\n", cfgPath, finalTag, exitTag)
+	reportf("   fallback chain: %v\n", chain)
 	return nil
 }
 
-// detectTailscale 检测本机 Tailscale 安装/运行状态与 MagicDNS 后缀。
+// detectTailscale checks local installation, runtime state, and MagicDNS suffix.
 type tailscaleInfo struct {
 	Present        bool
 	MagicDNSSuffix string
@@ -430,4 +430,4 @@ func bkAdd(bk buckets, tgt, kind, val string) {
 	bk[tgt][kind][val] = true
 }
 
-// parseShareLinks 解析 nodes.txt 分享链接（vless+reality 自动归类 RealityAuto）。
+// parseShareLinks parses nodes.txt and groups VLESS Reality nodes in RealityAuto.

@@ -15,67 +15,68 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config 是 sakamoto 的侧车配置（与 sing-box config.json 分离，由 sbt 独占解释）。
+// Config is sakamoto's sidecar configuration, separate from sing-box config.json.
 type Config struct {
 	API struct {
 		URL    string `yaml:"url"`    // sing-box api service, e.g. http://127.0.0.1:9090
 		Secret string `yaml:"secret"` // api service secret
 	} `yaml:"api"`
 
-	// Fallbacks: selector tag → 有序降级链（成员必须是该 selector 的 outbounds）。
-	// 语义：链首优先；当前选中死亡 → 选第一个存活的；更优候选恢复 recover_after 次后回切。
+	// Fallbacks maps selector tags to ordered chains of their outbound members.
+	// Prefer the first healthy member; fail over when selected member dies and
+	// switch back after recover_after consecutive successful health checks.
 	Fallbacks       map[string][]string `yaml:"fallbacks"`
 	FallbackEnabled bool                `yaml:"fallback_enabled"` // automatic RealityAuto → OthersAuto failover
 
-	CheckInterval time.Duration `yaml:"check_interval"` // 默认 30s
-	RecoverAfter  int           `yaml:"recover_after"`  // 默认 2
-	TestSettle    time.Duration `yaml:"test_settle"`    // URLTest 后等待结果的时间，默认 5s
+	CheckInterval time.Duration `yaml:"check_interval"` // default 30s
+	RecoverAfter  int           `yaml:"recover_after"`  // default 2
+	TestSettle    time.Duration `yaml:"test_settle"`    // wait for URLTest results; default 5s
 
-	// import 源定义
-	Subscriptions []SubSource `yaml:"subscriptions"` // 可选 HTTP(S) 订阅源
-	NodesFile     string      `yaml:"nodes_file"`    // 手动分享链接文件
-	ConfPath      string      `yaml:"conf"`          // Shadowrocket .conf（规则骨架）
-	SRJSONPath    string      `yaml:"srjson"`        // Shadowrocket.json 备份（手动节点提取）
-	AllowHosts    []string    `yaml:"allow_hosts"`   // srjson 中手动节点 host 白名单
-	SocksExit     string      `yaml:"socks_exit"`    // 链式出口节点 tag（该 socks 节点自动 detour 到 MainProxy）
-	BlockQUIC     bool        `yaml:"block_quic"`    // 拒 UDP:443 强制 TCP（默认 true）
-	BlockSTUN     bool        `yaml:"block_stun"`    // 拒 STUN 防 WebRTC 泄露（默认 true，对齐 UDPSocketDisableSTUN）
+	// Import sources.
+	Subscriptions []SubSource `yaml:"subscriptions"` // optional HTTP(S) subscription sources
+	NodesFile     string      `yaml:"nodes_file"`    // manual share links
+	ConfPath      string      `yaml:"conf"`          // Shadowrocket .conf rule skeleton
+	SRJSONPath    string      `yaml:"srjson"`        // Shadowrocket JSON export for manual nodes
+	AllowHosts    []string    `yaml:"allow_hosts"`   // host allowlist for manual nodes from srjson
+	SocksExit     string      `yaml:"socks_exit"`    // chained SOCKS exit tag (detours to MainProxy)
+	BlockQUIC     bool        `yaml:"block_quic"`    // reject UDP:443 to force TCP; default true
+	BlockSTUN     bool        `yaml:"block_stun"`    // reject detected STUN; default true
 	Experiment    struct {
-		Mode      string `yaml:"mode"`      // off: 保持来源 FINAL; on: 未命中走代理; auto: 失败达阈值的域名走代理
-		Threshold int    `yaml:"threshold"` // auto: 不同尝试连续失败次数（默认 3）
+		Mode      string `yaml:"mode"`      // off: direct fallback; on: proxy fallback; auto: learn failed hosts
+		Threshold int    `yaml:"threshold"` // distinct spaced direct failures; default 3
 	} `yaml:"experiment"`
 
-	// —— 对齐 Shadowrocket 应用设置层 ——
-	ChainEnabled bool   `yaml:"chain_enabled"` // ChainProxyEnabled：socks 出口 detour MainProxy（默认 true）
-	StrictRoute  bool   `yaml:"strict_route"`  // TunnelEnforceRoutesKey：TUN 抢占路由（默认 false）
-	TunStack     string `yaml:"tun_stack"`     // TUN 栈：system/gvisor/mixed（默认 system）
-	LogLevel     string `yaml:"log_level"`     // DebugLoggingEnabled: info/debug（默认 info）
+	// Shadowrocket application-level setting equivalents.
+	ChainEnabled bool   `yaml:"chain_enabled"` // ChainProxyEnabled: SOCKS detours to MainProxy
+	StrictRoute  bool   `yaml:"strict_route"`  // TunnelEnforceRoutesKey; default false
+	TunStack     string `yaml:"tun_stack"`     // system/gvisor/mixed; default gvisor
+	LogLevel     string `yaml:"log_level"`     // info/debug; default info
 	MixedInbound struct {
-		Enabled  bool `yaml:"enabled"`   // ProxyServerType：本地 HTTP/SOCKS 混合代理口
-		Port     int  `yaml:"port"`      // 默认 2334（对齐 SR ProxyServerPort）
-		AllowLAN bool `yaml:"allow_lan"` // ProxyShareEnabled：允许局域网设备连入
+		Enabled  bool `yaml:"enabled"`   // local HTTP/SOCKS mixed inbound
+		Port     int  `yaml:"port"`      // default 2334
+		AllowLAN bool `yaml:"allow_lan"` // allow LAN clients
 	} `yaml:"mixed_inbound"`
 	SystemProxy struct {
-		Enabled bool   `yaml:"enabled"` // 与 TUN 同时为浏览器提供域名代理，断开时恢复原设置
-		Service string `yaml:"service"` // macOS 网络服务名，默认 Wi-Fi
+		Enabled bool   `yaml:"enabled"` // browser hostname proxy alongside the TUN; restored on disconnect
+		Service string `yaml:"service"` // macOS network service; default Wi-Fi
 	} `yaml:"system_proxy"`
 	ICloud struct {
 		Enabled   bool     `yaml:"enabled"`   // optional, off by default; uploads node links to iCloud Drive
 		Directory string   `yaml:"directory"` // absolute iCloud Drive directory
 		Files     []string `yaml:"files"`     // source filenames only; generated files are forbidden
 	} `yaml:"icloud"`
-	TailscaleOptimize bool   `yaml:"tailscale_optimize"` // Tailscale 自动检测优化（默认 true）
-	UTLSFingerprint   string `yaml:"utls_fingerprint"`   // SR Fingerprint 全局指纹（空=用链接自带 fp；设置则覆盖所有节点，对齐 SR 全局生效）
+	TailscaleOptimize bool   `yaml:"tailscale_optimize"` // auto-detect Tailscale; default true
+	UTLSFingerprint   string `yaml:"utls_fingerprint"`   // global fingerprint override; empty uses node links
 
-	// URLTest 组参数（对齐 SR url-test interval/tolerance/timeout/url）
+	// URLTest parameters match Shadowrocket's interval/tolerance/timeout/URL.
 	URLTest struct {
-		URL       string `yaml:"url"`       // 默认 gstatic 204
-		Interval  string `yaml:"interval"`  // 默认 10m（SR 600s）
-		Tolerance int    `yaml:"tolerance"` // 默认 100（SR 100ms）
+		URL       string `yaml:"url"`       // default gstatic 204
+		Interval  string `yaml:"interval"`  // default 10m
+		Tolerance int    `yaml:"tolerance"` // default 100ms
 	} `yaml:"urltest"`
 }
 
-// SubSource 订阅源：URL + 格式（auto 自动嗅探）。
+// SubSource identifies a subscription URL and its format (auto detects it).
 type SubSource struct {
 	Name   string `yaml:"name"`
 	URL    string `yaml:"url"`
@@ -115,9 +116,9 @@ func Default() *Config {
 	c.ConfPath = filepath.Join(home, "Downloads", "sr_top500_banlist_ad.conf")
 	c.SRJSONPath = filepath.Join(home, "Documents", "Shadowrocket.json")
 	c.NodesFile = filepath.Join(DefaultDir(), "nodes.txt")
-	c.AllowHosts = []string{} // 默认空：手动节点全走 nodes.txt，避免 SR 备份里的过期节点
+	c.AllowHosts = []string{} // Empty by default: use nodes.txt rather than stale export entries.
 	c.BlockQUIC = true
-	c.BlockSTUN = true // 对齐 SR UDPSocketDisableSTUN=true
+	c.BlockSTUN = true // Mirrors Shadowrocket UDPSocketDisableSTUN=true.
 	c.Experiment.Mode = "off"
 	c.Experiment.Threshold = 3
 	c.ChainEnabled = true
@@ -149,7 +150,7 @@ func Load(path string) (*Config, error) {
 	}
 	if err != nil {
 		if os.IsNotExist(err) {
-			return c, nil // 无配置文件时用默认值
+			return c, nil // No sidecar yet; use defaults.
 		}
 		return nil, err
 	}
@@ -205,7 +206,7 @@ func ValidateAPISecret(secret string) error {
 	return nil
 }
 
-// DefaultPath 返回默认配置路径 ~/.config/sakamoto/sakamoto.yaml
+// DefaultPath returns the sidecar path under the active runtime directory.
 func DefaultPath() string { return filepath.Join(DefaultDir(), "sakamoto.yaml") }
 
 // ValidateAPIEndpoint prevents the credential from being sent to a remote host.

@@ -31,15 +31,15 @@ func (m *model) activeNode() string {
 		}
 	}
 	if tag == "MainProxy" {
-		return "待连接"
+		return "Not connected"
 	}
 	if m.conn == nil {
-		return "默认：" + tag + "（待连接）"
+		return "Default: " + tag + " (offline)"
 	}
 	return tag
 }
 
-// offlineGroups 直接从生成的 config.json 读节点，核心关闭时仍显示可浏览的列表。
+// offlineGroups reads generated config so groups remain browsable while offline.
 func offlineGroups(cfgPath string) []*daemon.Group {
 	data, err := os.ReadFile(filepath.Join(filepath.Dir(cfgPath), "config.json"))
 	if err != nil {
@@ -81,7 +81,7 @@ func exitFromConfig(cfgPath string) string {
 	path := filepath.Join(filepath.Dir(cfgPath), "config.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "待生成"
+		return "Not generated"
 	}
 	var cfg struct {
 		Route struct {
@@ -96,7 +96,7 @@ func exitFromConfig(cfgPath string) string {
 		} `json:"outbounds"`
 	}
 	if json.Unmarshal(data, &cfg) != nil {
-		return "配置错误"
+		return "Invalid config"
 	}
 	for _, o := range cfg.Outbounds {
 		if o.Type == "socks" && o.Detour == "MainProxy" && o.Server != "" {
@@ -123,17 +123,17 @@ func padLine(text string, width int) string {
 	return text + strings.Repeat(" ", max(0, width-lipgloss.Width(text)))
 }
 func (m *model) homeAside() []string {
-	mode := "待连接"
+	mode := "Offline"
 	if m.mode != "" {
 		mode = m.mode
 	}
-	selection := "自动"
+	selection := "Auto"
 	for _, g := range m.groups {
 		if g.Tag == "MainProxy" && g.Selected != "" {
 			selection = g.Selected
 		}
 	}
-	latency := "未测试"
+	latency := "Not tested"
 	for _, g := range m.groups {
 		if g.Tag == selection {
 			for _, i := range g.Items {
@@ -143,55 +143,55 @@ func (m *model) homeAside() []string {
 			}
 		}
 	}
-	fallback := "关闭"
+	fallback := "Off"
 	if m.cfg.FallbackEnabled {
 		fallback = strings.Join(m.cfg.Fallbacks["MainProxy"], " → ")
 	}
 	return []string{
-		accent.Render("当前代理"), "", "入口  " + trunc(m.activeNode(), 26), "策略  " + selection, "延迟  " + latency,
-		"", accent.Render("链式出口"), "", trunc(m.exitLabel, 30), "",
-		accent.Render("网络"), "", "规则  " + mode, "回落  " + fallback, "Tailscale  " + map[bool]string{true: "自动优化", false: "关闭"}[m.cfg.TailscaleOptimize],
+		accent.Render("CURRENT PROXY"), "", "Entry  " + trunc(m.activeNode(), 26), "Selection  " + selection, "Latency  " + latency,
+		"", accent.Render("CHAIN EXIT"), "", trunc(m.exitLabel, 30), "",
+		accent.Render("NETWORK"), "", "Mode  " + mode, "Fallback  " + fallback, "Tailscale  " + map[bool]string{true: "Optimized", false: "Off"}[m.cfg.TailscaleOptimize],
 	}
 }
 func (m *model) View() string {
 	m.prevHits, m.hits = m.hits, nil
 	if m.width < 64 || m.height < 16 {
-		return fmt.Sprintf("sakamoto · 终端至少需要 64×16（当前 %d×%d）\n", m.width, m.height)
+		return fmt.Sprintf("sakamoto · terminal must be at least 64×16 (now %d×%d)\n", m.width, m.height)
 	}
 	w, inner := m.width, m.width-4
 	var b strings.Builder
 	b.WriteString("┌" + strings.Repeat("─", w-2) + "┐\n")
-	stateLabel := "● 已断开"
+	stateLabel := "● Disconnected"
 	state := bad.Render(stateLabel)
 	if m.serviceState == "connected" {
-		stateLabel = "● TUN 已启动"
+		stateLabel = "● TUN running"
 		state = good.Render(stateLabel)
 	}
-	if m.serviceState == "connected" && strings.HasPrefix(m.networkState, "可用") {
-		stateLabel = "● 已验证可用"
+	if m.serviceState == "connected" && strings.HasPrefix(m.networkState, "Available") {
+		stateLabel = "● Network reachable"
 		state = good.Render(stateLabel)
 	}
-	if m.serviceState == "connected" && m.networkState == "待确认" {
-		stateLabel = "● TUN 已启动 · 检测待重试"
+	if m.serviceState == "connected" && m.networkState == "Unverified" {
+		stateLabel = "● TUN running · retrying probe"
 		state = accent.Render(stateLabel)
 	}
 	if m.serviceState == "unavailable" {
-		stateLabel = "● 后台不可用"
+		stateLabel = "● Supervisor unavailable"
 		state = bad.Render(stateLabel)
 	}
 	if m.serviceState == "connected" && m.shadowrocket {
-		stateLabel = "⚠ VPN 冲突"
+		stateLabel = "⚠ VPN conflict"
 		state = bad.Render(stateLabel)
 	}
-	label := "[ 连接 ]"
+	label := "[ Connect ]"
 	if m.serviceState == "connected" {
-		label = "[ 断开 ]"
+		label = "[ Disconnect ]"
 	}
 	button := good.Render(label)
 	if m.hovered("connect", 0) {
 		button = tab.Render(label)
 	}
-	action := "[ 全部测速 ]"
+	action := "[ Test all ]"
 	speed := muted.Render(action)
 	if m.hovered("testall", 0) {
 		speed = focus.Render(action)
@@ -205,13 +205,13 @@ func (m *model) View() string {
 	m.addHit(x, x+lipgloss.Width(label), 1, "connect", 0)
 	x += lipgloss.Width(label) + 2
 	m.addHit(x, x+lipgloss.Width(action), 1, "testall", 0)
-	path := "入口 " + m.activeNode()
+	path := "Entry " + m.activeNode()
 	if m.cfg.ChainEnabled {
 		path += "  →  SOCKS " + m.exitLabel
 	}
 	b.WriteString(framedLine(" "+muted.Render(path), inner))
 	b.WriteString("└" + strings.Repeat("─", w-2) + "┘\n")
-	// 清晰的 boxed tabs，选中项反色；命中区与字符单元格一致。
+	// Boxed tabs use inverse styling for selection and cell-aligned hit regions.
 	x = 2
 	b.WriteString("  ")
 	for i, name := range tabs {
@@ -234,10 +234,10 @@ func (m *model) View() string {
 	startY := 6
 	if m.page == homePage && m.menuRow >= 0 && m.menuRow < len(m.rows) && m.rows[m.menuRow].item != nil {
 		name := trunc(m.rows[m.menuRow].item.Tag, 20)
-		prefix := "操作 " + name + "  "
+		prefix := "Actions " + name + "  "
 		body.WriteString(prefix)
 		x = 2 + lipgloss.Width(prefix)
-		for _, bt := range []struct{ text, action string }{{"[使用]", "menu-use"}, {"[测速]", "menu-test"}, {"[详情]", "menu-detail"}, {"[返回]", "back"}} {
+		for _, bt := range []struct{ text, action string }{{"[Use]", "menu-use"}, {"[Test]", "menu-test"}, {"[Details]", "menu-detail"}, {"[Back]", "back"}} {
 			text := bt.text + " "
 			body.WriteString(muted.Render(text))
 			m.addHit(x, x+lipgloss.Width(bt.text), startY, bt.action, 0)
@@ -246,18 +246,18 @@ func (m *model) View() string {
 		body.WriteByte('\n')
 		startY++
 	}
-	if m.notice != "" {
+	if m.notice != "" && m.page != aboutPage {
 		body.WriteString(" " + muted.Render(m.notice) + "\n")
 		startY++
 	}
-	if m.serviceState == "unavailable" {
-		body.WriteString(" " + bad.Render("后台未安装；查看 README 的一次性安装步骤") + "\n")
+	if m.page != aboutPage && m.serviceState == "unavailable" {
+		body.WriteString(" " + bad.Render("Supervisor unavailable; see the one-time setup in README") + "\n")
 		startY++
 	}
-	if m.shadowrocket {
-		message := "Shadowrocket VPN 正在接管网络；要用 sakamoto，请先在 Shadowrocket 里断开。"
+	if m.page != aboutPage && m.shadowrocket {
+		message := "Shadowrocket VPN is active. Disconnect it before using sakamoto."
 		if m.serviceState == "connected" {
-			message = "双 TUN 冲突：先断开 sakamoto，再断开 Shadowrocket，然后重新连接 sakamoto。"
+			message = "Two TUNs conflict. Disconnect both VPNs, then reconnect sakamoto."
 		}
 		body.WriteString(" " + bad.Render(message) + "\n")
 		startY++
@@ -276,8 +276,10 @@ func (m *model) View() string {
 		m.renderData(&body, startY)
 	case settingsPage:
 		m.renderSettings(&body, startY)
+	case aboutPage:
+		m.renderAbout(&body, startY)
 	}
-	// 内容点击区域在新布局中统一右移两格（边框 + 内边距）。
+	// Offset content hit regions by the frame and inner padding.
 	visibleBottom := m.height - 2
 	splitPane := m.page == homePage && m.menuRow < 0 && m.detailRow < 0 && w >= 100
 	leftWidth := inner - 38
@@ -316,13 +318,13 @@ func (m *model) View() string {
 		b.WriteString(framedLine(line, inner))
 	}
 	b.WriteString("└" + strings.Repeat("─", w-2) + "┘\n")
-	foot := " 鼠标点击 · 滚轮滚动   Tab 切页   Esc 返回   ? 帮助   q 退出"
+	foot := " Click · Scroll   Tab pages   Esc back   q quit"
 	b.WriteString(ansi.Truncate(muted.Render(foot), w, "…"))
 	return b.String()
 }
 func (m *model) renderHome(b *strings.Builder, startY int) {
 	if len(m.rows) == 0 {
-		b.WriteString(" 暂无节点。请检查订阅，或在 Config 页生成配置。\n")
+		b.WriteString(" No nodes yet. Check subscriptions or regenerate in Config.\n")
 		return
 	}
 	available := max(3, m.height-startY-4)
@@ -330,7 +332,7 @@ func (m *model) renderHome(b *strings.Builder, startY int) {
 		m.scroll = m.cursor
 	}
 	m.scroll = max(0, min(m.scroll, len(m.rows)-1))
-	// 组与组之间留一行；光标滚动计算同时计入这行间距。
+	// Leave one row between groups and include it in scrolling math.
 	lineCount := func(from, to int) int {
 		n := 0
 		for i := from; i <= to && i < len(m.rows); i++ {
@@ -367,22 +369,22 @@ func (m *model) renderHome(b *strings.Builder, startY int) {
 		if lipgloss.Width(name) > 38 {
 			name = trunc(name, 37)
 		}
-		latency := "待测"
+		latency := "Untested"
 		if r.item.UrlTestDelay > 0 {
-			latency = fmt.Sprintf("可达 %dms", r.item.UrlTestDelay)
+			latency = fmt.Sprintf("Reachable %dms", r.item.UrlTestDelay)
 		}
 		if m.lastTest[r.item.Tag] < 0 {
-			latency = "失败/超时"
+			latency = "Failed/timed out"
 		}
 		if m.batch != nil {
 			if v, ok := m.batch.results[r.item.Tag]; ok {
 				if v < 0 {
-					latency = "失败/超时"
+					latency = "Failed/timed out"
 				} else {
-					latency = fmt.Sprintf("可达 %dms", v)
+					latency = fmt.Sprintf("Reachable %dms", v)
 				}
 			} else if _, ok := m.batch.baseline[r.item.Tag]; ok {
-				latency = "测试中…"
+				latency = "Testing…"
 			}
 		}
 		line := fmt.Sprintf(" %s %-38s %-10s %s", marker, name, r.item.Type, latency)
@@ -397,7 +399,7 @@ func (m *model) renderHome(b *strings.Builder, startY int) {
 		m.addHit(0, max(m.width, 80), y, "node", i)
 		y++
 	}
-	fmt.Fprintf(b, "\n %s\n", muted.Render(fmt.Sprintf("节点 %d/%d · ● 仅表示已选中 · 测速可达≠流量已接管 · 滚轮浏览", m.cursor+1, len(m.rows))))
+	fmt.Fprintf(b, "\n %s\n", muted.Render(fmt.Sprintf("Node %d/%d · ● selected, not necessarily reachable · scroll for more", m.cursor+1, len(m.rows))))
 }
 
 func (m *model) renderNodeDetail(b *strings.Builder, startY int) {
@@ -408,13 +410,13 @@ func (m *model) renderNodeDetail(b *strings.Builder, startY int) {
 	r := m.rows[m.detailRow]
 	name := r.item.Tag
 	fmt.Fprintf(b, " %s\n\n", accent.Render(name))
-	fmt.Fprintf(b, " 分组        %s\n 协议        %s\n", r.group.Tag, r.item.Type)
-	delay := "未测试"
+	fmt.Fprintf(b, " Group       %s\n Protocol    %s\n", r.group.Tag, r.item.Type)
+	delay := "Not tested"
 	if r.item.UrlTestDelay > 0 {
 		delay = fmt.Sprintf("%d ms", r.item.UrlTestDelay)
 	}
-	fmt.Fprintf(b, " 延迟        %s\n", delay)
-	// 只显示服务地址，不泄露 UUID/口令。
+	fmt.Fprintf(b, " Latency     %s\n", delay)
+	// Show the server address only; never display UUIDs or passwords.
 	data, _ := os.ReadFile(filepath.Join(filepath.Dir(m.cfgPath), "config.json"))
 	var cfg struct {
 		Outbounds []struct {
@@ -431,13 +433,13 @@ func (m *model) renderNodeDetail(b *strings.Builder, startY int) {
 			}
 		}
 	}
-	fmt.Fprintf(b, " 服务器      %s\n", server)
-	b.WriteString("\n [ 返回 ]")
-	m.addHit(1, lipgloss.Width(" [ 返回 ]")+1, startY+7, "back", 0)
+	fmt.Fprintf(b, " Server      %s\n", server)
+	b.WriteString("\n [ Back ]")
+	m.addHit(1, lipgloss.Width(" [ Back ]")+1, startY+7, "back", 0)
 	b.WriteString("\n")
 }
 
-var configSections = []string{"常规设置", "分流规则", "代理组", "节点与订阅", "DNS", "迁移限制"}
+var configSections = []string{"General", "Routing", "Proxy groups", "Nodes & sources", "DNS", "Import limits"}
 
 func (m *model) sectionDetails(i int) []string {
 	data, _ := os.ReadFile(filepath.Join(filepath.Dir(m.cfgPath), "config.json"))
@@ -463,7 +465,7 @@ func (m *model) sectionDetails(i int) []string {
 		}
 		f, err := os.ReadFile(confPath)
 		if err != nil {
-			return []string{"源配置尚未缓存；请先完成导入或更新"}
+			return []string{"Source config is not cached; import or refresh it first"}
 		}
 		section := ""
 		for _, line := range strings.Split(string(f), "\n") {
@@ -473,15 +475,15 @@ func (m *model) sectionDetails(i int) []string {
 				continue
 			}
 			if section == "[General]" && line != "" && !strings.HasPrefix(line, "#") {
-				// 避免过长的列表淹没界面；完整值可在设置文件中查阅。
+				// Truncate long lists here; the full values remain in the source file.
 				result = append(result, trunc(line, max(25, m.width-5)))
 			}
 		}
 		return result
 	case 1:
-		result := []string{"最终策略：" + c.Route.Final}
+		result := []string{"Final route: " + c.Route.Final}
 		for _, r := range c.Route.RuleSet {
-			result = append(result, "规则集："+r.Tag)
+			result = append(result, "Rule set: "+r.Tag)
 		}
 		return result
 	case 2:
@@ -493,9 +495,9 @@ func (m *model) sectionDetails(i int) []string {
 		}
 		return result
 	case 3:
-		result := []string{"手动节点文件：" + m.cfg.NodesFile}
+		result := []string{"Manual nodes file: " + m.cfg.NodesFile}
 		for _, s := range m.cfg.Subscriptions {
-			result = append(result, "订阅："+s.Name)
+			result = append(result, "Subscription: "+s.Name)
 		}
 		return result
 	case 4:
@@ -505,46 +507,46 @@ func (m *model) sectionDetails(i int) []string {
 		}
 		return result
 	default:
-		return []string{"HTTP URL/Header/Body 重写、MITM 与 Spotify 脚本无 sing-box 等价功能。", "生成配置时会报告这些差异，不会悄悄丢弃。"}
+		return []string{"HTTP rewrites, MITM, and Spotify scripts have no sing-box equivalent.", "Generation reports these differences instead of silently discarding them."}
 	}
 }
 func (m *model) renderConfig(b *strings.Builder, startY int) {
 	if m.importing {
-		title := "导入 Shadowrocket .conf"
-		hint := "自动合并 include 并生成 sing-box 配置"
+		title := "Import Shadowrocket .conf"
+		hint := "Merge includes and generate a sing-box config"
 		switch m.importKind {
 		case "node":
-			title = "添加节点"
-			hint = "粘贴一个分享链接；凭据默认隐藏"
+			title = "Add node"
+			hint = "Paste one share link; credentials stay hidden"
 		case "node-edit":
-			title = "编辑节点"
-			hint = "Ctrl+U 清空后粘贴新链接；Ctrl+R 临时显示"
+			title = "Edit node"
+			hint = "Ctrl+U clears input; Ctrl+R briefly reveals it"
 		case "subscription":
-			title = "添加订阅"
-			hint = "格式：名称|HTTPS URL"
+			title = "Add subscription"
+			hint = "Format: name|HTTPS URL"
 		case "subscription-edit":
-			title = "编辑订阅"
-			hint = "格式：名称|HTTPS URL（Ctrl+R 临时显示）"
+			title = "Edit subscription"
+			hint = "Format: name|HTTPS URL (Ctrl+R reveals it)"
 		}
 		b.WriteString(" " + accent.Render(title) + "\n\n")
 		display := m.input
 		if (m.importKind == "node" || m.importKind == "node-edit") && !m.revealInput {
-			display = fmt.Sprintf("●●●（%d 字符）", len([]rune(m.input)))
+			display = fmt.Sprintf("●●● (%d chars)", len([]rune(m.input)))
 		} else if (m.importKind == "subscription" || m.importKind == "subscription-edit") && !m.revealInput {
 			if name, link, ok := strings.Cut(display, "|"); ok {
-				display = name + "|" + fmt.Sprintf("●●●（%d 字符）", len([]rune(link)))
+				display = name + "|" + fmt.Sprintf("●●● (%d chars)", len([]rune(link)))
 			}
 		} else if u, err := url.Parse(display); err == nil && u.RawQuery != "" {
 			display = strings.SplitN(display, "?", 2)[0] + "?…"
 		}
 		if display == "" {
-			display = "粘贴地址或链接"
+			display = "Paste an address or share link"
 		}
-		b.WriteString(" 内容  " + trunc(display, max(25, m.width-12)) + "▏\n\n")
-		b.WriteString(" " + hint + "\n Enter 确认   Esc 取消\n")
+		b.WriteString(" Input  " + trunc(display, max(25, m.width-12)) + "▏\n\n")
+		b.WriteString(" " + hint + "\n Enter confirm   Esc cancel\n")
 		return
 	}
-	// Shadowrocket 的编译产物更新后，旧明文快照不能伪装成最新 macOS.conf。
+	// An older plaintext snapshot must not masquerade as current compiled rules.
 	if warning := staleShadowrocketSource(m.cfg.ConfPath); warning != "" {
 		b.WriteString(" " + bad.Render(warning) + "\n")
 		startY++
@@ -562,11 +564,11 @@ func (m *model) renderConfig(b *strings.Builder, startY int) {
 			fmt.Fprintf(b, "   %s\n", muted.Render(trunc(items[j], max(25, m.width-5))))
 		}
 		y := startY + 1 + min(available, max(0, len(items)-m.detailScroll)) + 1
-		b.WriteString("\n [ 返回配置 ]\n")
-		m.addHit(1, 1+lipgloss.Width("[ 返回配置 ]"), y, "back", 0)
+		b.WriteString("\n [ Back to Config ]\n")
+		m.addHit(1, 1+lipgloss.Width("[ Back to Config ]"), y, "back", 0)
 		return
 	}
-	b.WriteString(" 配置\n")
+	b.WriteString(" Configuration\n")
 	for i, name := range configSections {
 		y := startY + 1 + i
 		line := "   " + name + "  ›"
@@ -577,16 +579,16 @@ func (m *model) renderConfig(b *strings.Builder, startY int) {
 		m.addHit(0, max(40, m.width), y, "section", i)
 	}
 	y := startY + 1 + len(configSections) + 1
-	b.WriteString("\n 订阅来源\n")
+	b.WriteString("\n Subscription sources\n")
 	y++
 	if len(m.cfg.Subscriptions) == 0 {
-		b.WriteString("   （无订阅；节点保留在 nodes.txt）\n")
+		b.WriteString("   (No subscriptions; nodes.txt remains available)\n")
 		y++
 	} else {
 		for i, s := range m.cfg.Subscriptions {
 			name := s.Name
 			if name == "" {
-				name = "未命名"
+				name = "Unnamed"
 			}
 			line := fmt.Sprintf("   %s  %s", name, redactURL(s.URL))
 			if i == m.sourceCursor {
@@ -599,19 +601,19 @@ func (m *model) renderConfig(b *strings.Builder, startY int) {
 	}
 	b.WriteString("\n")
 	x := 1
-	for _, bt := range []struct{ text, action string }{{"[ 导入配置 ]", "import"}, {"[ 添加订阅 ]", "add-sub"}, {"[ 删除订阅 ]", "delete-sub"}, {"[ 更新生成 ]", "generate"}, {"[ 编辑设置 ]", "edit-config"}} {
+	for _, bt := range []struct{ text, action string }{{"[ Import config ]", "import"}, {"[ Add source ]", "add-sub"}, {"[ Remove source ]", "delete-sub"}, {"[ Regenerate ]", "generate"}, {"[ Edit settings ]", "edit-config"}} {
 		b.WriteString(" " + muted.Render(bt.text))
 		m.addHit(x, x+lipgloss.Width(bt.text), y, bt.action, 0)
 		x += lipgloss.Width(bt.text) + 2
 	}
 }
 func (m *model) renderSources(b *strings.Builder, startY int) {
-	b.WriteString(" " + accent.Render("节点与订阅") + "  [ 返回 ]\n")
-	m.addHit(2+lipgloss.Width("节点与订阅")+2, 2+lipgloss.Width("节点与订阅")+2+lipgloss.Width("[ 返回 ]"), startY, "back", 0)
+	b.WriteString(" " + accent.Render("Nodes & sources") + "  [ Back ]\n")
+	m.addHit(2+lipgloss.Width("Nodes & sources")+2, 2+lipgloss.Width("Nodes & sources")+2+lipgloss.Width("[ Back ]"), startY, "back", 0)
 	y := startY + 1
 	groups := [][]struct{ text, action string }{
-		{{"[ 添加节点 ]", "add-node"}, {"[ 编辑节点 ]", "edit-node"}, {"[ 删除节点 ]", "delete-node"}},
-		{{"[ 添加订阅 ]", "add-sub"}, {"[ 编辑订阅 ]", "edit-sub"}, {"[ 删除订阅 ]", "delete-sub"}},
+		{{"[ Add node ]", "add-node"}, {"[ Edit node ]", "edit-node"}, {"[ Remove node ]", "delete-node"}},
+		{{"[ Add source ]", "add-sub"}, {"[ Edit source ]", "edit-sub"}, {"[ Remove source ]", "delete-sub"}},
 	}
 	for _, buttons := range groups {
 		x := 1
@@ -623,10 +625,10 @@ func (m *model) renderSources(b *strings.Builder, startY int) {
 		b.WriteByte('\n')
 		y++
 	}
-	b.WriteString("\n 订阅\n")
+	b.WriteString("\n Subscriptions\n")
 	y += 2
 	if len(m.cfg.Subscriptions) == 0 {
-		b.WriteString("   无（手动节点仍可用）\n")
+		b.WriteString("   None (manual nodes remain available)\n")
 		y++
 	} else {
 		for i, s := range m.cfg.Subscriptions {
@@ -642,15 +644,15 @@ func (m *model) renderSources(b *strings.Builder, startY int) {
 			y++
 		}
 	}
-	b.WriteString("\n 手动节点（点击后用上方按钮编辑/删除）\n")
+	b.WriteString("\n Manual nodes (select one, then use the buttons above)\n")
 	y += 2
 	entries, err := gen.ReadNodes(m.cfg.NodesFile)
 	if err != nil {
-		b.WriteString("   读取失败：" + err.Error() + "\n")
+		b.WriteString("   Read failed: " + err.Error() + "\n")
 		return
 	}
 	if len(entries) == 0 {
-		b.WriteString("   暂无节点\n")
+		b.WriteString("   No nodes\n")
 		return
 	}
 	available := max(1, m.height-2-y)
@@ -677,7 +679,7 @@ func redactURL(s string) string {
 	if u, err := url.Parse(s); err == nil && u.Host != "" {
 		return u.Scheme + "://" + u.Host + "/…"
 	}
-	return "（本地来源）"
+	return "(local source)"
 }
 func staleShadowrocketSource(confPath string) string {
 	home, _ := os.UserHomeDir()
@@ -689,7 +691,7 @@ func staleShadowrocketSource(confPath string) string {
 		src, err1 := os.Stat(pair[0])
 		active, err2 := os.Stat(pair[1])
 		if err1 == nil && err2 == nil && active.ModTime().After(src.ModTime().Add(time.Minute)) {
-			return "Shadowrocket 配置已更新；请导出 macOS.conf 和 include 的广告规则"
+			return "Shadowrocket rules changed; export macOS.conf and its included ad rules again"
 		}
 	}
 	return ""
@@ -697,24 +699,24 @@ func staleShadowrocketSource(confPath string) string {
 
 func (m *model) renderData(b *strings.Builder, startY int) {
 	if m.status != nil {
-		fmt.Fprintf(b, " ↑ %s（%s/s）    ↓ %s（%s/s）    连接 %d\n", fmtB(m.status.UplinkTotal), fmtB(m.status.Uplink), fmtB(m.status.DownlinkTotal), fmtB(m.status.Downlink), len(m.conns))
+		fmt.Fprintf(b, " ↑ %s (%s/s)    ↓ %s (%s/s)    Connections %d\n", fmtB(m.status.UplinkTotal), fmtB(m.status.Uplink), fmtB(m.status.DownlinkTotal), fmtB(m.status.Downlink), len(m.conns))
 	} else {
-		b.WriteString(" 连接后可查看实时用量和连接。\n")
+		b.WriteString(" Connect to inspect live traffic and connections.\n")
 	}
 	if m.selectedConn != "" {
 		c := m.conns[m.selectedConn]
 		if c == nil {
 			m.selectedConn = ""
 		} else {
-			fmt.Fprintf(b, "\n %s\n 目标：%s\n 来源：%s\n 策略：%s\n 链路：%s\n", accent.Render("连接详情"), c.Destination, c.Source, c.Outbound, strings.Join(c.ChainList, " → "))
-			b.WriteString("\n [ 返回 ]  [ 关闭此连接 ]\n")
-			m.addHit(1, 1+lipgloss.Width("[ 返回 ]"), startY+8, "back", 0)
-			x := 1 + lipgloss.Width("[ 返回 ]  ")
-			m.addHit(x, x+lipgloss.Width("[ 关闭此连接 ]"), startY+8, "close-conn", 0)
+			fmt.Fprintf(b, "\n %s\n Target: %s\n Source: %s\n Outbound: %s\n Chain: %s\n", accent.Render("Connection details"), c.Destination, c.Source, c.Outbound, strings.Join(c.ChainList, " → "))
+			b.WriteString("\n [ Back ]  [ Close connection ]\n")
+			m.addHit(1, 1+lipgloss.Width("[ Back ]"), startY+8, "back", 0)
+			x := 1 + lipgloss.Width("[ Back ]  ")
+			m.addHit(x, x+lipgloss.Width("[ Close connection ]"), startY+8, "close-conn", 0)
 			return
 		}
 	}
-	b.WriteString("\n 最近连接（点击查看详情）\n")
+	b.WriteString("\n Recent connections (select for details)\n")
 	m.dataIDs = m.dataIDs[:0]
 	for id := range m.conns {
 		m.dataIDs = append(m.dataIDs, id)
@@ -734,7 +736,7 @@ func (m *model) renderData(b *strings.Builder, startY int) {
 		b.WriteString(line + "\n")
 		m.addHit(0, max(50, m.width), startY+3+i, "conn", i)
 	}
-	b.WriteString("\n 核心日志\n")
+	b.WriteString("\n Core logs\n")
 	start := max(0, len(m.logs)-min(6, max(2, m.height-startY-maxConn-6)))
 	for _, line := range m.logs[start:] {
 		fmt.Fprintf(b, "   %s\n", muted.Render(trunc(line, max(20, m.width-5))))
@@ -759,9 +761,9 @@ func (m *model) renderSettings(b *strings.Builder, startY int) {
 		}
 		indicator := ""
 		if r.toggle != nil {
-			indicator = " [开关]"
+			indicator = " [toggle]"
 		} else if r.edit != nil {
-			indicator = " [编辑]"
+			indicator = " [edit]"
 		}
 		line := fmt.Sprintf(" %-31s %s%s", r.label, r.value(), indicator)
 		if i == m.cfgCursor || m.hovered("setting", i) {
@@ -773,9 +775,9 @@ func (m *model) renderSettings(b *strings.Builder, startY int) {
 		}
 	}
 	if m.editIndex >= 0 {
-		fmt.Fprintf(b, "\n %s：%s▏\n Enter 保存 · Esc 取消\n", m.editing, m.input)
+		fmt.Fprintf(b, "\n %s: %s▏\n Enter save · Esc cancel\n", m.editing, m.input)
 	} else {
-		b.WriteString("\n 点击或 Enter 修改 · 滚轮浏览 · Config 更新后重连生效\n")
+		b.WriteString("\n Click or Enter to edit · scroll to browse · regenerate and reconnect to apply\n")
 	}
 }
 func fmtB(v int64) string {

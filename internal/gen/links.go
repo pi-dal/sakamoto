@@ -31,8 +31,8 @@ func parseShareLinks(path string) []map[string]any {
 	return parseShareLines(lines)
 }
 
-// parseShareLines 逐行解析分享链接；兼容标准 URI 与 Shadowrocket 导出格式
-// （authority 段为 base64(userinfo@host:port)，tag 用 remarks= 参数，chain= → detour）。
+// parseShareLines accepts standard share URIs and Shadowrocket exports with
+// base64(userinfo@host:port) authorities, remarks= tags, and chain= detours.
 func parseShareLines(lines []string) []map[string]any {
 	var out []map[string]any
 	for _, line := range lines {
@@ -45,25 +45,25 @@ func parseShareLines(lines []string) []map[string]any {
 			continue
 		}
 		sch := strings.ToLower(u.Scheme)
-		// SR 格式：vmess://vless://socks:// 的 host 段整个是 base64；
-		// 重解析会丢 query，先把原始 query/fragment 存下来
+		// Shadowrocket encodes the whole host portion of vmess/vless/socks URLs
+		// as base64; save query and fragment before reparsing the authority.
 		origQ, origFrag := u.RawQuery, u.Fragment
 		if (sch == "vmess" || sch == "vless" || sch == "socks" || sch == "socks5") && u.User == nil && u.Host != "" {
 			if dec, err := b64decode(u.Host); err == nil && strings.Contains(string(dec), "@") {
 				if u2, err := url.Parse(sch + "://" + string(dec)); err == nil {
-					u = u2 // 重解析出 user/host/port
+					u = u2 // Parse user, host, and port from the decoded authority.
 				}
 			}
 		}
 		q, _ := url.ParseQuery(origQ)
 		tag, _ := url.PathUnescape(origFrag)
 		if tag == "" {
-			tag, _ = url.PathUnescape(q.Get("remarks")) // SR 用 remarks= 不用 #fragment
+			tag, _ = url.PathUnescape(q.Get("remarks")) // Shadowrocket uses remarks= instead of the fragment.
 		}
 		if tag == "" {
 			tag = u.Hostname()
 		}
-		chain := strings.ToUpper(q.Get("chain")) // SR 链式参数
+		chain := strings.ToUpper(q.Get("chain")) // Shadowrocket chain parameter.
 		if u.User == nil && sch != "vmess" && sch != "sub" {
 			continue
 		}
@@ -85,8 +85,8 @@ func parseShareLines(lines []string) []map[string]any {
 				node["tls"].(map[string]any)["server_name"] = sni
 			}
 		case "vless":
-			// 标准 VLESS 为 uuid@host；Shadowrocket 导出的是 method:uuid@host
-			// （method 常为 none）。只要有 password 段，它才是真正的凭据。
+			// Standard VLESS uses uuid@host; Shadowrocket exports method:uuid@host.
+			// Treat the password field as the actual credential when present.
 			uuid := u.User.Username()
 			if password, ok := u.User.Password(); ok && password != "" {
 				uuid = password
@@ -117,7 +117,7 @@ func parseShareLines(lines []string) []map[string]any {
 				"server": u.Hostname(), "server_port": atoi(u.Port(), 443), "password": pw,
 				"tls": map[string]any{"enabled": true, "server_name": orEmpty(q.Get("sni"), u.Hostname())}}
 		case "vmess":
-			// 先试标准 JSON 格式，失败退 SR base64(user:uuid@host:port)
+			// Try standard JSON first, then the Shadowrocket base64 authority.
 			var m map[string]any
 			if dec, err := b64decode(strings.TrimPrefix(line, "vmess://")); err == nil && json.Unmarshal(dec, &m) == nil && str(m, "add") != "" {
 				node = map[string]any{"type": "vmess", "tag": orEmpty(str(m, "ps"), str(m, "add")),
@@ -161,12 +161,12 @@ func parseShareLines(lines []string) []map[string]any {
 				"server": u.Hostname(), "server_port": atoi(u.Port(), 1080), "version": "5",
 				"username": u.User.Username(), "password": pw}
 		case "sub":
-			// 嵌套订阅链接：解出来提示，订阅本体走 sakamoto.yaml subscriptions
+			// Report nested subscription links; configure them in sakamoto.yaml.
 			if dec, err := b64decode(u.Host); err == nil {
-				reportf("  · sub:// 嵌套订阅: %s\n", string(dec))
+				reportf("  · nested sub:// subscription: %s\n", string(dec))
 			}
 		}
-		// SR obfs= 参数 = transport（websocket/grpc）
+		// Shadowrocket obfs= selects websocket or gRPC transport.
 		if node != nil && node["type"] != "hysteria2" && node["type"] != "tuic" {
 			switch q.Get("obfs") {
 			case "websocket", "ws":
@@ -183,14 +183,14 @@ func parseShareLines(lines []string) []map[string]any {
 			continue
 		}
 		if chain != "" {
-			node["_chain"] = chain // 后置解析成 detour
+			node["_chain"] = chain // Resolve the detour after parsing all nodes.
 		}
 		out = append(out, node)
 	}
 	return out
 }
 
-// b64decode 兼容 std / raw / urlsafe。
+// b64decode accepts standard, unpadded, and URL-safe base64.
 func b64decode(s string) ([]byte, error) {
 	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding,
 		base64.URLEncoding, base64.RawURLEncoding} {
@@ -201,7 +201,7 @@ func b64decode(s string) ([]byte, error) {
 	return nil, fmt.Errorf("bad base64")
 }
 
-// cleanKey 处理 SR 双重 URL 编码及混入空白（pbk/sid）。
+// cleanKey handles doubly URL-encoded keys and stray whitespace.
 func cleanKey(s string) string {
 	if v, err := url.PathUnescape(s); err == nil {
 		s = v
@@ -212,24 +212,24 @@ func cleanKey(s string) string {
 	return strings.Join(strings.Fields(s), "")
 }
 
-// ---------------- 订阅拉取 ----------------
+// ---------------- Subscription fetching ----------------
 
-// fetchSub 拉取订阅并自动识别格式：sing-box JSON / Clash YAML / base64 分享链接。
+// fetchSub detects sing-box JSON, Clash YAML, or base64 share-link feeds.
 func fetchSub(src config.SubSource, hc *http.Client) ([]map[string]any, error) {
 	resp, err := hc.Get(src.URL)
 	if err != nil {
-		return nil, fmt.Errorf("订阅 %s 拉取失败: %s", src.Name, errString(err))
+		return nil, fmt.Errorf("subscription %s fetch failed: %s", src.Name, errString(err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("订阅 %s: HTTP %d", src.Name, resp.StatusCode)
+		return nil, fmt.Errorf("subscription %s: HTTP %d", src.Name, resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxConfBytes+1))
 	if err != nil {
-		return nil, fmt.Errorf("订阅 %s 读取失败: %w", src.Name, err)
+		return nil, fmt.Errorf("subscription %s read failed: %w", src.Name, err)
 	}
 	if len(body) > maxConfBytes {
-		return nil, fmt.Errorf("订阅 %s 超过大小限制", src.Name)
+		return nil, fmt.Errorf("subscription %s exceeds the size limit", src.Name)
 	}
 	txt := strings.TrimSpace(string(body))
 	format := src.Format
@@ -250,10 +250,10 @@ func fetchSub(src config.SubSource, hc *http.Client) ([]map[string]any, error) {
 			Outbounds []map[string]any `json:"outbounds"`
 		}
 		if err := json.Unmarshal(body, &cfg); err != nil {
-			return nil, fmt.Errorf("订阅 %s JSON 无法解析: %w", src.Name, err)
+			return nil, fmt.Errorf("subscription %s JSON parse failed: %w", src.Name, err)
 		}
 		for _, o := range cfg.Outbounds {
-			switch o["type"] { // 只收叶子协议节点
+			switch o["type"] { // Keep only leaf protocol nodes.
 			case "selector", "urltest", "direct", "block", "dns", "", nil:
 			default:
 				nodes = append(nodes, o)
@@ -264,27 +264,27 @@ func fetchSub(src config.SubSource, hc *http.Client) ([]map[string]any, error) {
 			Proxies []map[string]any `yaml:"proxies"`
 		}
 		if err := yaml.Unmarshal(body, &c); err != nil {
-			return nil, fmt.Errorf("订阅 %s YAML 无法解析: %w", src.Name, err)
+			return nil, fmt.Errorf("subscription %s YAML parse failed: %w", src.Name, err)
 		}
 		for _, p := range c.Proxies {
 			if n := clashToOutbound(p); n != nil {
 				nodes = append(nodes, n)
 			}
 		}
-	default: // base64 分享链接
+	default: // Base64 share links.
 		if dec, err := base64.StdEncoding.DecodeString(txt); err == nil {
 			txt = string(dec)
 		}
 		nodes = parseShareLines(strings.Split(txt, "\n"))
 	}
 	if len(nodes) == 0 {
-		return nil, fmt.Errorf("订阅 %s 未解析到支持的节点（%s）", src.Name, format)
+		return nil, fmt.Errorf("subscription %s contains no supported nodes (%s)", src.Name, format)
 	}
-	reportf("  订阅 %s: %d 节点 (%s)\n", src.Name, len(nodes), format)
+	reportf("  subscription %s: %d nodes (%s)\n", src.Name, len(nodes), format)
 	return nodes, nil
 }
 
-// clashToOutbound 把 Clash/mihomo proxy 条目转成 sing-box outbound。
+// clashToOutbound converts Clash/mihomo proxy entries into sing-box outbounds.
 func clashToOutbound(p map[string]any) map[string]any {
 	name, _ := p["name"].(string)
 	server, _ := p["server"].(string)

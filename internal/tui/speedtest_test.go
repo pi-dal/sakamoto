@@ -35,7 +35,7 @@ func TestAllSpeedtestsDeduplicateLeafNodes(t *testing.T) {
 	if !batch.done() || batch.results["vision-jp"] != 120 || batch.results["anytls-us"] != -1 {
 		t.Fatal(batch.message())
 	}
-	if !strings.Contains(batch.message(), "成功 2") || !strings.Contains(batch.message(), "失败/超时 3") {
+	if !strings.Contains(batch.message(), "2 passed") || !strings.Contains(batch.message(), "3 failed/timed out") {
 		t.Fatal(batch.message())
 	}
 }

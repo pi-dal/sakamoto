@@ -19,7 +19,7 @@ import (
 func (m *model) scrollBy(n int) {
 	if m.page == homePage {
 		m.scroll = max(0, min(max(0, len(m.rows)-1), m.scroll+n))
-		// 保持光标在滚动窗口中，避免 View 将列表弹回原位置。
+		// Keep the cursor in the scrolled viewport rather than snapping back.
 		for i := m.scroll; i < len(m.rows); i++ {
 			if m.rows[i].item != nil {
 				m.cursor = i
@@ -30,6 +30,9 @@ func (m *model) scrollBy(n int) {
 	if m.page == settingsPage {
 		m.settingsScroll = max(0, min(max(0, len(m.cfgRows)-1), m.settingsScroll+n))
 		m.cfgCursor = min(len(m.cfgRows)-1, m.settingsScroll)
+	}
+	if m.page == aboutPage {
+		m.aboutScroll = max(0, m.aboutScroll+n)
 	}
 	if m.page == configPage && m.configDetail >= 0 {
 		m.detailScroll = max(0, m.detailScroll+n)
@@ -43,6 +46,11 @@ func (m *model) click(x, y int) tea.Cmd {
 		switch h.action {
 		case "tab":
 			m.page = h.index
+			m.aboutCopyright, m.aboutScroll = false, 0
+		case "about-copyright":
+			m.aboutCopyright, m.aboutScroll = true, 0
+		case "about-back":
+			m.aboutCopyright, m.aboutScroll = false, 0
 		case "connect":
 			return m.toggleConnection()
 		case "testall":
@@ -82,7 +90,7 @@ func (m *model) click(x, y int) tea.Cmd {
 			m.importKind = "node"
 			m.input = ""
 			m.revealInput = false
-			m.notice = "粘贴节点分享链接（输入已隐藏）"
+			m.notice = "Paste a node share link (input hidden)"
 		case "edit-node":
 			m.beginNodeEdit()
 		case "delete-node":
@@ -93,7 +101,7 @@ func (m *model) click(x, y int) tea.Cmd {
 			m.importing = true
 			m.importKind = "subscription"
 			m.input = ""
-			m.notice = "输入订阅：名称|URL"
+			m.notice = "Enter a subscription: name|URL"
 		case "delete-sub":
 			return m.deleteSelectedSource()
 		case "generate":
@@ -102,7 +110,7 @@ func (m *model) click(x, y int) tea.Cmd {
 			m.importing = true
 			m.importKind = "conf"
 			m.input = ""
-			m.notice = "输入 Shadowrocket .conf 的 HTTPS 地址或本地路径"
+			m.notice = "Enter a Shadowrocket .conf HTTPS URL or local path"
 		case "edit-config":
 			return m.editConfig()
 		case "conn":
@@ -162,7 +170,7 @@ func (m *model) handleImportInput(k tea.KeyMsg) tea.Cmd {
 		m.importing = false
 		m.importKind = ""
 		m.input = ""
-		m.notice = "已取消输入"
+		m.notice = "Input canceled"
 		return nil
 	case "ctrl+u":
 		m.input = ""
@@ -176,49 +184,49 @@ func (m *model) handleImportInput(k tea.KeyMsg) tea.Cmd {
 		source := strings.TrimSpace(m.input)
 		if m.importKind == "node-edit" {
 			if err := gen.ChangeNode(m.cfg.NodesFile, m.editNode.Line, m.editNode.Raw, source); err != nil {
-				m.notice = "编辑失败：" + err.Error()
+				m.notice = "Edit failed: " + err.Error()
 				return nil
 			}
 			m.importing = false
 			m.importKind = ""
 			m.input = ""
-			m.notice = "节点已编辑；在 Config 点击更新生成后重连生效"
+			m.notice = "Node updated; regenerate in Config and reconnect to apply"
 			return nil
 		}
 		if m.importKind == "node" {
 			if source == "" {
-				m.notice = "节点链接不能为空"
+				m.notice = "Node share link cannot be empty"
 				return nil
 			}
 			if err := gen.ChangeNode(m.cfg.NodesFile, 0, "", source); err != nil {
-				m.notice = "保存节点失败：" + err.Error()
+				m.notice = "Could not save node: " + err.Error()
 				return nil
 			}
 			m.importing = false
 			m.importKind = ""
 			m.input = ""
-			m.notice = "节点已添加；按 g 重新生成配置"
+			m.notice = "Node added; press g to regenerate config"
 			return nil
 		}
 		if m.importKind == "subscription" || m.importKind == "subscription-edit" {
 			parts := strings.SplitN(source, "|", 2)
 			if len(parts) != 2 {
-				m.notice = "格式：名称|订阅 URL"
+				m.notice = "Format: name|subscription URL"
 				return nil
 			}
 			if err := gen.ValidSource(strings.TrimSpace(parts[1])); err != nil || !strings.HasPrefix(strings.TrimSpace(parts[1]), "http") {
-				m.notice = "订阅必须是 HTTP(S) URL"
+				m.notice = "Subscription must be an HTTP(S) URL"
 				return nil
 			}
 			if strings.TrimSpace(parts[0]) == "" {
-				m.notice = "订阅名称不能为空"
+				m.notice = "Subscription name cannot be empty"
 				return nil
 			}
 			old := append([]config.SubSource(nil), m.cfg.Subscriptions...)
 			entry := config.SubSource{Name: strings.TrimSpace(parts[0]), URL: strings.TrimSpace(parts[1])}
 			if m.importKind == "subscription-edit" {
 				if m.sourceCursor < 0 || m.sourceCursor >= len(m.cfg.Subscriptions) {
-					m.notice = "订阅不存在"
+					m.notice = "Subscription not found"
 					return nil
 				}
 				m.cfg.Subscriptions[m.sourceCursor] = entry
@@ -227,13 +235,13 @@ func (m *model) handleImportInput(k tea.KeyMsg) tea.Cmd {
 			}
 			if err := m.cfg.Save(m.cfgPath); err != nil {
 				m.cfg.Subscriptions = old
-				m.notice = "保存订阅失败：" + err.Error()
+				m.notice = "Could not save subscription: " + err.Error()
 				return nil
 			}
 			m.importing = false
 			m.importKind = ""
 			m.input = ""
-			m.notice = "订阅已添加；按 g 生成节点"
+			m.notice = "Subscription added; press g to generate nodes"
 			return nil
 		}
 		if strings.HasPrefix(source, "~/") {
@@ -245,7 +253,7 @@ func (m *model) handleImportInput(k tea.KeyMsg) tea.Cmd {
 			return nil
 		}
 		m.importBusy = true
-		m.notice = "正在拉取主配置和 include 文件…"
+		m.notice = "Fetching the main config and included files…"
 		path := m.cfgPath
 		return func() tea.Msg { return importMsg{source: source, err: importSource(path, source)} }
 	case "backspace":
@@ -273,11 +281,11 @@ func splitNonEmpty(s, sep string) []string {
 func (m *model) beginNodeEdit() {
 	entries, err := gen.ReadNodes(m.cfg.NodesFile)
 	if err != nil {
-		m.notice = "读取节点失败：" + err.Error()
+		m.notice = "Could not read nodes: " + err.Error()
 		return
 	}
 	if m.nodeCursor >= len(entries) {
-		m.notice = "请先选择节点"
+		m.notice = "Select a node first"
 		return
 	}
 	m.editNode = entries[m.nodeCursor]
@@ -285,7 +293,7 @@ func (m *model) beginNodeEdit() {
 	m.importKind = "node-edit"
 	m.input = m.editNode.Raw
 	m.revealInput = false
-	m.notice = "替换节点链接（默认隐藏；Ctrl+U 清空，Ctrl+R 显示）"
+	m.notice = "Replace node link (hidden by default; Ctrl+U clears, Ctrl+R reveals)"
 }
 func (m *model) deleteSelectedNode() tea.Cmd {
 	entries, err := gen.ReadNodes(m.cfg.NodesFile)
@@ -294,21 +302,21 @@ func (m *model) deleteSelectedNode() tea.Cmd {
 		return nil
 	}
 	if m.nodeCursor >= len(entries) {
-		m.notice = "请先选择节点"
+		m.notice = "Select a node first"
 		return nil
 	}
 	e := entries[m.nodeCursor]
 	key := fmt.Sprintf("node:%d:%s", e.Line, e.Raw)
 	if m.pendingDelete != key {
 		m.pendingDelete = key
-		m.notice = "再次点击删除，确认移除节点：" + e.Tag
+		m.notice = "Click Remove again to confirm node deletion: " + e.Tag
 		return nil
 	}
 	m.pendingDelete = ""
 	if err := gen.ChangeNode(m.cfg.NodesFile, e.Line, e.Raw, ""); err != nil {
 		m.notice = err.Error()
 	} else {
-		m.notice = "已删除节点 " + e.Tag + "；更新生成后重连生效"
+		m.notice = "Removed node " + e.Tag + "; regenerate and reconnect to apply"
 		if m.nodeCursor > 0 {
 			m.nodeCursor--
 		}
@@ -317,25 +325,25 @@ func (m *model) deleteSelectedNode() tea.Cmd {
 }
 func (m *model) beginSubscriptionEdit() {
 	if m.sourceCursor >= len(m.cfg.Subscriptions) {
-		m.notice = "请先选择订阅"
+		m.notice = "Select a subscription first"
 		return
 	}
 	s := m.cfg.Subscriptions[m.sourceCursor]
 	m.importing = true
 	m.importKind = "subscription-edit"
 	m.input = s.Name + "|" + s.URL
-	m.notice = "修改订阅（名称|URL，链接可能包含敏感凭据）"
+	m.notice = "Edit subscription (name|URL; URLs may contain credentials)"
 }
 func (m *model) deleteSelectedSource() tea.Cmd {
 	if m.sourceCursor >= len(m.cfg.Subscriptions) {
-		m.notice = "请先选择订阅"
+		m.notice = "Select a subscription first"
 		return nil
 	}
 	s := m.cfg.Subscriptions[m.sourceCursor]
 	key := "subscription:" + s.Name + ":" + s.URL
 	if m.pendingDelete != key {
 		m.pendingDelete = key
-		m.notice = "再次点击删除，确认移除订阅：" + s.Name
+		m.notice = "Click Remove again to confirm subscription deletion: " + s.Name
 		return nil
 	}
 	m.pendingDelete = ""
@@ -343,9 +351,9 @@ func (m *model) deleteSelectedSource() tea.Cmd {
 	m.cfg.Subscriptions = append(m.cfg.Subscriptions[:m.sourceCursor], m.cfg.Subscriptions[m.sourceCursor+1:]...)
 	if err := m.cfg.Save(m.cfgPath); err != nil {
 		m.cfg.Subscriptions = old
-		m.notice = "删除失败：" + err.Error()
+		m.notice = "Delete failed: " + err.Error()
 	} else {
-		m.notice = "已删除订阅 " + s.Name + "；更新生成后生效"
+		m.notice = "Removed subscription " + s.Name + "; regenerate to apply"
 		if m.sourceCursor > 0 {
 			m.sourceCursor--
 		}
@@ -369,10 +377,10 @@ func (m *model) handleInput(k tea.KeyMsg) tea.Cmd {
 		}
 		if err := m.cfg.Save(m.cfgPath); err != nil {
 			_ = r.edit(old)
-			m.notice = "保存失败：" + err.Error()
+			m.notice = "Save failed: " + err.Error()
 			return nil
 		}
-		m.notice = "已保存；在 Config 更新配置并重新连接后生效"
+		m.notice = "Saved; regenerate in Config and reconnect to apply"
 		m.editIndex = -1
 		m.editing = ""
 		m.input = ""
@@ -395,7 +403,7 @@ func (m *model) closeSelectedConnection() tea.Cmd {
 	c, id := m.conn, m.selectedConn
 	return func() tea.Msg {
 		err := c.CloseConnection(context.Background(), id)
-		return actionMsg{text: "连接已关闭", err: err}
+		return actionMsg{text: "Connection closed", err: err}
 	}
 }
 
@@ -406,10 +414,10 @@ func (m *model) toggleConnection() tea.Cmd {
 	}
 	if cmd == "connect" && (m.shadowrocket || shadowrocketVPNConnected()) {
 		m.shadowrocket = true
-		m.notice = "Shadowrocket VPN 仍已连接：先在 Shadowrocket 里断开，再点击连接"
+		m.notice = "Shadowrocket VPN is still connected; disconnect it before clicking Connect"
 		return nil
 	}
-	m.notice = "正在" + map[string]string{"connect": "连接…", "disconnect": "断开…"}[cmd]
+	m.notice = map[string]string{"connect": "Connecting…", "disconnect": "Disconnecting…"}[cmd]
 	path := m.cfgPath
 	return func() tea.Msg {
 		if cmd == "connect" {
@@ -429,17 +437,17 @@ func (m *model) selectCurrent() tea.Cmd {
 		return nil
 	}
 	if m.conn == nil {
-		m.notice = "先连接，再选择节点"
+		m.notice = "Connect before selecting a node"
 		return nil
 	}
 	c, g, t := m.conn, r.group.Tag, r.item.Tag
 	if r.group.Selectable {
 		return func() tea.Msg {
 			err := c.SelectOutbound(context.Background(), g, t)
-			return actionMsg{text: "已选择 " + t, err: err}
+			return actionMsg{text: "Selected " + t, err: err}
 		}
 	}
-	// 自动组内节点也能点：先在 ManualPick 选节点，再将 MainProxy 切到手动组。
+	// Select an auto-group leaf via ManualPick before switching MainProxy.
 	available := false
 	for _, group := range m.groups {
 		if group.Tag == "ManualPick" {
@@ -451,7 +459,7 @@ func (m *model) selectCurrent() tea.Cmd {
 		}
 	}
 	if !available {
-		m.notice = "此节点不在手动选择组中"
+		m.notice = "This node is unavailable in ManualPick"
 		return nil
 	}
 	return func() tea.Msg {
@@ -459,7 +467,7 @@ func (m *model) selectCurrent() tea.Cmd {
 			return actionMsg{err: err}
 		}
 		err := c.SelectOutbound(context.Background(), "MainProxy", "ManualPick")
-		return actionMsg{text: "已手动选择 " + t, err: err}
+		return actionMsg{text: "Manually selected " + t, err: err}
 	}
 }
 func (m *model) testCurrent() tea.Cmd {
@@ -473,7 +481,7 @@ func (m *model) testCurrent() tea.Cmd {
 	c, t := m.conn, r.item.Tag
 	return func() tea.Msg {
 		err := c.URLTest(context.Background(), t)
-		return actionMsg{text: "测速中：" + t, err: err}
+		return actionMsg{text: "Testing latency: " + t, err: err}
 	}
 }
 func (m *model) refreshTestProgress() {
@@ -491,16 +499,16 @@ func (m *model) refreshTestProgress() {
 }
 func (m *model) testAll() tea.Cmd {
 	if m.conn == nil {
-		m.notice = "先连接，再测速"
+		m.notice = "Connect before testing latency"
 		return nil
 	}
 	if m.batch != nil {
-		m.notice = "测速进行中：" + m.batch.message()
+		m.notice = "Testing: " + m.batch.message()
 		return nil
 	}
 	batch := newTestBatch(m.groups, time.Now())
 	if len(batch.tags) == 0 {
-		m.notice = "没有可测速的代理节点"
+		m.notice = "No proxy nodes available for testing"
 		return nil
 	}
 	m.batch = batch
@@ -515,7 +523,7 @@ func (m *model) testAll() tea.Cmd {
 			if err != nil {
 				errors[tag] = err
 			}
-			time.Sleep(40 * time.Millisecond) // 避免同时冲击所有节点/测试站
+			time.Sleep(40 * time.Millisecond) // Avoid hitting every node and test URL simultaneously.
 		}
 		return testDispatchMsg{batch: batch, errors: errors}
 	}
@@ -531,7 +539,7 @@ func (m *model) cycleMode() tea.Cmd {
 	c := m.conn
 	return func() tea.Msg {
 		err := c.SetClashMode(context.Background(), next)
-		return actionMsg{text: "模式：" + next, err: err}
+		return actionMsg{text: "Mode: " + next, err: err}
 	}
 }
 func (m *model) toggleSetting(i int) tea.Cmd {
@@ -539,29 +547,29 @@ func (m *model) toggleSetting(i int) tea.Cmd {
 		return nil
 	}
 	r := m.cfgRows[i]
-	if r.label == "iCloud 同步节点源" && !m.cfg.ICloud.Enabled && m.pendingDelete != "icloud:confirm" {
+	if r.label == "Sync node sources to iCloud" && !m.cfg.ICloud.Enabled && m.pendingDelete != "icloud:confirm" {
 		m.pendingDelete = "icloud:confirm"
-		m.notice = "再次点击确认：将所选源文件（可能含节点密码）上传到 iCloud Drive"
+		m.notice = "Click again to confirm uploading selected sources (possibly including node passwords) to iCloud Drive"
 		return nil
 	}
 	m.pendingDelete = ""
 	r.toggle()
 	if err := m.cfg.Save(m.cfgPath); err != nil {
 		r.toggle()
-		m.notice = "保存失败：" + err.Error()
+		m.notice = "Save failed: " + err.Error()
 		return nil
 	}
-	m.notice = "已保存 · 重新生成配置后，下次连接生效"
+	m.notice = "Saved · regenerate to apply on the next connection"
 	return nil
 }
 func (m *model) generate() tea.Cmd {
-	m.notice = "正在更新订阅并生成配置…"
+	m.notice = "Refreshing subscriptions and generating config…"
 	path := m.cfgPath
 	return func() tea.Msg {
 		if err := regenerate(path); err != nil {
 			return actionMsg{err: err}
 		}
-		return actionMsg{text: "配置已验证并生成；断开再连接以应用"}
+		return actionMsg{text: "Config validated and generated; disconnect and reconnect to apply"}
 	}
 }
 func (m *model) editConfig() tea.Cmd {
@@ -570,5 +578,5 @@ func (m *model) editConfig() tea.Cmd {
 		editor = "vi"
 	}
 	cmd := exec.Command(editor, m.cfgPath)
-	return tea.ExecProcess(cmd, func(err error) tea.Msg { return actionMsg{text: "配置文件已关闭；按 g 生成", err: err} })
+	return tea.ExecProcess(cmd, func(err error) tea.Msg { return actionMsg{text: "Config editor closed; press g to generate", err: err} })
 }

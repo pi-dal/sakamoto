@@ -10,11 +10,11 @@ import (
 	"time"
 )
 
-// Send 向 svc socket 发送单条命令并返回响应。
+// Send sends one command to the supervisor socket and returns its reply.
 func Send(cmd string) (string, error) {
 	conn, err := net.DialTimeout("unix", SockPath(), 3*time.Second)
 	if err != nil {
-		return "", fmt.Errorf("svc 未运行（先用 sudo 起 LaunchDaemon）: %w", err)
+		return "", fmt.Errorf("supervisor is not running (start its LaunchDaemon first): %w", err)
 	}
 	defer func() { _ = conn.Close() }()
 	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {

@@ -1,4 +1,4 @@
-// Package gen — Shadowrocket conf/节点 → sing-box 1.14 配置生成器（sr2sb 的 Go 版）。
+// Package gen converts Shadowrocket conf rules and share links to sing-box 1.14.
 package gen
 
 import (
@@ -15,19 +15,19 @@ import (
 	"sync"
 )
 
-// ---------------- SR conf 解析 ----------------
+// ---------------- Shadowrocket conf parser ----------------
 
 type buckets map[string]map[string]map[string]bool // target → ruletype → items
 
 var ruleTypes = map[string]string{
 	"DOMAIN": "domain", "DOMAIN-SUFFIX": "domain_suffix",
 	"DOMAIN-KEYWORD": "domain_keyword", "IP-CIDR": "ip_cidr", "IP-CIDR6": "ip_cidr",
-	"IP-ASN": "", // 无等价物，跳过
+	"IP-ASN": "", // No equivalent rule; skip.
 }
 
-var commentRe = regexp.MustCompile(`\s//`) // 只剥 "\s//" 注释，不破坏 https://
+var commentRe = regexp.MustCompile(`\s//`) // Strip only whitespace-prefixed comments; preserve https:// URLs.
 
-const maxConfBytes = 16 << 20 // 允许大型广告规则，但拒绝意外的无限响应
+const maxConfBytes = 16 << 20 // Allow large ad lists, but reject unbounded responses.
 var reportMu sync.Mutex
 var reportOutput io.Writer = os.Stdout
 
@@ -37,17 +37,17 @@ func reportf(format string, args ...any) { _, _ = fmt.Fprintf(reportOutput, form
 func ValidSource(source string) error {
 	source = strings.TrimSpace(source)
 	if source == "" {
-		return fmt.Errorf("请输入 Shadowrocket .conf 地址或本地路径")
+		return fmt.Errorf("provide a Shadowrocket .conf URL or local path")
 	}
 	u, err := url.Parse(source)
 	if err != nil {
 		return err
 	}
 	if strings.Contains(source, "://") && u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("只支持 HTTP(S) 地址或本地路径")
+		return fmt.Errorf("only HTTP(S) URLs or local paths are supported")
 	}
 	if (u.Scheme == "http" || u.Scheme == "https") && u.Host == "" {
-		return fmt.Errorf("URL 缺少主机名")
+		return fmt.Errorf("URL is missing a host")
 	}
 	return nil
 }
@@ -103,11 +103,11 @@ func readConfSource(source string, hc *http.Client) ([]byte, error) {
 	if isRemote(source) {
 		resp, err := hc.Get(source)
 		if err != nil {
-			return nil, fmt.Errorf("拉取 %s: %s", displaySource(source), errString(err))
+			return nil, fmt.Errorf("fetch %s: %s", displaySource(source), errString(err))
 		}
 		if resp.StatusCode != http.StatusOK {
 			_ = resp.Body.Close()
-			return nil, fmt.Errorf("拉取 %s: HTTP %d", displaySource(source), resp.StatusCode)
+			return nil, fmt.Errorf("fetch %s: HTTP %d", displaySource(source), resp.StatusCode)
 		}
 		reader = resp.Body
 	} else {
@@ -123,11 +123,11 @@ func readConfSource(source string, hc *http.Client) ([]byte, error) {
 		return nil, err
 	}
 	if len(body) > maxConfBytes {
-		return nil, fmt.Errorf("配置超过 %d MiB 上限", maxConfBytes>>20)
+		return nil, fmt.Errorf("configuration exceeds the %d MiB limit", maxConfBytes>>20)
 	}
 	body = []byte(strings.TrimPrefix(string(body), "\ufeff"))
 	if !strings.Contains(string(body), "[General]") && !strings.Contains(string(body), "[Rule]") {
-		return nil, fmt.Errorf("%s 不是 Shadowrocket conf（缺少 [General]/[Rule]）", displaySource(source))
+		return nil, fmt.Errorf("%s is not a Shadowrocket conf (missing [General]/[Rule])", displaySource(source))
 	}
 	return body, nil
 }
@@ -137,7 +137,7 @@ func normTarget(t string) string {
 	case "REJECT", "REJECT-DROP", "REJECT-NO-DROP":
 		return "reject"
 	case "DIRECT", "TAILSCALE":
-		return "direct" // TAILSCALE：桌面端 Tailscale 自己接管，不代进代理
+		return "direct" // Let the desktop Tailscale client handle its own traffic.
 	default:
 		return "proxy"
 	}
@@ -151,11 +151,11 @@ type parsedConf struct {
 	errors  []error
 	geoip   [][2]string // (cc, target)
 	final   string
-	// 不支持、仅收集用于报告的段
+	// Unsupported sections retained only for the migration report.
 	rewrites []string // [URL Rewrite]
 	mitm     []string // [MITM]
-	proxies  []string // [Proxy]（节点不走这里，仅报告）
-	pgroups  []string // [Proxy Group]（组架构已由 sakamoto 接管）
+	proxies  []string // [Proxy] entries reported but not imported as nodes.
+	pgroups  []string // [Proxy Group] entries replaced by sakamoto groups.
 	scripts  []string // [Script]/[Host]
 }
 
@@ -199,12 +199,12 @@ func (p *parsedConf) add(line, defaultTarget string, hc *http.Client) {
 
 func (p *parsedConf) fetchList(source, target string, hc *http.Client) {
 	if !isRemote(source) {
-		p.errors = append(p.errors, fmt.Errorf("RULE-SET 需要 HTTP(S) 地址: %s", displaySource(source)))
+		p.errors = append(p.errors, fmt.Errorf("RULE-SET requires an HTTP(S) URL: %s", displaySource(source)))
 		return
 	}
 	resp, err := hc.Get(source)
 	if err != nil {
-		p.errors = append(p.errors, fmt.Errorf("拉取 RULE-SET %s: %v", displaySource(source), errString(err)))
+		p.errors = append(p.errors, fmt.Errorf("fetch RULE-SET %s: %v", displaySource(source), errString(err)))
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -214,7 +214,7 @@ func (p *parsedConf) fetchList(source, target string, hc *http.Client) {
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxConfBytes+1))
 	if err != nil || len(body) > maxConfBytes {
-		p.errors = append(p.errors, fmt.Errorf("RULE-SET %s 读取失败或超过大小限制: %v", displaySource(source), errString(err)))
+		p.errors = append(p.errors, fmt.Errorf("RULE-SET %s could not be read or exceeded the size limit: %v", displaySource(source), errString(err)))
 		return
 	}
 	n0 := p.count()
@@ -226,7 +226,7 @@ func (p *parsedConf) fetchList(source, target string, hc *http.Client) {
 		p.errors = append(p.errors, fmt.Errorf("RULE-SET %s: %v", displaySource(source), errString(err)))
 		return
 	}
-	reportf("  + RULE-SET %s: %d 条\n", filepath.Base(source), p.count()-n0)
+	reportf("  + RULE-SET %s: %d entries\n", filepath.Base(source), p.count()-n0)
 }
 
 func (p *parsedConf) count() int {
@@ -263,7 +263,7 @@ func joinUniqueCSV(primary, inherited string) string {
 
 func parseConfRec(path string, hc *http.Client, seen map[string]bool) (*parsedConf, error) {
 	if len(seen) >= 8 {
-		return nil, fmt.Errorf("配置 include 超过 8 层，已停止递归")
+		return nil, fmt.Errorf("configuration include depth exceeds 8 levels")
 	}
 	if !isRemote(path) {
 		var err error
@@ -273,7 +273,7 @@ func parseConfRec(path string, hc *http.Client, seen map[string]bool) (*parsedCo
 		}
 	}
 	if seen[path] {
-		return nil, fmt.Errorf("配置 include 循环: %s", path)
+		return nil, fmt.Errorf("configuration include cycle: %s", path)
 	}
 	seen[path] = true
 	defer delete(seen, path)
@@ -341,15 +341,15 @@ func parseConfRec(path string, hc *http.Client, seen map[string]bool) (*parsedCo
 	if len(p.errors) > 0 {
 		return nil, p.errors[0]
 	}
-	// include 递归：URL 源按地址解析相对路径，本地源按文件目录解析。
+	// Resolve relative includes against their URL or local parent directory.
 	for _, inc := range includes {
 		includePath, err := resolveInclude(path, inc)
 		if err != nil {
-			return nil, fmt.Errorf("非法 include %q: %w", inc, err)
+			return nil, fmt.Errorf("invalid include %q: %w", inc, err)
 		}
 		sub, err := parseConfRec(includePath, hc, seen)
 		if err != nil {
-			return nil, fmt.Errorf("无法合并 include %s: %v（请将广告规则 conf 导出到同一目录）", displaySource(inc), errString(err))
+			return nil, fmt.Errorf("cannot merge include %s: %v (keep relative rule files alongside the conf)", displaySource(inc), errString(err))
 		}
 		reportf("  + include: %s\n", inc)
 		for tgt, m := range sub.bk {

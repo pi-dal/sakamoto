@@ -88,7 +88,7 @@ func Sync(stateFile string, cfg *config.Config, coreConnected bool, run Runner) 
 	}
 	if hasSaved {
 		if err := json.Unmarshal(data, &saved); err != nil {
-			return fmt.Errorf("无法读取代理恢复文件: %w", err)
+			return fmt.Errorf("could not read proxy restore file: %w", err)
 		}
 	}
 	if !coreConnected || !cfg.SystemProxy.Enabled {
@@ -104,13 +104,13 @@ func Sync(stateFile string, cfg *config.Config, coreConnected bool, run Runner) 
 		return os.Remove(stateFile)
 	}
 	if !cfg.MixedInbound.Enabled {
-		return fmt.Errorf("系统代理需要同时启用 mixed_inbound")
+		return fmt.Errorf("system proxy requires mixed_inbound to be enabled")
 	}
 	if cfg.MixedInbound.Port < 1 || cfg.MixedInbound.Port > 65535 {
-		return fmt.Errorf("mixed_inbound 端口无效")
+		return fmt.Errorf("mixed_inbound port is invalid")
 	}
 	if hasSaved && saved.Service != service {
-		return fmt.Errorf("系统代理仍在管理 %s；请先停用并恢复，再切换网络服务", saved.Service)
+		return fmt.Errorf("system proxy still manages %s; disable and restore before switching services", saved.Service)
 	}
 	httpCurrent, err := readProxy(run, "web", service)
 	if err != nil {
@@ -122,7 +122,7 @@ func Sync(stateFile string, cfg *config.Config, coreConnected bool, run Runner) 
 	}
 	if !hasSaved {
 		if httpCurrent.Authenticated || httpsCurrent.Authenticated {
-			return fmt.Errorf("当前网络使用带身份验证的系统代理，不能安全覆盖")
+			return fmt.Errorf("the current network uses an authenticated system proxy; refusing to override it")
 		}
 		saved = previous{Service: service, HTTP: httpCurrent, HTTPS: httpsCurrent}
 		b, _ := json.Marshal(saved)

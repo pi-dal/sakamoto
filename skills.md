@@ -16,7 +16,7 @@ This file is intentionally short and safe to load into an agent context.
 6. Browser support depends on `system_proxy.enabled: true` and `mixed_inbound.enabled: true`; the watcher restores prior macOS proxy settings on disconnect.
 7. Shadowrocket and sing-box must never have active TUN/VPN sessions at the same time. The daemon checks this and stops sing-box if Shadowrocket reconnects.
 8. Importing a Shadowrocket conf must follow relative `include` files, merge list-valued General settings, map exact `[Host]` entries, and fail closed if an include or remote rule list cannot be loaded.
-9. Test status vocabulary is meaningful: `待测`, `测试中`, `可达 Nms`, `失败/超时`; a selected dot is not a connectivity claim.
+9. Test status vocabulary is meaningful: `Untested`, `Testing…`, `Reachable Nms`, `Failed/timed out`; a selected dot is not a connectivity claim.
 10. iCloud sync is opt-in and limited to explicitly named source files; never sync `sakamoto.yaml`, generated `config.json`, logs, sockets, or API credentials. Never overwrite simultaneous edits.
 11. Use `pnpm`/PDM/mise preferences where applicable; Go dependencies use the existing `go.mod`.
 

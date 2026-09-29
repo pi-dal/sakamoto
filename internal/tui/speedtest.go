@@ -8,12 +8,12 @@ import (
 	"github.com/sagernet/sing-box/daemon"
 )
 
-// testBatch 只跟踪真实代理节点；selector/urltest 组和 direct 不算一个测速目标。
+// testBatch tracks leaf proxies, not selector/urltest groups or direct.
 type testBatch struct {
 	tags          []string
 	baseline      map[string]int64
 	baselineDelay map[string]int32
-	results       map[string]int32 // >0 成功；-1 失败或超时
+	results       map[string]int32 // >0 success; -1 failure or timeout
 	start         time.Time
 	deadline      time.Time
 }
@@ -91,7 +91,7 @@ func (b *testBatch) message() string {
 		}
 	}
 	if b.done() {
-		return fmt.Sprintf("全部测速完成：%d 个节点 · 成功 %d · 失败/超时 %d", len(b.tags), ok, bad)
+		return fmt.Sprintf("All tests complete: %d nodes · %d passed · %d failed/timed out", len(b.tags), ok, bad)
 	}
-	return fmt.Sprintf("逐节点测速 %d/%d · 成功 %d · 失败 %d", len(b.results), len(b.tags), ok, bad)
+	return fmt.Sprintf("Node tests %d/%d · %d passed · %d failed", len(b.results), len(b.tags), ok, bad)
 }
