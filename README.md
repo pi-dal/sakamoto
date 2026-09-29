@@ -66,4 +66,4 @@ On macOS sign your local build ad hoc when copying to a different location: `cod
 
 ## License and attribution
 
-Copyright © 2026 Guanye Li (pi-dal). `sakamoto` is licensed under **GPL-3.0-or-later**; see [LICENSE](LICENSE). It links to [SagerNet/sing-box](https://github.com/SagerNet/sing-box), also GPL-3.0-or-later. The About-page portrait assets are separately [CC BY 2.0](docs/portrait-license.md). See [NOTICE.md](NOTICE.md) for upstream and image attribution. This is an independent tool, not endorsed by SagerNet or Shadowrocket.
+Copyright © 2026 pi-dal. `sakamoto` is licensed under **GPL-3.0-or-later**; see [LICENSE](LICENSE). It links to [SagerNet/sing-box](https://github.com/SagerNet/sing-box), also GPL-3.0-or-later. The About-page portrait assets are separately [CC BY 2.0](docs/portrait-license.md). See [NOTICE.md](NOTICE.md) for upstream and image attribution. This is an independent tool, not endorsed by SagerNet or Shadowrocket.

@@ -32,7 +32,7 @@ All changes are saved to `sakamoto.yaml`. Most generation/network changes need *
 
 ## About → Copyright
 
-The About tab includes a grayscale Unicode-block portrait and explains the name's tribute to Ryuichi Sakamoto. Select **Copyright & attribution** (click or press Enter) for software copyright, separate image license, source credits and the non-affiliation statement. Scroll with `j/k`, arrows or the mouse wheel; `Esc` returns to About. The artwork is embedded text, works offline without image protocols or true colour, and has an ASCII fallback with `SAKAMOTO_ASCII_ART=1`. See the [portrait provenance and CC BY 2.0 license](portrait-license.md).
+The About tab includes a face-focused, high-resolution grayscale half-block portrait and explains the name's tribute to Ryuichi Sakamoto. Select **Copyright & attribution** (click or press Enter) for software copyright, separate image license, source credits and the non-affiliation statement. Scroll with `j/k`, arrows or the mouse wheel; `Esc` returns to About. The artwork is embedded text, works offline without Kitty/Sixel/iTerm2 image protocols, uses truecolor or ANSI-256 when available, and has a monochrome/ASCII fallback (`SAKAMOTO_ASCII_ART=1`). See the [portrait provenance and CC BY 2.0 license](portrait-license.md).
 
 ## Keyboard fallback
 
