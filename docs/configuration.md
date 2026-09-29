@@ -43,7 +43,7 @@ fallbacks:
 - Never commit `sakamoto.yaml`, `nodes.txt`, `config.json`, `proxy-restore.json`, or generated rule sets.
 - Subscription URLs, UUIDs, passwords, Reality public keys, SOCKS credentials, and server addresses are secrets or operational metadata.
 - The public repository contains parsers and examples only. Use `nodes.example.txt` and `sakamoto.example.yaml` as templates.
-- The native API listens only on `127.0.0.1`, uses a private credential, and has its web dashboard disabled. Template or short API secrets are rejected when generating. Run `sakamoto rotate-api` to generate a new 32-byte random secret, validate the candidate, reconnect briefly, and roll back if reconnection fails. It never prints the secret. Restart an already-open TUI afterward; do not paste the YAML or generated JSON into issues.
+- The native API listens only on `127.0.0.1`, uses a private credential, and has its web dashboard disabled. Template or short API secrets are rejected when generating. Run `sakamoto rotate-api` to generate a new 32-byte random secret, validate the candidate, reconnect briefly, and roll back if reconnection fails **only when the previous credential was safe**; it never restores a known-weak credential. It never prints the secret. Restart an already-open TUI afterward; do not paste the YAML or generated JSON into issues.
 
 ## Experimental unmatched-domain policy
 

@@ -18,6 +18,9 @@ func TestReplaceSecretKeepsLoopbackOnlyAndDisablesDashboard(t *testing.T) {
 	if bytes.Contains(updated, []byte("change-me")) {
 		t.Fatal("old secret remains")
 	}
+	if previousSafe(old) || !previousSafe(updated) {
+		t.Fatal("weak old API must never be rolled back")
+	}
 	var cfg map[string]any
 	if err := json.Unmarshal(updated, &cfg); err != nil {
 		t.Fatal(err)
@@ -25,6 +28,10 @@ func TestReplaceSecretKeepsLoopbackOnlyAndDisablesDashboard(t *testing.T) {
 	api := cfg["services"].([]any)[0].(map[string]any)
 	if api["secret"] != newSecret || api["listen"] != "127.0.0.1" || api["dashboard"].(map[string]any)["enabled"] != false || cfg["route"].(map[string]any)["final"] != "direct" {
 		t.Fatal("rotation changed routing or failed to disable dashboard")
+	}
+	strongOld := []byte(`{"services":[{"type":"api","listen":"127.0.0.1","secret":"0123456789abcdef0123456789abcdef","dashboard":{"enabled":false}}]}`)
+	if !previousSafe(strongOld) {
+		t.Fatal("strong loopback-only previous API rejected")
 	}
 	for _, broken := range []string{`{"services":[{"type":"api","listen":"0.0.0.0","secret":"change-me"}]}`, `{"services":[{"type":"api","listen":"127.0.0.1","secret":"other"}]}`} {
 		if _, err := replaceSecret([]byte(broken), "change-me", newSecret); err == nil {

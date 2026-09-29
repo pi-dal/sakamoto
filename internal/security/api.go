@@ -82,6 +82,11 @@ func RotateAPI(path string) error {
 		return nil
 	}
 	rollback := func(cause error) error {
+		if !previousSafe(oldJSON) {
+			// Never resurrect a known-weak credential or web dashboard on a
+			// failed reconnect. The new validated files stay on disk.
+			return fmt.Errorf("API rotation failed; safe credential retained (old API was unsafe), reconnect manually: %w", cause)
+		}
 		_ = atomicFile(path, oldYAML)
 		_ = atomicFile(jsonPath, oldJSON)
 		current, _ := svc.Send("status")
@@ -118,6 +123,28 @@ func RotateAPI(path string) error {
 		}
 	}
 	return rollback(fmt.Errorf("new API not reachable: %w", ctx.Err()))
+}
+
+func previousSafe(raw []byte) bool {
+	var data struct {
+		Services []struct {
+			Type      string `json:"type"`
+			Listen    string `json:"listen"`
+			Secret    string `json:"secret"`
+			Dashboard struct {
+				Enabled bool `json:"enabled"`
+			} `json:"dashboard"`
+		} `json:"services"`
+	}
+	if json.Unmarshal(raw, &data) != nil {
+		return false
+	}
+	for _, s := range data.Services {
+		if s.Type == "api" {
+			return s.Listen == "127.0.0.1" && !s.Dashboard.Enabled && config.ValidateAPISecret(s.Secret) == nil
+		}
+	}
+	return false
 }
 
 func replaceSecret(raw []byte, old, secret string) ([]byte, error) {
