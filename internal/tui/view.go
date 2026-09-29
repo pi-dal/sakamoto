@@ -171,9 +171,9 @@ func (m *model) View() string {
 		stateLabel = "● 已验证可用"
 		state = good.Render(stateLabel)
 	}
-	if m.serviceState == "connected" && m.networkState == "不可用" {
-		stateLabel = "⚠ 网络不可用"
-		state = bad.Render(stateLabel)
+	if m.serviceState == "connected" && m.networkState == "待确认" {
+		stateLabel = "● TUN 已启动 · 检测待重试"
+		state = accent.Render(stateLabel)
 	}
 	if m.serviceState == "unavailable" {
 		stateLabel = "● 后台不可用"

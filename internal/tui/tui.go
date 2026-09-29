@@ -4,9 +4,6 @@ package tui
 import (
 	"context"
 	"fmt"
-	"io"
-	"net"
-	"net/http"
 	"net/url"
 	"os/exec"
 	"path/filepath"
@@ -55,8 +52,8 @@ type serviceMsg struct {
 	shadowrocket bool
 }
 type networkMsg struct {
-	ip  string
-	err error
+	path string // observed usable path, never inferred from a server IP
+	err  error
 }
 type actionMsg struct {
 	text       string
@@ -106,6 +103,8 @@ type model struct {
 	lastTest                                        map[string]int32
 	networkState                                    string
 	netChecking                                     bool
+	nextNetworkProbe                                time.Time
+	networkProbeFailures                            int
 	exitLabel                                       string
 	serviceErr                                      error
 	hits                                            []hit // 每次 View 重建，鼠标只作用于可见元素
@@ -219,29 +218,6 @@ func queryService() tea.Msg {
 		return serviceMsg{err: err, shadowrocket: shadowrocket}
 	}
 	return serviceMsg{state: strings.Fields(s)[0], shadowrocket: shadowrocket}
-}
-func diagnoseNetwork(expected string) tea.Msg {
-	client := &http.Client{Timeout: 6 * time.Second, Transport: &http.Transport{Proxy: nil}}
-	resp, err := client.Get("https://api.ipify.org")
-	if err != nil {
-		return networkMsg{err: err}
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return networkMsg{err: fmt.Errorf("出口检测 HTTP %d", resp.StatusCode)}
-	}
-	b, err := io.ReadAll(io.LimitReader(resp.Body, 100))
-	if err != nil {
-		return networkMsg{err: err}
-	}
-	ip := strings.TrimSpace(string(b))
-	if net.ParseIP(ip) == nil {
-		return networkMsg{err: fmt.Errorf("出口检测未返回 IP")}
-	}
-	if host, _, err := net.SplitHostPort(expected); err == nil && net.ParseIP(host) != nil && host != ip {
-		return networkMsg{err: fmt.Errorf("出口 IP %s，不是预期的 %s（检查系统路由）", ip, host)}
-	}
-	return networkMsg{ip: ip}
 }
 func tick() tea.Cmd            { return tea.Tick(2*time.Second, func(time.Time) tea.Msg { return tickMsg{} }) }
 func (m *model) Init() tea.Cmd { return tea.Batch(tick(), queryService) }

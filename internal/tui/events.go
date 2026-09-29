@@ -84,6 +84,8 @@ func (m *model) onService(v serviceMsg) tea.Cmd {
 		m.lastTest = nil
 		m.networkState = ""
 		m.netChecking = false
+		m.nextNetworkProbe = time.Time{}
+		m.networkProbeFailures = 0
 		m.conflictStopping = false
 	}
 	if m.serviceState == "connected" && m.shadowrocket && !m.conflictStopping {
@@ -94,22 +96,39 @@ func (m *model) onService(v serviceMsg) tea.Cmd {
 			return actionMsg{text: "已停用 sakamoto；请先断开 Shadowrocket VPN 再连接", err: err}
 		}
 	}
-	if m.serviceState == "connected" && !m.shadowrocket && (previous != "connected" || wasSR) && !m.netChecking {
+	if m.serviceState == "connected" && !m.shadowrocket && !m.netChecking &&
+		(previous != "connected" || wasSR || m.nextNetworkProbe.IsZero() || !time.Now().Before(m.nextNetworkProbe)) {
 		m.netChecking = true
-		m.networkState = "检查中"
-		expected := m.exitLabel
-		return func() tea.Msg { return diagnoseNetwork(expected) }
+		if m.networkState == "" {
+			m.networkState = "检查中"
+		}
+		cfg := *m.cfg
+		return func() tea.Msg { return diagnoseNetwork(&cfg) }
 	}
 	return nil
 }
 func (m *model) onNetwork(v networkMsg) {
+	if m.serviceState != "connected" {
+		return
+	} // Ignore a late result after disconnect.
 	m.netChecking = false
 	if v.err != nil {
-		m.networkState = "不可用"
-		m.notice = "TUN 已启动但系统流量不通：" + v.err.Error()
+		m.networkProbeFailures++
+		backoff := 10 * time.Second
+		for i := 1; i < m.networkProbeFailures && backoff < time.Minute; i++ {
+			backoff *= 2
+		}
+		if backoff > time.Minute {
+			backoff = time.Minute
+		}
+		m.nextNetworkProbe = time.Now().Add(backoff)
+		m.networkState = "待确认"
+		m.notice = "TUN 已启动；探测暂时未通过，自动重试：" + v.err.Error()
 	} else {
-		m.networkState = "可用 · 出口 " + v.ip
-		m.notice = "网络已验证：出口 " + v.ip
+		m.networkProbeFailures = 0
+		m.nextNetworkProbe = time.Now().Add(2 * time.Minute)
+		m.networkState = "可用 · " + v.path
+		m.notice = "网络探测通过：" + v.path
 	}
 }
 func (m *model) onConnections(ev *daemon.ConnectionEvents) {

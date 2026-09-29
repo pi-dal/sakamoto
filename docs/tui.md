@@ -1,6 +1,6 @@
 # TUI guide
 
-Launch with `sakamoto`. The status bar distinguishes *TUN started* from *network verified*. A node's latency only means its test URL was reachable; it does not prove the whole system route works.
+Launch with `sakamoto`. The status bar distinguishes *TUN started* from *network probe passed*. The probe checks two independent small HTTPS endpoints through macOS routing and, when configured, the local browser proxy entry; it retries with backoff after a failure. A single probe failure is **待确认**, not a verdict that the network is down. A successful probe confirms only the displayed path, not every domain, TUN capture of excluded routes, DNS privacy, or the proxy's public exit IP. A node's latency likewise does not prove the whole system route works.
 
 ## Home
 
