@@ -67,3 +67,11 @@ fallbacks:
 It triggers a fresh URL test, waits for the result stream, selects the first freshly healthy group, immediately falls back when the current group is dead, and requires `recover_after` consecutive healthy checks before switching back to Reality.
 
 Clicking a node in `ManualPick` is treated as an explicit manual override; the watcher does not override a selector choice outside the fallback chain.
+
+### On-demand recovery trigger
+
+`sakamoto recover` asks the **user-level watcher** for fresh `MainProxy` URL tests now, without waiting for the normal health interval. It does not select an outbound itself, access the root control socket, read the native API secret into a caller, or restart the TUN. The watcher applies its existing ordered fallback policy after results settle (at least 10 seconds).
+
+The command prints exactly one status: `queued` (new tests scheduled), `busy` (a test is already settling), `cooldown` (a request was accepted within 90 seconds), `manual` (`ManualPick` or another explicit choice), `disabled` (automatic fallback is off or has no alternate), or `unavailable` (watcher cannot provide a valid group snapshot). `busy` and `cooldown` are not failures: the caller may wait and verify the real application path; `manual`, `disabled` and `unavailable` must **not** trigger a forced switch. A missing watcher socket exits with an error instead of trying another backend.
+
+The interface is a small Unix socket, `watch.sock`, under the private runtime directory (mode `0600`). `watch.lock` (also `0600`) ensures there is only one watcher managing selectors. Neither file is synced to iCloud or tracked in git. `pi-proxy-guard` invokes this CLI in optional recover mode, then deep-tests the Pi provider path twice before continuing. `RealityAuto`/`OthersAuto` URL tests check entry nodes, not necessarily the chained SOCKS exit: a broken exit cannot be fixed by switching entries, so the guard remains paused and reports it.

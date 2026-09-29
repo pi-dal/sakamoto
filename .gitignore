@@ -4,6 +4,8 @@ config.json
 proxy-restore.json
 auto-proxy.json
 api-rotation.pending.json
+watch.sock
+watch.lock
 *.srs
 *.db
 *.log

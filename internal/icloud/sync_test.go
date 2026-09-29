@@ -63,7 +63,7 @@ func TestSyncRejectsGeneratedAndSecretFiles(t *testing.T) {
 	c := config.Default()
 	c.ICloud.Enabled = true
 	c.ICloud.Directory = t.TempDir()
-	for _, name := range []string{"config.json", "sakamoto.yaml", "../secrets", "rules.srs", "proxy-restore.json", "auto-proxy.json", "api-rotation.pending.json"} {
+	for _, name := range []string{"config.json", "sakamoto.yaml", "../secrets", "rules.srs", "proxy-restore.json", "auto-proxy.json", "api-rotation.pending.json", "watch.sock", "watch.lock"} {
 		c.ICloud.Files = []string{name}
 		if _, e := Sync(t.TempDir(), c); e == nil {
 			t.Errorf("accepted forbidden %s", name)

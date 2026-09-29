@@ -30,18 +30,21 @@ type Watcher struct {
 	cfgPath string
 	dialFn  func(ctx context.Context) (*sbclient.Client, error)
 
-	events   chan Event
-	healthy  map[string]int // Candidate tag to consecutive healthy checks for recovery.
-	lastSnap *daemon.Groups
+	events       chan Event
+	healthy      map[string]int // Candidate tag to consecutive healthy checks for recovery.
+	lastSnap     *daemon.Groups
+	recoveryCh   chan recoveryRequest
+	lastRecovery time.Time
 }
 
 func New(cfg *config.Config, dialFn func(ctx context.Context) (*sbclient.Client, error)) *Watcher {
 	return &Watcher{
-		cfg:     cfg,
-		cfgPath: config.DefaultPath(),
-		dialFn:  dialFn,
-		events:  make(chan Event, 64),
-		healthy: map[string]int{},
+		cfg:        cfg,
+		cfgPath:    config.DefaultPath(),
+		dialFn:     dialFn,
+		events:     make(chan Event, 64),
+		healthy:    map[string]int{},
+		recoveryCh: make(chan recoveryRequest, 1),
 	}
 }
 
@@ -59,6 +62,16 @@ func (w *Watcher) emit(level, format string, args ...any) {
 
 // Run reconnects on stream failure and exits when ctx is canceled.
 func (w *Watcher) Run(ctx context.Context) error {
+	ready := make(chan error, 1)
+	go w.serveRecovery(ctx, ready)
+	select {
+	case err := <-ready:
+		if err != nil {
+			return err
+		} // A second watcher must not control selectors.
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	go w.proxyLoop(ctx)
 	backoff := time.Second
 	for {
@@ -128,6 +141,7 @@ func (w *Watcher) runOnce(ctx context.Context) error {
 		return err
 	}
 	defer c.Close()
+	w.lastSnap = nil // Never evaluate a stale snapshot from a prior API connection.
 	w.emit("info", "connected to sing-box API")
 
 	groupsCh, errCh := c.SubscribeGroups(ctx)
@@ -164,6 +178,25 @@ func (w *Watcher) runOnce(ctx context.Context) error {
 			settle.Stop()
 		}
 	}()
+	startTests := func() {
+		started = time.Now().Unix()
+		for _, chain := range w.cfg.Fallbacks {
+			for _, tag := range chain {
+				testCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				err := c.URLTest(testCtx, tag)
+				cancel()
+				if err != nil {
+					w.emit("error", "URL test %s failed: %v", tag, err)
+				}
+			}
+		}
+		settleDuration := w.cfg.TestSettle
+		if settleDuration < 10*time.Second {
+			settleDuration = 10 * time.Second
+		}
+		settle = time.NewTimer(settleDuration)
+		settleCh = settle.C
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -202,6 +235,25 @@ func (w *Watcher) runOnce(ctx context.Context) error {
 				return fmt.Errorf("groups stream closed")
 			}
 			w.lastSnap = g // Consume results continuously; sleeping would stall the stream.
+		case req := <-w.recoveryCh:
+			if req.ctx.Err() != nil {
+				continue
+			}
+			latest, err := config.Load(w.cfgPath)
+			if err != nil {
+				req.reply <- "unavailable"
+				continue
+			}
+			w.cfg = latest
+			decision := recoveryDecision(w.cfg.FallbackEnabled, w.cfg.Fallbacks["MainProxy"], w.lastSnap, settleCh != nil, w.lastRecovery, time.Now())
+			if decision == "queued" {
+				w.lastRecovery = time.Now()
+				req.reply <- "queued" // Acknowledge before tests block the event loop.
+				startTests()
+				w.emit("info", "on-demand URL tests queued for MainProxy")
+				continue
+			}
+			req.reply <- decision
 		case <-tick.C:
 			if settleCh != nil || w.lastSnap == nil {
 				continue
@@ -226,20 +278,7 @@ func (w *Watcher) runOnce(ctx context.Context) error {
 			if !w.cfg.FallbackEnabled || len(w.cfg.Fallbacks) == 0 {
 				continue
 			}
-			started = time.Now().Unix()
-			for _, chain := range w.cfg.Fallbacks {
-				for _, tag := range chain {
-					if err := c.URLTest(ctx, tag); err != nil {
-						w.emit("error", "URL test %s failed: %v", tag, err)
-					}
-				}
-			}
-			settleDuration := w.cfg.TestSettle
-			if settleDuration < 10*time.Second {
-				settleDuration = 10 * time.Second
-			} // allow slow group URL tests to publish fresh results
-			settle = time.NewTimer(settleDuration)
-			settleCh = settle.C
+			startTests()
 		case <-settleCh:
 			settleCh = nil
 			w.evaluate(ctx, c, started)

@@ -18,7 +18,7 @@ import (
 	"github.com/pi-dal/sakamoto/internal/watch"
 )
 
-const version = "0.2.0"
+const version = "0.2.1"
 
 const usage = `sakamoto — a macOS sing-box controller inspired by Shadowrocket
 
@@ -27,6 +27,7 @@ Usage:
   sakamoto daemon       Root supervisor (LaunchDaemon); manages sing-box and
                         accepts connect/disconnect commands on a Unix socket
   sakamoto watch        LaunchAgent for automatic proxy group fallback
+  sakamoto recover      Ask the user-level watcher for fresh MainProxy tests
   sakamoto rotate-api   Stage a private API key; apply on the next TUI connect
   sakamoto rotate-api --apply-now  Rotate immediately (brief reconnect)
   sakamoto rotate-api --status | --cancel  Check/cancel a staged rotation
@@ -72,6 +73,15 @@ func main() {
 		if err := runWatch(ctx, *cfgPath); err != nil {
 			fatal("watch", err)
 		}
+	case "recover":
+		if len(args) != 1 {
+			fatal("recover", fmt.Errorf("recover takes no arguments"))
+		}
+		status, err := watch.RequestRecovery(*cfgPath)
+		if err != nil {
+			fatal("recover", err)
+		}
+		fmt.Println(status)
 	case "rotate-api":
 		if len(args) > 2 {
 			fatal("rotate-api", fmt.Errorf("only --apply-now, --status, or --cancel is supported"))

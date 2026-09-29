@@ -283,7 +283,7 @@ func (m *model) buildSettings() {
 				return fmt.Errorf("at least one source filename is required")
 			}
 			for _, p := range parts {
-				if p != filepath.Base(p) || p == "config.json" || p == "sakamoto.yaml" || p == "auto-proxy.json" || p == "api-rotation.pending.json" || p == "proxy-restore.json" || strings.HasSuffix(p, ".srs") || strings.HasSuffix(p, ".log") {
+				if p != filepath.Base(p) || p == "config.json" || p == "sakamoto.yaml" || p == "auto-proxy.json" || p == "api-rotation.pending.json" || p == "proxy-restore.json" || p == "watch.sock" || p == "watch.lock" || strings.HasSuffix(p, ".srs") || strings.HasSuffix(p, ".log") {
 					return fmt.Errorf("only source filenames are allowed; generated files and API keys cannot be synced")
 				}
 			}
