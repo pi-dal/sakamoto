@@ -7,6 +7,7 @@
         <key>SAKAMOTO_HOME</key><string>@HOME@</string>
         <key>SAKAMOTO_DIR</key><string>@DIR@</string>
         <key>SAKAMOTO_USER</key><string>@USER@</string>
+        <key>SAKAMOTO_SING_BOX</key><string>@SING_BOX@</string>
     </dict>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>

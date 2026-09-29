@@ -6,6 +6,13 @@ import (
 	"testing"
 )
 
+func TestSingBoxExecutableOverride(t *testing.T) {
+	t.Setenv("SAKAMOTO_SING_BOX", "/custom/homebrew/bin/sing-box")
+	if got := singBoxExecutable(); got != "/custom/homebrew/bin/sing-box" {
+		t.Fatalf("sing-box path override ignored: %q", got)
+	}
+}
+
 func TestValidateAPIServiceFailClosed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	for _, tc := range []struct {

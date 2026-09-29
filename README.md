@@ -2,27 +2,28 @@
 
 A mouse-enabled macOS TUI for [sing-box](https://sing-box.sagernet.org/). Inspired by Shadowrocket's Home / Config / Data / Settings workflow; **not affiliated with Shadowrocket or SagerNet**.
 
-> Source and templates only. **No real server credentials belong in this repository.** The default local state directory is `~/.sakamoto` on a fresh install. Existing installs with a running legacy daemon keep using `~/.config/sakamoto` until explicitly migrated.
+> **No real server credentials belong in this repository or tap.** The default local state directory is `~/.sakamoto` on a fresh install. Existing installs with a running legacy daemon keep using `~/.config/sakamoto` until explicitly migrated.
 
 ## Quick start (macOS)
 
-Requirements: macOS, Ghostty/iTerm2 or another terminal with SGR mouse events, Go toolchain, and sing-box 1.14.x (`brew install sing-box`).
+Requirements: macOS and a terminal with SGR mouse events (e.g. Ghostty/iTerm2). The [Homebrew tap](https://github.com/pi-dal/homebrew-tap) installs the sing-box and Go build dependencies; **installation never starts a VPN or installs privileged services**.
 
 ```bash
-git clone https://github.com/pi-dal/sakamoto.git && cd sakamoto
-go build -o sakamoto ./cmd/sakamoto
-mkdir -p ~/.sakamoto
-cp sakamoto.example.yaml ~/.sakamoto/sakamoto.yaml
-cp nodes.example.txt ~/.sakamoto/nodes.txt
+brew install pi-dal/tap/sakamoto
+install -d -m 700 ~/.sakamoto
+cp "$(brew --prefix)/share/sakamoto/sakamoto.example.yaml" ~/.sakamoto/sakamoto.yaml
+cp "$(brew --prefix)/share/sakamoto/nodes.example.txt" ~/.sakamoto/nodes.txt
 ```
 
-Edit `~/.sakamoto/sakamoto.yaml` to point `conf:` at your own Shadowrocket `.conf`, or open `./sakamoto` → **Config → 导入配置** and paste its URL. If `include=ad.conf` is relative, the importer fetches it from the same URL directory. Add manual node share links to `nodes.txt` through **Config → 节点与订阅 → 添加节点**, then **更新生成**. Check the result:
+For a source build instead, clone this repository, run `go build -o sakamoto ./cmd/sakamoto`, and use the templates at the repository root. Replace the example API secret with a unique random value (`openssl rand -hex 32`) before generating a config.
+
+Edit `~/.sakamoto/sakamoto.yaml` to point `conf:` at your own Shadowrocket `.conf`, or open `sakamoto` → **Config → 导入配置** and paste its URL. If `include=ad.conf` is relative, the importer fetches it from the same URL directory. Add manual node share links to `nodes.txt` through **Config → 节点与订阅 → 添加节点**, then **更新生成**. Check the result:
 
 ```bash
 sing-box check -c ~/.sakamoto/config.json
 ```
 
-For TUN and always-on fallback, install the macOS services *once*: `bash scripts/install-macos.sh`. It asks for confirmation before installing a root LaunchDaemon and never automatically connects the VPN. Do **not** connect Shadowrocket and sakamoto TUN simultaneously. Then run `sakamoto` and click **连接**. Daily use requires only that one command; `daemon` and `watch` are launchd internals. `sakamoto help` lists keyboard shortcuts.
+For TUN and always-on fallback, install the macOS services *once*: `bash "$(brew --prefix)/share/sakamoto/scripts/install-macos.sh"` (source builds: `SAKAMOTO_BIN="$PWD/sakamoto" bash scripts/install-macos.sh`). It asks for confirmation before installing a root LaunchDaemon and never automatically connects the VPN. Do **not** connect Shadowrocket and sakamoto TUN simultaneously. Then run `sakamoto` and click **连接**. Daily use requires only that one command; `daemon` and `watch` are launchd internals. `sakamoto help` lists keyboard shortcuts.
 
 ## Interface
 

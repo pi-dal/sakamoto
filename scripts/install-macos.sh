@@ -5,9 +5,12 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 user="$(id -un)"
 home="$HOME"
 dir="${SAKAMOTO_DIR:-$home/.sakamoto}"
-bin="${SAKAMOTO_BIN:-/opt/homebrew/bin/sakamoto}"
 
 if [[ "$(uname -s)" != Darwin ]]; then echo 'macOS only' >&2; exit 1; fi
+# Homebrew owns the executable. This helper only installs launchd services;
+# never compile over or replace a live, brew-managed binary.
+bin="${SAKAMOTO_BIN:-$(command -v sakamoto || true)}"
+[[ -n "$bin" && -x "$bin" && "$bin" = /* ]] || { echo 'Install sakamoto via Homebrew or set SAKAMOTO_BIN to an absolute executable path.' >&2; exit 1; }
 if [[ ! -f "$dir/sakamoto.yaml" ]]; then
   echo "Create $dir/sakamoto.yaml from sakamoto.example.yaml and edit your sources first." >&2; exit 1
 fi
@@ -20,25 +23,21 @@ fi
 if [[ -S "$home/.config/sakamoto/svc.sock" ]]; then
   echo 'Legacy sakamoto daemon detected. Stop it in the TUI before migrating; see docs/migration.md.' >&2; exit 1
 fi
-command -v sing-box >/dev/null || { echo 'Install sing-box via Homebrew first: brew install sing-box' >&2; exit 1; }
-sing-box check -c "$dir/config.json"
+sing_box="$(command -v sing-box || true)"
+[[ -n "$sing_box" && -x "$sing_box" && "$sing_box" = /* ]] || { echo 'Install sing-box via Homebrew first: brew install sing-box' >&2; exit 1; }
+"$sing_box" check -c "$dir/config.json"
 if [[ ! -t 0 ]]; then echo 'Run interactively to approve installing a root LaunchDaemon.' >&2; exit 1; fi
 read -r -p "Install sakamoto daemon (root) + watch for $user in $dir? [y/N] " answer
 [[ "$answer" == y || "$answer" == Y ]] || exit 0
-mkdir -p "$dir/logs" "$home/Library/LaunchAgents"
 umask 077
+mkdir -p "$dir/logs" "$home/Library/LaunchAgents"
+chmod 700 "$dir" "$dir/logs"
 tmp_plist="$(mktemp /tmp/sakamoto-daemon.XXXXXX)"
 trap 'rm -f "$tmp_plist"' EXIT
-build_out="$(mktemp /tmp/sakamoto-build.XXXXXX)"
-trap 'rm -f "$tmp_plist" "$build_out"' EXIT
-go build -C "$root" -o "$build_out" ./cmd/sakamoto
-cp "$build_out" "$bin.next"
-codesign -s - -f "$bin.next" >/dev/null
-mv -f "$bin.next" "$bin"
-python3 - "$root" "$home" "$user" "$dir" "$bin" "$tmp_plist" <<'PY'
+python3 - "$root" "$home" "$user" "$dir" "$bin" "$sing_box" "$tmp_plist" <<'PY'
 import html,pathlib,sys
-root,home,user,directory,binary,tmp=map(pathlib.Path,sys.argv[1:])
-values={'@HOME@':str(home),'@USER@':str(user),'@DIR@':str(directory),'@BIN@':str(binary)}
+root,home,user,directory,binary,sing_box,tmp=map(pathlib.Path,sys.argv[1:])
+values={'@HOME@':str(home),'@USER@':str(user),'@DIR@':str(directory),'@BIN@':str(binary),'@SING_BOX@':str(sing_box)}
 for source,target in [
  ('dev.sakamoto.daemon.plist.in',tmp),
  ('dev.sakamoto.watch.plist.in',home/'Library/LaunchAgents/dev.sakamoto.watch.plist'),

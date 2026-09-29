@@ -168,7 +168,7 @@ func (s *Server) start() string {
 	if err := validateAPIService(s.cfgPath); err != nil {
 		return "start failed: " + err.Error()
 	}
-	cmd := exec.Command("/opt/homebrew/bin/sing-box", "run",
+	cmd := exec.Command(singBoxExecutable(), "run",
 		"-c", s.cfgPath, "-D", s.workDir)
 	cmd.Stdout = logWriter{s}
 	cmd.Stderr = logWriter{s}
@@ -180,6 +180,20 @@ func (s *Server) start() string {
 	s.restarts++
 	go s.waitLoop(cmd, s.restarts)
 	return fmt.Sprintf("connected (pid %d)", cmd.Process.Pid)
+}
+
+// singBoxExecutable supports Apple Silicon, Intel, and non-default Homebrew
+// prefixes. The installer pins the resolved path in the launchd environment.
+func singBoxExecutable() string {
+	if binary := os.Getenv("SAKAMOTO_SING_BOX"); binary != "" {
+		return binary
+	}
+	for _, path := range []string{"/opt/homebrew/bin/sing-box", "/usr/local/bin/sing-box"} {
+		if info, err := os.Stat(path); err == nil && !info.IsDir() && info.Mode().Perm()&0o111 != 0 {
+			return path
+		}
+	}
+	return "sing-box"
 }
 
 // validateAPIService fails closed before a root child could expose an API with
