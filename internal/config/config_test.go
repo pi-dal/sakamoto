@@ -41,6 +41,27 @@ func TestDefaultDirOverrideAndRandomSecret(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+func TestStaleSettingsCannotRestoreOldAPIKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sakamoto.yaml")
+	stale := Default()
+	if err := stale.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	old := stale.API.Secret
+	newer := Default()
+	if err := os.WriteFile(path, []byte("api:\n  url: http://127.0.0.1:9090\n  secret: "+newer.API.Secret+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	stale.LogLevel = "debug"
+	if err := stale.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil || loaded.API.Secret != newer.API.Secret || loaded.API.Secret == old || loaded.LogLevel != "debug" {
+		t.Fatal("stale UI overwrote rotated API key", err)
+	}
+}
+
 func TestLegacyProxyFinalStaysProxy(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sakamoto.yaml")

@@ -27,7 +27,9 @@ const usage = `sakamoto — Shadowrocket 复刻版 sing-box 控制面
   sakamoto daemon       root 监督进程（LaunchDaemon 拉起；管 sing-box 子进程，
                         提供 connect/disconnect socket —— 等价 SR 的 VPN 开关）
   sakamoto watch        fallback 降级守护（LaunchAgent；链首优先自动降级回切）
-  sakamoto rotate-api   轮换本机 API 密钥（连接中会短暂重连）
+  sakamoto rotate-api   仅暂存新密钥；下次从 TUI 正常连接时应用，不中断当前 TUN
+  sakamoto rotate-api --apply-now  明确要求立即轮换（会短暂重连）
+  sakamoto rotate-api --status | --cancel  查看/取消待应用轮换
   sakamoto version      版本
   sakamoto help         本说明
 
@@ -71,10 +73,42 @@ func main() {
 			fatal("watch", err)
 		}
 	case "rotate-api":
-		if err := security.RotateAPI(*cfgPath); err != nil {
-			fatal("rotate-api", err)
+		if len(args) > 2 {
+			fatal("rotate-api", fmt.Errorf("只接受 --apply-now、--status 或 --cancel"))
 		}
-		fmt.Println("API 密钥已轮换；请重新打开 TUI。密钥不会打印。")
+		option := ""
+		if len(args) == 2 {
+			option = args[1]
+		}
+		switch option {
+		case "":
+			if err := security.StageAPI(*cfgPath); err != nil {
+				fatal("rotate-api", err)
+			}
+			fmt.Println("新 API 密钥已私有暂存；当前连接和 API 不变。下次从 TUI 正常连接时应用。")
+		case "--apply-now":
+			if err := security.RotateAPI(*cfgPath); err != nil {
+				fatal("rotate-api", err)
+			}
+			fmt.Println("API 密钥已应用；连接中曾短暂重连。请重新打开 TUI。")
+		case "--status":
+			pending, err := security.PendingAPI(*cfgPath)
+			if err != nil {
+				fatal("rotate-api", err)
+			}
+			if pending {
+				fmt.Println("API 轮换待应用；当前连接未改动")
+			} else {
+				fmt.Println("没有待应用的 API 轮换")
+			}
+		case "--cancel":
+			if err := security.CancelPendingAPI(*cfgPath); err != nil {
+				fatal("rotate-api", err)
+			}
+			fmt.Println("待应用轮换已取消；当前连接未改动")
+		default:
+			fatal("rotate-api", fmt.Errorf("未知选项 %q", option))
+		}
 	case "version":
 		fmt.Println("sakamoto", version)
 	case "help", "-h", "--help":

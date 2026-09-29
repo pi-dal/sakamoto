@@ -3,6 +3,7 @@
 config.json
 proxy-restore.json
 auto-proxy.json
+api-rotation.pending.json
 *.srs
 *.db
 *.log

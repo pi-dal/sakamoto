@@ -4,7 +4,7 @@ Launch with `sakamoto`. The status bar distinguishes *TUN started* from *network
 
 ## Home
 
-- **连接 / 断开** toggles sakamoto TUN. Disconnect Shadowrocket VPN first; Tailscale can remain connected.
+- **连接 / 断开** toggles sakamoto TUN. Disconnect Shadowrocket VPN first; Tailscale can remain connected. A pending `sakamoto rotate-api` key is applied before the next normal TUI connection (not while the TUN is already connected).
 - The chain summary shows the current entry selection and SOCKS exit.
 - **全部测速** tests each distinct protocol node rather than treating groups as nodes; wait for the final success/failure count.
 - Left-click a node for manual selection. Right-click for **使用 / 测速 / 详情**. Wheel scrolls the list. A filled dot means selected, not reachable.

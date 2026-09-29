@@ -21,9 +21,8 @@ import (
 
 var pidPattern = regexp.MustCompile(`\bpid=(\d+)`)
 
-// RotateAPI replaces both the sidecar and generated secret. When this is the
-// active runtime, it reconnects the service; any failed reconnect restores
-// both files and attempts to bring the previous configuration back online.
+// RotateAPI applies a pending key (or generates one) immediately. This
+// explicit legacy path reconnects a running TUN; the CLI defaults to StageAPI.
 func RotateAPI(path string) error {
 	cfg, err := config.Load(path)
 	if err != nil {
@@ -40,9 +39,15 @@ func RotateAPI(path string) error {
 		return err
 	}
 
-	newSecret, err := config.NewAPISecret()
+	newSecret, err := readPending(path)
 	if err != nil {
 		return err
+	}
+	if newSecret == "" {
+		newSecret, err = config.NewAPISecret()
+		if err != nil {
+			return err
+		}
 	}
 	newJSON, err := replaceSecret(oldJSON, cfg.API.Secret, newSecret)
 	if err != nil {
@@ -79,7 +84,7 @@ func RotateAPI(path string) error {
 		return err
 	}
 	if !strings.HasPrefix(status, "connected") {
-		return nil
+		return CancelPendingAPI(path)
 	}
 	rollback := func(cause error) error {
 		if !previousSafe(oldJSON) {
@@ -114,7 +119,7 @@ func RotateAPI(path string) error {
 		probeCancel()
 		if e == nil {
 			client.Close()
-			return nil
+			return CancelPendingAPI(path)
 		}
 		select {
 		case <-ctx.Done():

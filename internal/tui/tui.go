@@ -59,8 +59,9 @@ type networkMsg struct {
 	err error
 }
 type actionMsg struct {
-	text string
-	err  error
+	text       string
+	err        error
+	apiRotated bool
 }
 type testDispatchMsg struct {
 	batch  *testBatch
@@ -133,14 +134,18 @@ func Run(ctx context.Context, cfg *config.Config, path string) error {
 	m.rebuildRows()
 	m.buildSettings()
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseAllMotion(), tea.WithContext(ctx))
-	go pump(ctx, cfg, p)
+	go pump(ctx, path, p)
 	_, err := p.Run()
 	return err
 }
 
-func pump(ctx context.Context, cfg *config.Config, p *tea.Program) {
+func pump(ctx context.Context, path string, p *tea.Program) {
 	for ctx.Err() == nil {
-		c, err := sbclient.Dial(ctx, cfg.API.URL, cfg.API.Secret)
+		cfg, err := config.Load(path)
+		var c *sbclient.Client
+		if err == nil {
+			c, err = sbclient.Dial(ctx, cfg.API.URL, cfg.API.Secret)
+		}
 		if err != nil {
 			p.Send(errMsg(err))
 		} else {
@@ -299,7 +304,7 @@ func (m *model) buildSettings() {
 				return fmt.Errorf("至少一个源文件")
 			}
 			for _, p := range parts {
-				if p != filepath.Base(p) || p == "config.json" || p == "sakamoto.yaml" || p == "auto-proxy.json" || p == "proxy-restore.json" || strings.HasSuffix(p, ".srs") || strings.HasSuffix(p, ".log") {
+				if p != filepath.Base(p) || p == "config.json" || p == "sakamoto.yaml" || p == "auto-proxy.json" || p == "api-rotation.pending.json" || p == "proxy-restore.json" || strings.HasSuffix(p, ".srs") || strings.HasSuffix(p, ".log") {
 					return fmt.Errorf("仅允许源文件名，不能同步生成文件或 API 密钥")
 				}
 			}

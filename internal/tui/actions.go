@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/pi-dal/sakamoto/internal/config"
 	"github.com/pi-dal/sakamoto/internal/gen"
+	"github.com/pi-dal/sakamoto/internal/security"
 	"github.com/pi-dal/sakamoto/internal/svc"
 )
 
@@ -409,7 +410,15 @@ func (m *model) toggleConnection() tea.Cmd {
 		return nil
 	}
 	m.notice = "正在" + map[string]string{"connect": "连接…", "disconnect": "断开…"}[cmd]
-	return func() tea.Msg { out, err := svc.Send(cmd); return actionMsg{text: strings.TrimSpace(out), err: err} }
+	path := m.cfgPath
+	return func() tea.Msg {
+		if cmd == "connect" {
+			out, rotated, err := security.ConnectWithPending(path)
+			return actionMsg{text: strings.TrimSpace(out), err: err, apiRotated: rotated}
+		}
+		out, err := svc.Send(cmd)
+		return actionMsg{text: strings.TrimSpace(out), err: err}
+	}
 }
 func (m *model) selectCurrent() tea.Cmd {
 	if m.cursor < 0 || m.cursor >= len(m.rows) {

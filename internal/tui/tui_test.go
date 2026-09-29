@@ -280,6 +280,27 @@ func TestMouseConfigAndSettingEditor(t *testing.T) {
 	}
 }
 
+func TestActionReloadsRotatedCredentialWithoutExposingIt(t *testing.T) {
+	m := testModel(t)
+	newer := config.Default()
+	current, err := config.Load(m.cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.API.Secret = newer.API.Secret
+	newYAML, err := current.MarshalYAML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(m.cfgPath, newYAML, 0600); err != nil {
+		t.Fatal(err)
+	}
+	m.onAction(actionMsg{text: "connected", apiRotated: true})
+	if m.cfg.API.Secret != newer.API.Secret || strings.Contains(m.notice, newer.API.Secret) {
+		t.Fatal("TUI did not refresh private API credential")
+	}
+}
+
 func TestExperimentalPolicyEditableAndPersistent(t *testing.T) {
 	m := testModel(t)
 	var mode, threshold cfgRow

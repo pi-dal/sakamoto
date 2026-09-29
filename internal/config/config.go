@@ -233,8 +233,28 @@ func (c *Config) ValidateExperiment() error {
 // MarshalYAML serializes the sidecar without writing secrets to stdout.
 func (c *Config) MarshalYAML() ([]byte, error) { return yaml.Marshal(c) }
 
-// Save 写回 yaml（TUI 编辑用）。
+// Save writes settings without allowing a TUI opened before a credential
+// rotation to silently put the old API key back on disk.
 func (c *Config) Save(path string) error {
+	if raw, err := os.ReadFile(path); err == nil {
+		var current struct {
+			API struct {
+				URL    string `yaml:"url"`
+				Secret string `yaml:"secret"`
+			} `yaml:"api"`
+		}
+		if err := yaml.Unmarshal(raw, &current); err != nil {
+			return err
+		}
+		if current.API.Secret != "" {
+			c.API.Secret = current.API.Secret
+		}
+		if current.API.URL != "" {
+			c.API.URL = current.API.URL
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
 	b, err := c.MarshalYAML()
 	if err != nil {
 		return err

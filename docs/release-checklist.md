@@ -9,13 +9,13 @@
 
 ## Secret audit
 
-Never stage `~/.sakamoto` or `~/.config/sakamoto`, including API secret, nodes.txt, subscription tokens, config.json, `.srs`, logs, cache, iCloud hash state, learned auto-proxy domains and proxy restore state. The source tree should contain only documentation addresses and synthetic UUIDs.
+Never stage `~/.sakamoto` or `~/.config/sakamoto`, including API secret, nodes.txt, subscription tokens, config.json, `.srs`, logs, cache, iCloud hash state, learned auto-proxy domains, pending API keys and proxy restore state. The source tree should contain only documentation addresses and synthetic UUIDs.
 
 Before any future commit:
 
 ```bash
 git status --short
-git ls-files | grep -E '(^|/)(nodes\.txt|config\.json|sakamoto\.yaml|proxy-restore\.json|auto-proxy\.json|.*\.srs|.*\.log)$' && echo 'STOP: private file tracked'
+git ls-files | grep -E '(^|/)(nodes\.txt|config\.json|sakamoto\.yaml|proxy-restore\.json|auto-proxy\.json|api-rotation\.pending\.json|.*\.srs|.*\.log)$' && echo 'STOP: private file tracked'
 git grep -n -E 'token=[[:xdigit:]]{12,}|/Users/[^/]+/|password=[^[:space:]]{8,}|uuid=[0-9a-f-]{36}' -- ':!go.sum'
 ```
 

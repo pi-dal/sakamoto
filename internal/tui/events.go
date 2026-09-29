@@ -5,6 +5,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/pi-dal/sakamoto/internal/config"
 	"github.com/pi-dal/sakamoto/internal/svc"
 	"github.com/sagernet/sing-box/daemon"
 )
@@ -152,6 +153,12 @@ func (m *model) onImport(v importMsg) {
 	m.notice = "已导入并生成 sing-box 配置；断开再连接后应用"
 }
 func (m *model) onAction(v actionMsg) {
+	if v.apiRotated {
+		if latest, err := config.Load(m.cfgPath); err == nil {
+			m.cfg.API.Secret = latest.API.Secret
+			m.cfg.API.URL = latest.API.URL
+		}
+	}
 	if v.err != nil {
 		m.notice = v.err.Error()
 	} else {
