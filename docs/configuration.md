@@ -47,6 +47,8 @@ fallbacks:
 
 ## Rule, Global and Direct routing modes
 
+Requires **sing-box 1.14.2 or newer**; 1.14.0 may lack native API mode management even if it accepts mode rules. Run `sing-box version` and `brew update && brew upgrade sing-box` if needed.
+
 The native API mode switch is a **rule condition**, not an automatic route rewrite. Generated configs now include `clash_mode` route and DNS rules so the core exposes and actually applies all three modes. Use the Home **Mode** button or `m` to cycle them.
 
 - **Rule:** imported split-routing rules plus the experimental unmatched policy below.

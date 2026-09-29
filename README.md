@@ -6,7 +6,7 @@ A mouse-enabled macOS TUI for [sing-box](https://sing-box.sagernet.org/). Inspir
 
 ## Quick start (macOS)
 
-Requirements: macOS and a terminal with SGR mouse events (e.g. Ghostty/iTerm2). The [Homebrew tap](https://github.com/pi-dal/homebrew-tap) installs the sing-box and Go build dependencies; **installation never starts a VPN or installs privileged services**.
+Requirements: macOS, sing-box **1.14.2+** (native API mode support), and a terminal with SGR mouse events (e.g. Ghostty/iTerm2). The [Homebrew tap](https://github.com/pi-dal/homebrew-tap) installs the sing-box and Go build dependencies; **installation never starts a VPN or installs privileged services**.
 
 ```bash
 brew install pi-dal/tap/sakamoto

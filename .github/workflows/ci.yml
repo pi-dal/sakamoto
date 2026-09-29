@@ -12,7 +12,17 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - run: brew install sing-box
+      - run: brew update && brew install sing-box
+      - name: Require the native mode API (sing-box 1.14.2+)
+        run: |
+          sing-box version
+          python3 - <<'PY'
+          import re, subprocess
+          output = subprocess.check_output(['sing-box', 'version'], text=True)
+          match = re.search(r'sing-box version (\d+)\.(\d+)\.(\d+)', output)
+          if not match or tuple(map(int, match.groups())) < (1, 14, 2):
+              raise SystemExit('sing-box 1.14.2+ is required; runner Homebrew metadata may be stale')
+          PY
       - run: go test ./...
       - run: go vet ./...
       - run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run ./...
