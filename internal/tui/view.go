@@ -333,7 +333,16 @@ func (m *model) renderHome(b *strings.Builder, startY int) {
 		style = focus
 	}
 	b.WriteString(" " + style.Render(modeButton) + "  m: Rule / Global / Direct\n")
-	m.addHit(1, 1+lipgloss.Width(modeButton), startY, "routing-mode", 0)
+	modeY := startY
+	if m.cfg.DNSGuard.Enabled || m.dnsState == "protected" || m.dnsState == "degraded" {
+		label := m.dnsState
+		if label == "" {
+			label = "requires root-daemon upgrade / reconnect"
+		}
+		b.WriteString(" " + muted.Render("System DNS: "+label) + "\n")
+		startY++
+	}
+	m.addHit(1, 1+lipgloss.Width(modeButton), modeY, "routing-mode", 0)
 	startY++
 	if len(m.rows) == 0 {
 		b.WriteString(" No nodes yet. Check subscriptions or regenerate in Config.\n")

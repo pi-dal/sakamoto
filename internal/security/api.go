@@ -29,6 +29,11 @@ func RotateAPI(path string) error {
 		return err
 	}
 	dir := filepath.Dir(path)
+	if cfg.DNSGuard.Enabled && filepath.Clean(dir) == filepath.Clean(config.DefaultDir()) {
+		if err := svc.RequireDNSLifecycle(); err != nil {
+			return err
+		}
+	}
 	jsonPath := filepath.Join(dir, "config.json")
 	oldYAML, err := os.ReadFile(path)
 	if err != nil {

@@ -2,6 +2,7 @@
 .sakamoto/
 config.json
 proxy-restore.json
+dns-restore.json
 auto-proxy.json
 api-rotation.pending.json
 watch.sock

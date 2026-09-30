@@ -54,11 +54,15 @@ The native API mode switch is a **rule condition**, not an automatic route rewri
 
 - **Rule:** imported split-routing rules plus the experimental unmatched policy below.
 - **Global:** ordinary public traffic uses the selected proxy/chain exit before explicit DIRECT/GeoIP split rules; ordinary DNS uses a remote resolver detouring through the same exit. `experiment.mode` no longer decides the fallback while Global is selected.
-- **Direct:** ordinary public traffic goes directly before proxy/learned split rules; ordinary DNS uses the local resolver without the proxy chain.
+- **Direct:** ordinary public traffic goes directly before proxy/learned split rules; ordinary DNS uses the local resolver without the proxy chain **unless protected system DNS is explicitly enabled**, which keeps public DNS encrypted/proxied independently of traffic mode.
 
 All modes keep hosts/MagicDNS, private-address and TUN route exclusions, reject/ad rules and enabled STUN/QUIC blocking. Thus Global is not a claim that every packet is proxied, and Direct is not a bypass of safety/reject rules. Proxy/DoH hostname bootstrap still uses the local resolver; system DNS outside the TUN and browser-owned DoH are not controlled by this switch. Switching clears core DNS caches but affects new connections only; it does not close existing streams. Without configured mode persistence, the core starts in Rule after a restart.
 
 An older generated config with no `clash_mode` rules exposes only Rule. After upgrading the CLI, regenerate and validate the config, then perform **one planned TUN reconnect** to load the rules. Thereafter switching modes through the API does not require another TUN restart. A CLI update alone cannot alter the routing of a core already running an old config.
+
+## Native protected system DNS
+
+Optional `dns_guard.enabled` uses a sing-box loopback DNS inbound and a root-supervisor transaction to save/restore macOS DNS. It is off by default, requires updating the root daemon while disconnected, and cannot be activated by upgrading only the CLI. Read [activation, rollback and scope limits](dns-protection.md) before enabling it. `sakamoto dns-prepare` makes a private candidate without changing live files; `sakamoto dns-restore` recovers an orphaned snapshot only while the core is stopped. `dns-restore.json` stays local and is forbidden in iCloud source sync.
 
 ## Experimental unmatched-domain policy
 

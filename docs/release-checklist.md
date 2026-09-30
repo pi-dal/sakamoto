@@ -16,7 +16,7 @@ Before any future commit:
 
 ```bash
 git status --short
-git ls-files | grep -E '(^|/)(nodes\.txt|config\.json|sakamoto\.yaml|proxy-restore\.json|auto-proxy\.json|api-rotation\.pending\.json|watch\.sock|watch\.lock|.*\.srs|.*\.log)$' && echo 'STOP: private file tracked'
+git ls-files | grep -E '(^|/)(nodes\.txt|config\.json|sakamoto\.yaml|proxy-restore\.json|dns-restore\.json|auto-proxy\.json|api-rotation\.pending\.json|watch\.sock|watch\.lock|.*\.srs|.*\.log)$' && echo 'STOP: private file tracked'
 git grep -n -E 'token=[[:xdigit:]]{12,}|/Users/[^/]+/|password=[^[:space:]]{8,}|uuid=[0-9a-f-]{36}' -- ':!go.sum'
 ```
 
@@ -31,3 +31,4 @@ Manually inspect diffs and screenshots too: credentials may be base64 encoded in
 - TUI is tested with SGR mouse input at both 110x30 and 72x20; About/Copyright fits 64x16, 80x24 and 120x36 and its portrait works without terminal graphics or network fetches.
 - Fallback checks fresh URL-test results; manual selection remains manual. The private `sakamoto recover` socket is single-watcher, user-only, rate-limited, and cannot start or restart the TUN.
 - Optional iCloud sync never uploads generated state and never overwrites simultaneous edits.
+- Protected system DNS is opt-in: UDP/TCP health before takeover, snapshot/read-back, restoration before listener stop, port-conflict/root-capability checks and rollback. No live DNS activation is claimed without the necessary administrative authorization.

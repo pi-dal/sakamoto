@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"os/user"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/pi-dal/sakamoto/internal/config"
@@ -18,7 +19,7 @@ import (
 	"github.com/pi-dal/sakamoto/internal/watch"
 )
 
-const version = "0.2.4"
+const version = "0.2.5"
 
 const usage = `sakamoto — a macOS sing-box controller inspired by Shadowrocket
 
@@ -28,6 +29,8 @@ Usage:
                         accepts connect/disconnect commands on a Unix socket
   sakamoto watch        LaunchAgent for automatic proxy group fallback
   sakamoto recover      Ask the user-level watcher for fresh MainProxy tests
+  sakamoto dns-restore  Restore an orphaned DNS snapshot (core must be stopped)
+  sakamoto dns-prepare  Build a private protected-DNS candidate; do not activate
   sakamoto rotate-api   Stage a private API key; apply on the next TUI connect
   sakamoto rotate-api --apply-now  Rotate immediately (brief reconnect)
   sakamoto rotate-api --status | --cancel  Check/cancel a staged rotation
@@ -74,6 +77,27 @@ func main() {
 		if err := runWatch(ctx, *cfgPath); err != nil {
 			fatal("watch", err)
 		}
+	case "dns-prepare":
+		if len(args) != 1 {
+			fatal("dns-prepare", fmt.Errorf("dns-prepare takes no arguments"))
+		}
+		candidate, err := security.PrepareDNS(*cfgPath)
+		if err != nil {
+			fatal("dns-prepare", err)
+		}
+		fmt.Println(candidate)
+	case "dns-restore":
+		if len(args) != 1 {
+			fatal("dns-restore", fmt.Errorf("dns-restore takes no arguments"))
+		}
+		reply, err := svc.Send("dns-restore")
+		if err != nil {
+			fatal("dns-restore", err)
+		}
+		if !strings.HasPrefix(reply, "DNS restored") {
+			fatal("dns-restore", fmt.Errorf("%s", strings.TrimSpace(reply)))
+		}
+		fmt.Println(strings.TrimSpace(reply))
 	case "recover":
 		if len(args) != 1 {
 			fatal("recover", fmt.Errorf("recover takes no arguments"))

@@ -182,6 +182,15 @@ func verifyAPI(cfg *config.Config) error {
 // ConnectWithPending applies a staged key ONLY when already disconnected, then
 // performs the user's normal connect. It never disconnects a live TUN.
 func ConnectWithPending(path string) (string, bool, error) {
+	currentCfg, err := config.Load(path)
+	if err != nil {
+		return "", false, err
+	}
+	if currentCfg.DNSGuard.Enabled {
+		if err := svc.RequireDNSLifecycle(); err != nil {
+			return "", false, err
+		}
+	}
 	secret, err := readPending(path)
 	if err != nil {
 		return "", false, err

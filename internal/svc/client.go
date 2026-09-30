@@ -8,6 +8,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/pi-dal/sakamoto/internal/config"
 )
 
 // Send sends one command to the supervisor socket and returns its reply.
@@ -17,7 +19,14 @@ func Send(cmd string) (string, error) {
 		return "", fmt.Errorf("supervisor is not running (start its LaunchDaemon first): %w", err)
 	}
 	defer func() { _ = conn.Close() }()
-	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+	timeout := 5 * time.Second
+	if cmd == "connect" {
+		timeout = 70 * time.Second
+	}
+	if cmd == "disconnect" || cmd == "dns-restore" {
+		timeout = 30 * time.Second
+	}
+	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
 		return "", err
 	}
 	if _, err := fmt.Fprintln(conn, cmd); err != nil {
@@ -31,11 +40,33 @@ func Send(cmd string) (string, error) {
 	return string(buf[:n]), nil
 }
 
+// RequireDNSLifecycle prevents a new client from mistaking an old root daemon
+// (which cannot save/restore DNS) for a safe protected-DNS controller.
+func RequireDNSLifecycle() error {
+	reply, err := Send("capabilities")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(reply) != "native-dns-v1" {
+		return fmt.Errorf("root daemon lacks native DNS lifecycle support; upgrade it while disconnected")
+	}
+	return nil
+}
+
 var statusPID = regexp.MustCompile(`\bpid=(\d+)`)
 
 // Reconnect waits for the old sing-box process to release its TUN and listener
 // before asking the root daemon to start the checked on-disk config.
 func Reconnect() error {
+	cfg, err := config.Load(config.DefaultPath())
+	if err != nil {
+		return err
+	}
+	if cfg.DNSGuard.Enabled {
+		if err := RequireDNSLifecycle(); err != nil {
+			return err
+		}
+	}
 	status, err := Send("status")
 	if err != nil {
 		return err

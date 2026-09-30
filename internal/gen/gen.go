@@ -52,6 +52,9 @@ func Run(o Options) error {
 	if err := cfg.ValidateExperiment(); err != nil {
 		return err
 	}
+	if err := cfg.ValidateDNSGuard(); err != nil {
+		return err
+	}
 	out := o.OutDir
 	if out == "" {
 		out = config.DefaultDir()
@@ -168,9 +171,38 @@ func Run(o Options) error {
 		addServer("remote0", "https", "dns.google", true)
 		dnsServers[len(dnsServers)-1]["domain_resolver"] = localPublic
 	}
-	// Resolve proxy server hostnames locally to avoid a detour bootstrap loop.
+	// Preserve the imported private resolver only for explicit LAN namespaces.
+	lanResolver := localTags[0]
+	if cfg.DNSGuard.Enabled {
+		const bootstrap = "dns-bootstrap"
+		dnsServers = append(dnsServers, map[string]any{
+			"tag": bootstrap, "type": "https", "server": cfg.DNSGuard.BootstrapIP,
+			"tls": map[string]any{"enabled": true, "server_name": cfg.DNSGuard.BootstrapServerName},
+		})
+		localPublic = bootstrap // Node/bootstrap resolution is direct but encrypted.
+		for _, server := range dnsServers {
+			tag, _ := server["tag"].(string)
+			if containsStr(remoteTags, tag) {
+				server["detour"] = exitTag
+				server["domain_resolver"] = bootstrap
+			}
+		}
+	}
+	// Resolve proxy server hostnames separately to avoid a detour bootstrap loop.
 	for _, n := range nodes {
 		n["domain_resolver"] = localPublic
+		if cfg.DNSGuard.Enabled {
+			host, _ := n["server"].(string)
+			host = strings.ToLower(host)
+			for _, suffix := range cfg.DNSGuard.LocalDomains {
+				if host == strings.ToLower(suffix) || strings.HasSuffix(host, "."+strings.ToLower(suffix)) {
+					n["domain_resolver"] = lanResolver
+				}
+			}
+			if ts.Present && (host == "ts.net" || strings.HasSuffix(host, ".ts.net")) {
+				n["domain_resolver"] = "ts-dns"
+			}
+		}
 	}
 	// DNS request rules use domain-only sets; IP CIDRs require response matching.
 	var dnsDirectSets []string
@@ -213,20 +245,29 @@ func Run(o Options) error {
 		dnsRules = append(dnsRules, map[string]any{
 			"domain_suffix": []string{"ts.net"}, "server": "ts-dns"})
 	}
-	// Direct mode keeps DNS off the chained proxy. Internal hosts and Tailscale
-	// rules above retain precedence in every mode.
-	dnsRules = append(dnsRules, map[string]any{"clash_mode": "Direct", "action": "route", "server": localPublic})
-	if len(dnsDirectSets) > 0 {
+	// Protected DNS takes precedence over traffic mode: only explicit private
+	// namespaces and MagicDNS use LAN resolvers; public DNS stays on proxy DoH.
+	if cfg.DNSGuard.Enabled && len(cfg.DNSGuard.LocalDomains) > 0 {
+		dnsRules = append(dnsRules, map[string]any{"domain_suffix": cfg.DNSGuard.LocalDomains, "server": lanResolver, "action": "route"})
+	}
+	if !cfg.DNSGuard.Enabled {
+		dnsRules = append(dnsRules, map[string]any{"clash_mode": "Direct", "action": "route", "server": localPublic})
+	}
+	if len(dnsDirectSets) > 0 && !cfg.DNSGuard.Enabled {
 		// Explicit DIRECT domains use local DNS only in Rule mode. Otherwise
 		// Global would proxy traffic after resolving those names locally.
 		dnsRules = append(dnsRules, map[string]any{"clash_mode": "Rule", "rule_set": dnsDirectSets, "server": localPublic})
 	}
 	// private-ip-answer: evaluate remote DNS first, then reject private answers.
 	if strings.EqualFold(p.general["private-ip-answer"], "true") {
-		dnsRules = append(dnsRules,
-			map[string]any{"clash_mode": "Global", "action": "evaluate", "server": globalDNS},
-			map[string]any{"clash_mode": "Rule", "action": "evaluate", "server": remoteTags[0]},
-			map[string]any{"match_response": true, "ip_is_private": true, "action": "reject"})
+		if cfg.DNSGuard.Enabled {
+			dnsRules = append(dnsRules, map[string]any{"action": "evaluate", "server": remoteTags[0]})
+		} else {
+			dnsRules = append(dnsRules,
+				map[string]any{"clash_mode": "Global", "action": "evaluate", "server": globalDNS},
+				map[string]any{"clash_mode": "Rule", "action": "evaluate", "server": remoteTags[0]})
+		}
+		dnsRules = append(dnsRules, map[string]any{"match_response": true, "ip_is_private": true, "action": "reject"})
 	}
 	dnsRules = append(dnsRules, map[string]any{"clash_mode": "Global", "action": "route", "server": globalDNS})
 
@@ -299,6 +340,11 @@ func Run(o Options) error {
 		})
 	}
 
+	if cfg.DNSGuard.Enabled {
+		inbounds = append(inbounds, map[string]any{"type": "direct", "tag": "protected-dns", "listen": "127.0.0.1", "listen_port": 53})
+		routeRules = append([]map[string]any{{"inbound": []string{"protected-dns"}, "action": "hijack-dns"}}, routeRules...)
+	}
+
 	finalTag := "direct"
 	if cfg.Experiment.Mode == "on" {
 		finalTag = exitTag
@@ -316,6 +362,10 @@ func Run(o Options) error {
 			routeRules[at] = map[string]any{"domain": learned.Domains, "action": "route", "outbound": exitTag}
 		}
 	}
+	ordinaryResolver := localPublic
+	if cfg.DNSGuard.Enabled {
+		ordinaryResolver = remoteTags[0]
+	}
 	config := map[string]any{
 		"log": map[string]any{"level": cfg.LogLevel, "timestamp": true},
 		"dns": map[string]any{
@@ -328,7 +378,7 @@ func Run(o Options) error {
 		"route": map[string]any{
 			"rules": routeRules,
 			"final": finalTag, "auto_detect_interface": true, "rule_set": srsEntries,
-			"default_domain_resolver": map[string]any{"server": localPublic, "strategy": "ipv4_only"},
+			"default_domain_resolver": map[string]any{"server": ordinaryResolver, "strategy": "ipv4_only"},
 		},
 		"services": []map[string]any{{
 			"type": "api", "listen": "127.0.0.1", "listen_port": 9090,

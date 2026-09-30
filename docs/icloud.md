@@ -39,7 +39,7 @@ URL-only main configs and remote HTTP(S) includes/`RULE-SET` lists remain import
 - The local-only `icloud-state.json` tracks completed copies. A later filesystem failure may stop the pass; successful copies keep their baseline and the error is reported.
 - Synced files are written atomically with mode `0600`; new source subdirectories use `0700`.
 
-Never sync the entire runtime folder. `sakamoto.yaml`, `config.json`, API rotation state, learned domains, `.srs`, watch/daemon sockets and logs must remain local. Downloading a source change does **not** regenerate the active core config or reconnect the VPN: generate/check it separately and plan a reconnect to apply route changes.
+Never sync the entire runtime folder. `sakamoto.yaml`, `config.json`, `dns-restore.json`, API rotation state, learned domains, `.srs`, watch/daemon sockets and logs must remain local. Downloading a source change does **not** regenerate the active core config or reconnect the VPN: generate/check it separately and plan a reconnect to apply route changes.
 
 **Privacy:** node files can contain UUIDs/passwords. Conf files can contain proxy credentials and private host mappings. Enabling sync uploads those selected sources to your iCloud Drive; a rule-only setup can use `files: []` with `include_conf: true`. Make that choice explicitly and consider Advanced Data Protection. Do not enable another Mac's previously disabled sync merely because the CLI was upgraded.
 

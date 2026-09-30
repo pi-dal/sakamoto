@@ -17,6 +17,12 @@ experiment:
   threshold: 3
 tun_stack: gvisor
 log_level: info
+dns_guard:
+  enabled: false  # use the interactive enable-dns-guard helper first
+  service: Wi-Fi
+  local_domains: [local, lan]
+  bootstrap_ip: 1.12.12.12
+  bootstrap_server_name: doh.pub
 tailscale_optimize: true
 system_proxy:
   enabled: true

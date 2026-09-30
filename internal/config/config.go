@@ -60,6 +60,13 @@ type Config struct {
 		Enabled bool   `yaml:"enabled"` // browser hostname proxy alongside the TUN; restored on disconnect
 		Service string `yaml:"service"` // macOS network service; default Wi-Fi
 	} `yaml:"system_proxy"`
+	DNSGuard struct {
+		Enabled             bool     `yaml:"enabled"`       // native DNS + system takeover; opt-in
+		Service             string   `yaml:"service"`       // macOS network service
+		LocalDomains        []string `yaml:"local_domains"` // explicitly private namespaces only
+		BootstrapIP         string   `yaml:"bootstrap_ip"`  // direct, certificate-verified IP-pinned DoH
+		BootstrapServerName string   `yaml:"bootstrap_server_name"`
+	} `yaml:"dns_guard"`
 	ICloud struct {
 		Enabled     bool     `yaml:"enabled"`      // optional, off by default; uploads configured source files
 		IncludeConf bool     `yaml:"include_conf"` // include the local conf and its relative .conf dependencies
@@ -130,6 +137,10 @@ func Default() *Config {
 	c.MixedInbound.Port = 2334
 	c.MixedInbound.AllowLAN = false
 	c.SystemProxy.Service = "Wi-Fi"
+	c.DNSGuard.Service = "Wi-Fi"
+	c.DNSGuard.LocalDomains = []string{"local", "lan"}
+	c.DNSGuard.BootstrapIP = "1.12.12.12"
+	c.DNSGuard.BootstrapServerName = "doh.pub"
 	c.ICloud.Directory = filepath.Join(home, "Library", "Mobile Documents", "com~apple~CloudDocs", "sakamoto")
 	c.ICloud.Files = []string{"nodes.txt"}
 	c.ICloud.IncludeConf = true
@@ -195,6 +206,9 @@ func Load(path string) (*Config, error) {
 	if err := c.ValidateAPIEndpoint(); err != nil {
 		return nil, err
 	}
+	if err := c.ValidateDNSGuard(); err != nil {
+		return nil, err
+	}
 	return c, nil
 }
 
@@ -229,6 +243,30 @@ func (c *Config) ValidateAPIEndpoint() error {
 	return nil
 }
 
+// ValidateDNSGuard validates system-service and TLS-bootstrap inputs.
+func (c *Config) ValidateDNSGuard() error {
+	if !c.DNSGuard.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(c.DNSGuard.Service) == "" || strings.HasPrefix(c.DNSGuard.Service, "-") || len(c.DNSGuard.Service) >= 256 || strings.ContainsAny(c.DNSGuard.Service, "\x00\r\n") {
+		return errors.New("dns_guard.service must name a macOS network service")
+	}
+	ip := net.ParseIP(c.DNSGuard.BootstrapIP)
+	if ip == nil || !ip.IsGlobalUnicast() || ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() {
+		return errors.New("dns_guard.bootstrap_ip must be a public literal IP")
+	}
+	u, err := url.Parse("https://" + c.DNSGuard.BootstrapServerName)
+	if err != nil || u.Hostname() == "" || u.User != nil || u.Hostname() != c.DNSGuard.BootstrapServerName || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+		return errors.New("dns_guard.bootstrap_server_name must be a TLS hostname")
+	}
+	for _, domain := range c.DNSGuard.LocalDomains {
+		if domain == "" || strings.ContainsAny(domain, " /\\\x00\r\n*") {
+			return errors.New("dns_guard.local_domains must contain explicit private domain suffixes")
+		}
+	}
+	return nil
+}
+
 // ValidateExperiment rejects unknown modes instead of silently widening direct access.
 func (c *Config) ValidateExperiment() error {
 	switch c.Experiment.Mode {
@@ -248,6 +286,9 @@ func (c *Config) MarshalYAML() ([]byte, error) { return yaml.Marshal(c) }
 // Save writes settings without allowing a TUI opened before a credential
 // rotation to silently put the old API key back on disk.
 func (c *Config) Save(path string) error {
+	if err := c.ValidateDNSGuard(); err != nil {
+		return err
+	}
 	if raw, err := os.ReadFile(path); err == nil {
 		var current struct {
 			API struct {

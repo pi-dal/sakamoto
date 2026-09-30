@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/pi-dal/sakamoto/internal/config"
+	"github.com/pi-dal/sakamoto/internal/sysdns"
 	"syscall"
 	"time"
 )
@@ -25,17 +26,27 @@ func SockPath() string { return filepath.Join(config.DefaultDir(), SockName) }
 
 // Server is the root supervisor process.
 type Server struct {
-	cfgPath  string
-	workDir  string
-	mu       sync.Mutex
-	child    *exec.Cmd
-	started  time.Time
-	restarts int
-	logs     []string
+	cfgPath   string
+	workDir   string
+	mu        sync.Mutex
+	lifecycle sync.Mutex
+	child     *exec.Cmd
+	childDone chan struct{}
+	dnsRun    sysdns.Runner
+	dnsProbe  func(string) error
+	dnsPorts  func(string) error
+	command   func(string, string, string) *exec.Cmd
+	dnsStatus string
+	dnsWait   time.Duration
+	started   time.Time
+	restarts  int
+	logs      []string
 }
 
 func NewServer(cfgPath, workDir string) *Server {
-	return &Server{cfgPath: cfgPath, workDir: workDir}
+	return &Server{cfgPath: cfgPath, workDir: workDir, dnsRun: sysdns.Networksetup, dnsProbe: sysdns.Probe, dnsPorts: sysdns.PortsFree, dnsWait: 25 * time.Second,
+		command: func(binary, path, dir string) *exec.Cmd { return exec.Command(binary, "run", "-c", path, "-D", dir) },
+	}
 }
 
 // Run starts the control socket but waits for an explicit connect command.
@@ -43,6 +54,13 @@ func (s *Server) Run() error {
 	sock := filepath.Join(s.workDir, SockName)
 	if err := os.MkdirAll(filepath.Dir(sock), 0o700); err != nil {
 		return err
+	}
+	// If the supervisor itself restarted without a child, recover an orphaned
+	// DNS snapshot only when no listener still owns port 53.
+	if _, err := os.Lstat(s.dnsStatePath()); err == nil && s.dnsPorts("127.0.0.1:53") == nil {
+		if err := s.restoreDNS(); err != nil {
+			fmt.Println("daemon: DNS restoration pending:", err)
+		}
 	}
 	if err := os.Remove(sock); err != nil && !os.IsNotExist(err) {
 		return err
@@ -93,7 +111,7 @@ func (s *Server) monitorVPNConflict() {
 			continue
 		}
 		s.mu.Lock()
-		running := s.child != nil && s.child.ProcessState == nil
+		running := s.runningLocked()
 		s.mu.Unlock()
 		if running {
 			s.appendLog("Shadowrocket VPN connected; stopping sing-box to avoid two active TUNs")
@@ -117,6 +135,10 @@ func (s *Server) handle(c net.Conn) {
 		reply = s.stop()
 	case "status":
 		reply = s.status()
+	case "capabilities":
+		reply = "native-dns-v1"
+	case "dns-restore":
+		reply = s.restoreDNSCommand()
 	case "logs":
 		reply = strings.Join(s.lastLogs(15), "\n")
 	default:
@@ -155,30 +177,93 @@ func shadowrocketVPNConnected() bool {
 	}
 	return false
 }
-func (s *Server) start() string {
+func (s *Server) start() string { return s.startGeneration(nil, 0) }
+
+func (s *Server) startGeneration(expected *exec.Cmd, generation int) string {
+	s.lifecycle.Lock()
+	defer s.lifecycle.Unlock()
+	s.mu.Lock()
+	if expected != nil && (s.child != expected || s.restarts != generation) {
+		s.mu.Unlock()
+		return "restart canceled"
+	}
+	if s.runningLocked() {
+		s.mu.Unlock()
+		return "already running"
+	}
+	s.mu.Unlock()
 	if shadowrocketVPNConnected() {
 		return "start failed: disconnect Shadowrocket VPN first; two TUNs cannot run together"
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.child != nil && s.child.ProcessState == nil {
-		return "already running"
 	}
 	if err := validateAPIService(s.cfgPath); err != nil {
 		return "start failed: " + err.Error()
 	}
-	cmd := exec.Command(singBoxExecutable(), "run",
-		"-c", s.cfgPath, "-D", s.workDir)
-	cmd.Stdout = logWriter{s}
-	cmd.Stderr = logWriter{s}
+	dnsCfg, guard, err := s.dnsPlan()
+	if err != nil {
+		return "start failed: " + err.Error()
+	}
+	hadState := false
+	if _, e := os.Lstat(s.dnsStatePath()); e == nil {
+		hadState = true
+	}
+	if !guard {
+		if err := s.restoreDNS(); err != nil {
+			return "start failed: " + err.Error()
+		}
+	}
+	if guard {
+		if err := s.dnsPorts("127.0.0.1:53"); err != nil {
+			return "start failed: " + err.Error()
+		}
+	}
+	cmd := s.command(singBoxExecutable(), s.cfgPath, s.workDir)
+	cmd.Stdout, cmd.Stderr = logWriter{s}, logWriter{s}
 	if err := cmd.Start(); err != nil {
 		return "start failed: " + err.Error()
 	}
-	s.child = cmd
-	s.started = time.Now()
+	done := make(chan struct{})
+	s.mu.Lock()
+	s.child, s.childDone, s.started = cmd, done, time.Now()
 	s.restarts++
-	go s.waitLoop(cmd, s.restarts)
-	return fmt.Sprintf("connected (pid %d)", cmd.Process.Pid)
+	gen := s.restarts
+	s.dnsStatus = "off"
+	if guard {
+		s.dnsStatus = "starting"
+	}
+	s.mu.Unlock()
+	go s.waitLoop(cmd, gen, done)
+	if guard {
+		if err := s.protectDNS(dnsCfg, done); err != nil {
+			// A core crash-restart retains loopback DNS (fail closed) while
+			// the watcher repairs entries. Never fall back to DHCP implicitly.
+			if hadState {
+				s.mu.Lock()
+				s.dnsStatus = "degraded"
+				s.mu.Unlock()
+				return fmt.Sprintf("connected (pid %d) dns=degraded; protected snapshot retained: %v", cmd.Process.Pid, err)
+			}
+			if restoreErr := s.restoreDNS(); restoreErr != nil {
+				s.mu.Lock()
+				s.dnsStatus = "degraded"
+				s.mu.Unlock()
+				return fmt.Sprintf("connected (pid %d) dns=degraded; core retained: %v; restore: %v", cmd.Process.Pid, err, restoreErr)
+			}
+			s.mu.Lock()
+			s.restarts++
+			s.child = nil
+			s.dnsStatus = "failed"
+			s.mu.Unlock()
+			_ = cmd.Process.Signal(syscall.SIGTERM)
+			return "start failed: " + err.Error()
+		}
+		s.mu.Lock()
+		s.dnsStatus = "protected"
+		s.mu.Unlock()
+	}
+	s.mu.Lock()
+	dnsStatus := s.dnsStatus
+	s.mu.Unlock()
+	return fmt.Sprintf("connected (pid %d) dns=%s", cmd.Process.Pid, dnsStatus)
 }
 
 // singBoxExecutable supports Apple Silicon, Intel, and non-default Homebrew
@@ -235,24 +320,35 @@ func validateAPIService(path string) error {
 }
 
 // waitLoop restarts unexpected exits with backoff; intentional stops are excluded.
-func (s *Server) waitLoop(cmd *exec.Cmd, gen int) {
+func (s *Server) waitLoop(cmd *exec.Cmd, gen int, done chan struct{}) {
 	err := cmd.Wait()
+	close(done)
 	s.appendLog(fmt.Sprintf("sing-box exited: %v", err))
 	time.Sleep(2 * time.Second)
 	s.mu.Lock()
 	if s.child == cmd && gen == s.restarts { // Restart only if this process generation is still current.
 		s.mu.Unlock()
 		s.appendLog("auto-restart")
-		s.start()
+		s.startGeneration(cmd, gen)
 		return
 	}
 	s.mu.Unlock()
 }
 
 func (s *Server) stop() string {
+	s.lifecycle.Lock()
+	defer s.lifecycle.Unlock()
+	// Restore before killing the only loopback DNS listener. If restoration
+	// fails, retain the core and snapshot rather than strand the machine.
+	if err := s.restoreDNS(); err != nil {
+		return "disconnect failed: " + err.Error()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.child == nil || s.child.ProcessState != nil {
+	if !s.runningLocked() {
+		s.restarts++
+		s.child = nil
+		s.dnsStatus = "off"
 		return "not running"
 	}
 	s.restarts++ // Invalidate waitLoop's generation to prevent auto-restart.
@@ -262,15 +358,16 @@ func (s *Server) stop() string {
 		return "disconnect failed: " + err.Error()
 	}
 	s.child = nil
+	s.dnsStatus = "off"
 	return fmt.Sprintf("disconnected (pid %d)", pid)
 }
 
 func (s *Server) status() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.child != nil && s.child.ProcessState == nil {
-		return fmt.Sprintf("connected pid=%d up=%s restarts=%d",
-			s.child.Process.Pid, time.Since(s.started).Round(time.Second), s.restarts)
+	if s.runningLocked() {
+		return fmt.Sprintf("connected pid=%d up=%s restarts=%d dns=%s",
+			s.child.Process.Pid, time.Since(s.started).Round(time.Second), s.restarts, s.dnsStatus)
 	}
 	return "disconnected"
 }

@@ -76,6 +76,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) onService(v serviceMsg) tea.Cmd {
 	previous, wasSR := m.serviceState, m.shadowrocket
 	m.serviceErr = v.err
+	m.dnsState = v.dns
 	m.shadowrocket = v.shadowrocket
 	if v.err != nil {
 		m.serviceState = "unavailable"

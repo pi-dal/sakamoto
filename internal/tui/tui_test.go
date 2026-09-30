@@ -67,6 +67,12 @@ func TestDashboardMouse(t *testing.T) {
 		t.Fatalf("click settings: %d", m.page)
 	}
 	m.height = 24
+	for i, row := range m.cfgRows {
+		if row.label == "Block STUN / WebRTC" {
+			m.cfgCursor = i
+			break
+		}
+	}
 	m.View()
 	before := m.cfg.BlockSTUN
 	var settingHit hit

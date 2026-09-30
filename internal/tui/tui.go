@@ -51,6 +51,7 @@ type errMsg error
 type tickMsg struct{}
 type serviceMsg struct {
 	state        string
+	dns          string
 	err          error
 	shadowrocket bool
 }
@@ -103,6 +104,7 @@ type model struct {
 	page, cursor, cfgCursor, scroll, settingsScroll int
 	width, height                                   int
 	serviceState, mode, notice                      string
+	dnsState                                        string
 	shadowrocket                                    bool
 	conflictStopping                                bool
 	lastTest                                        map[string]int32
@@ -232,7 +234,17 @@ func queryService() tea.Msg {
 	if err != nil {
 		return serviceMsg{err: err, shadowrocket: shadowrocket}
 	}
-	return serviceMsg{state: strings.Fields(s)[0], shadowrocket: shadowrocket}
+	fields := strings.Fields(s)
+	if len(fields) == 0 {
+		return serviceMsg{err: fmt.Errorf("empty supervisor status"), shadowrocket: shadowrocket}
+	}
+	dns := ""
+	for _, field := range fields {
+		if strings.HasPrefix(field, "dns=") {
+			dns = strings.TrimPrefix(field, "dns=")
+		}
+	}
+	return serviceMsg{state: fields[0], dns: dns, shadowrocket: shadowrocket}
 }
 func tick() tea.Cmd            { return tea.Tick(2*time.Second, func(time.Time) tea.Msg { return tickMsg{} }) }
 func (m *model) Init() tea.Cmd { return tea.Batch(tick(), queryService) }
@@ -318,6 +330,25 @@ func (m *model) buildSettings() {
 				return fmt.Errorf("failure threshold must be between 1 and 20")
 			}
 			c.Experiment.Threshold = v
+			return nil
+		}},
+		{label: "DNS · Privacy"},
+		toggle("Protected system DNS", &c.DNSGuard.Enabled),
+		{label: "DNS network service", value: func() string { return c.DNSGuard.Service }, edit: func(s string) error {
+			if strings.TrimSpace(s) == "" || strings.ContainsAny(s, "\x00\r\n") {
+				return fmt.Errorf("enter a macOS network service")
+			}
+			c.DNSGuard.Service = s
+			return nil
+		}},
+		{label: "Private DNS suffixes", value: func() string { return strings.Join(c.DNSGuard.LocalDomains, ",") }, edit: func(s string) error {
+			parts := splitNonEmpty(s, ",")
+			for _, p := range parts {
+				if strings.ContainsAny(p, " /\\\x00\r\n*") {
+					return fmt.Errorf("use explicit private domain suffixes")
+				}
+			}
+			c.DNSGuard.LocalDomains = parts
 			return nil
 		}},
 		{label: "UDP · Privacy"},

@@ -31,4 +31,5 @@ The Go parser was repaired locally for the quality pass. The tool's shell parser
 - No real nodes, subscription tokens, SOCKS credentials, or generated configs are tracked in git. User state stays in `~/.sakamoto` (legacy state stays in `~/.config/sakamoto` until migration).
 - Imports **and refreshes** now snapshot last-working `config.json`/rules, validate with `sing-box check`, and roll back after failure. Configured subscriptions fail closed instead of silently disappearing when an endpoint is down.
 - New installs get a random API secret; the installer rejects example secrets. Existing users should rotate any legacy placeholder secret during a planned restart.
+- Protected system DNS uses sing-box-native UDP/TCP interception, certificate-verified proxy DoH and separate encrypted bootstrap. Root DNS snapshot/read-back/restore and legacy-daemon capability are tested; administrative activation is explicit, never claimed from a CLI update alone.
 - iCloud sync is opt-in and scoped to explicit source paths and the configured local conf/include graph; runtime state and API credentials are excluded.

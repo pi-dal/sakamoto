@@ -41,6 +41,7 @@ For TUN and always-on fallback, install the macOS services *once*: `bash "$(brew
 
 - [TUI: mouse and keyboard workflows](docs/tui.md)
 - [Configuration, fallback and privacy](docs/configuration.md)
+- [Native protected system DNS and administrative activation](docs/dns-protection.md)
 - [Shadowrocket import and unsupported features](docs/import.md)
 - [macOS installation and legacy-directory migration](docs/migration.md)
 - [iCloud Drive sync (optional)](docs/icloud.md)
