@@ -153,6 +153,28 @@ func (m *model) activateSetting(i int) tea.Cmd {
 		return nil
 	}
 	r := m.cfgRows[i]
+	if len(r.choices) > 0 {
+		old := r.value()
+		next := r.choices[0]
+		for j, value := range r.choices {
+			if value == old {
+				next = r.choices[(j+1)%len(r.choices)]
+				break
+			}
+		}
+		if err := r.edit(next); err != nil {
+			m.notice = err.Error()
+			return nil
+		}
+		if err := m.cfg.Save(m.cfgPath); err != nil {
+			_ = r.edit(old)
+			m.notice = "Save failed: " + err.Error()
+			return nil
+		}
+		m.editIndex = -1
+		m.notice = "Saved: " + r.label + " = " + next + "; regenerate and reconnect to apply routing"
+		return nil
+	}
 	if r.toggle != nil {
 		return m.toggleSetting(i)
 	}

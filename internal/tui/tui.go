@@ -73,10 +73,11 @@ type importMsg struct {
 }
 
 type cfgRow struct {
-	label  string
-	value  func() string
-	toggle func()
-	edit   func(string) error
+	label   string
+	value   func() string
+	toggle  func()
+	edit    func(string) error
+	choices []string // Click/Enter cycles these states instead of opening an editor.
 }
 type row struct {
 	group *daemon.Group
@@ -257,6 +258,11 @@ func (m *model) buildSettings() {
 			return fmt.Errorf("allowed values: %s", strings.Join(allowed, " / "))
 		}}
 	}
+	cycleChoice := func(label string, p *string, allowed ...string) cfgRow {
+		row := choice(label, p, allowed...)
+		row.choices = allowed
+		return row
+	}
 	port := cfgRow{label: "Listen port", value: func() string { return fmt.Sprint(c.MixedInbound.Port) }, edit: func(s string) error {
 		v, err := strconv.Atoi(s)
 		if err != nil || v < 1 || v > 65535 {
@@ -303,7 +309,7 @@ func (m *model) buildSettings() {
 		toggle("Strict routing", &c.StrictRoute),
 		choice("TUN stack", &c.TunStack, "system", "gvisor", "mixed"),
 		{label: "Experimental · Unmatched traffic"},
-		choice("Unmatched policy", &c.Experiment.Mode, "off", "on", "auto"),
+		cycleChoice("Unmatched policy", &c.Experiment.Mode, "off", "on", "auto"),
 		{label: "Direct failure threshold", value: func() string { return fmt.Sprint(c.Experiment.Threshold) }, edit: func(s string) error {
 			v, err := strconv.Atoi(s)
 			if err != nil || v < 1 || v > 20 {

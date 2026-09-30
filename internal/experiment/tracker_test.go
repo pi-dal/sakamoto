@@ -61,6 +61,48 @@ func TestTrackerOnlyCorrelatedFailedFinalDirect(t *testing.T) {
 		}
 	}
 }
+func TestTrackerExpiresAttemptsAndRequiresThirtyMinuteWindow(t *testing.T) {
+	t0 := time.Now()
+	tracker := NewTracker(3)
+	log := "connection: open connection to example.com:443 using outbound/direct[direct]: dial tcp 93.184.215.14:443: i/o timeout"
+	for i, elapsed := range []time.Duration{0, 20 * time.Minute, 40 * time.Minute} {
+		at := t0.Add(elapsed)
+		tracker.Connection(conn(string(rune('a'+i)), "", "example.com", 0, daemon.ConnectionEventType_CONNECTION_EVENT_NEW), at)
+		if got := tracker.Failure(log, at, true); got != "" {
+			t.Fatal("failures spanning more than thirty minutes must not promote", got)
+		}
+	}
+	if tracker.counts["example.com"].n != 1 {
+		t.Fatal("failure window was not reset")
+	}
+	at := t0.Add(41 * time.Minute)
+	tracker.Connection(conn("expired", "", "example.com", 0, daemon.ConnectionEventType_CONNECTION_EVENT_NEW), at)
+	tracker.Connection(nil, at.Add(3*time.Minute))
+	if len(tracker.active) != 0 {
+		t.Fatal("old observations leaked without error logs")
+	}
+	tracker.Connection(conn("success", "", "example.com", 0, daemon.ConnectionEventType_CONNECTION_EVENT_NEW), at.Add(4*time.Minute))
+	tracker.Connection(conn("success", "", "example.com", 100, daemon.ConnectionEventType_CONNECTION_EVENT_CLOSED), at.Add(4*time.Minute+time.Second))
+	if len(tracker.active) != 0 || len(tracker.counts) != 0 {
+		t.Fatal("successful direct response must clear attempts and counters")
+	}
+}
+
+func TestTrackerDoesNotLearnHTTPChallengesOrExistingProxyRoutes(t *testing.T) {
+	tracker := NewTracker(1)
+	at := time.Now()
+	proxy := conn("proxy", "rule_set=rs-proxy", "openai.com", 0, daemon.ConnectionEventType_CONNECTION_EVENT_NEW)
+	proxy.Connection.Outbound = "Exit"
+	tracker.Connection(proxy, at)
+	if len(tracker.active) != 0 {
+		t.Fatal("existing proxy routes must not become unmatched direct candidates")
+	}
+	tracker.Connection(conn("http", "", "example.com", 0, daemon.ConnectionEventType_CONNECTION_EVENT_NEW), at)
+	if got := tracker.Failure("HTTP 403 cf-mitigated: challenge", at, true); got != "" {
+		t.Fatal("website challenge is not a direct dial failure")
+	}
+}
+
 func TestRuleInsertionKeepsExplicitPolicies(t *testing.T) {
 	original := []byte(`{"route":{"final":"direct","rules":[{"rule_set":["rs-reject"],"action":"reject"},{"rule_set":["rs-direct"],"outbound":"direct","action":"route"},{"rule_set":["rs-proxy"],"outbound":"Exit","action":"route"}]}}`)
 	out, err := AddRule(original, []string{"example.com"}, "Exit")

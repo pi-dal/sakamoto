@@ -31,7 +31,23 @@ type Tracker struct {
 func NewTracker(threshold int) *Tracker {
 	return &Tracker{active: map[string]attempt{}, counts: map[string]count{}, threshold: threshold}
 }
+
+// prune bounds observed attempts even if no timeout error ever arrives.
+func (t *Tracker) prune(now time.Time) {
+	for id, a := range t.active {
+		if now.Sub(a.seen) > 2*time.Minute {
+			delete(t.active, id)
+		}
+	}
+	for domain, c := range t.counts {
+		if now.Sub(c.first) >= 30*time.Minute {
+			delete(t.counts, domain)
+		}
+	}
+}
+
 func (t *Tracker) Connection(ev *daemon.ConnectionEvent, now time.Time) {
+	t.prune(now)
 	if ev == nil || ev.Connection == nil {
 		return
 	}
@@ -39,6 +55,7 @@ func (t *Tracker) Connection(ev *daemon.ConnectionEvent, now time.Time) {
 	if ev.Type == daemon.ConnectionEventType_CONNECTION_EVENT_CLOSED {
 		if a, ok := t.active[ev.Id]; ok && c.DownlinkTotal > 0 {
 			delete(t.counts, a.domain)
+			delete(t.active, ev.Id) // A successful attempt must not match a later error.
 		}
 		// Keep closed attempts briefly: the error log can arrive after CLOSED.
 		return
@@ -60,6 +77,7 @@ func (t *Tracker) Connection(ev *daemon.ConnectionEvent, now time.Time) {
 // Failure returns a newly learned domain only after spaced, independent
 // direct timeouts. The caller must also establish a recent healthy proxy.
 func (t *Tracker) Failure(log string, now time.Time, proxyHealthy bool) string {
+	t.prune(now)
 	match := directFailure.FindStringSubmatch(log)
 	if len(match) != 3 || !proxyHealthy {
 		return ""
@@ -85,7 +103,7 @@ func (t *Tracker) Failure(log string, now time.Time, proxyHealthy bool) string {
 		return ""
 	}
 	c := t.counts[domain]
-	if now.Sub(c.last) > 30*time.Minute {
+	if c.first.IsZero() || now.Sub(c.first) >= 30*time.Minute {
 		c = count{first: now}
 	}
 	if !c.last.IsZero() && now.Sub(c.last) < 10*time.Second {

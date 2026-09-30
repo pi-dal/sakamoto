@@ -772,12 +772,22 @@ func (m *model) renderSettings(b *strings.Builder, startY int) {
 			continue
 		}
 		indicator := ""
-		if r.toggle != nil {
+		value := r.value()
+		if len(r.choices) > 0 {
+			parts := make([]string, len(r.choices))
+			for j, state := range r.choices {
+				parts[j] = state
+				if state == value {
+					parts[j] = "[" + state + "]"
+				}
+			}
+			value = strings.Join(parts, "  ")
+		} else if r.toggle != nil {
 			indicator = " [toggle]"
 		} else if r.edit != nil {
 			indicator = " [edit]"
 		}
-		line := fmt.Sprintf(" %-31s %s%s", r.label, r.value(), indicator)
+		line := fmt.Sprintf(" %-31s %s%s", r.label, value, indicator)
 		if i == m.cfgCursor || m.hovered("setting", i) {
 			line = focus.Render(">" + line)
 		}
