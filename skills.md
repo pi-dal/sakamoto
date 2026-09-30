@@ -17,7 +17,7 @@ This file is intentionally short and safe to load into an agent context.
 7. Shadowrocket and sing-box must never have active TUN/VPN sessions at the same time. The daemon checks this and stops sing-box if Shadowrocket reconnects.
 8. Importing a Shadowrocket conf must follow relative `include` files, merge list-valued General settings, map exact `[Host]` entries, and fail closed if an include or remote rule list cannot be loaded.
 9. Test status vocabulary is meaningful: `Untested`, `Testing…`, `Reachable Nms`, `Failed/timed out`; a selected dot is not a connectivity claim.
-10. iCloud sync is opt-in and limited to explicitly named source files; never sync `sakamoto.yaml`, generated `config.json`, logs, sockets, or API credentials. Never overwrite simultaneous edits.
+10. iCloud sync is opt-in and limited to explicit source paths plus the configured local conf/include graph when `include_conf` is enabled; never sync `sakamoto.yaml`, generated `config.json`, logs, sockets, or API credentials. Never overwrite simultaneous edits.
 11. Use `pnpm`/PDM/mise preferences where applicable; Go dependencies use the existing `go.mod`.
 
 ## Verification

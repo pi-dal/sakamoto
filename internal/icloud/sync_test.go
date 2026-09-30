@@ -21,6 +21,7 @@ func TestSyncUploadDownloadAndConflict(t *testing.T) {
 	}
 	c := config.Default()
 	c.ICloud.Enabled = true
+	c.ConfPath = ""
 	c.ICloud.Directory = remote
 	c.ICloud.Files = []string{"nodes.txt"}
 	src := filepath.Join(local, "nodes.txt")
@@ -62,8 +63,9 @@ func TestSyncUploadDownloadAndConflict(t *testing.T) {
 func TestSyncRejectsGeneratedAndSecretFiles(t *testing.T) {
 	c := config.Default()
 	c.ICloud.Enabled = true
+	c.ConfPath = ""
 	c.ICloud.Directory = t.TempDir()
-	for _, name := range []string{"config.json", "sakamoto.yaml", "../secrets", "rules.srs", "proxy-restore.json", "auto-proxy.json", "api-rotation.pending.json", "watch.sock", "watch.lock"} {
+	for _, name := range []string{"config.json", "sakamoto.yaml", "../secrets", "rules.srs", "proxy-restore.json", "auto-proxy.json", "api-rotation.pending.json", "watch.sock", "watch.lock", "sources/config.json", "sources/Sakamoto.yaml", "nested/../notes.conf", "sources/file.srs"} {
 		c.ICloud.Files = []string{name}
 		if _, e := Sync(t.TempDir(), c); e == nil {
 			t.Errorf("accepted forbidden %s", name)

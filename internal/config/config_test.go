@@ -41,6 +41,27 @@ func TestDefaultDirOverrideAndRandomSecret(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+func TestLegacyCloudConsentDoesNotExpandWithoutOptIn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sakamoto.yaml")
+	if err := os.WriteFile(path, []byte("icloud:\n  enabled: true\n  files: [nodes.txt]\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil || !cfg.ICloud.Enabled || cfg.ICloud.IncludeConf {
+		t.Fatal("legacy nodes-only upload expanded without consent", err)
+	}
+	if err := os.WriteFile(path, []byte("icloud:\n  enabled: true\n  include_conf: true\n  files: [nodes.txt]\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil || !cfg.ICloud.IncludeConf {
+		t.Fatal("explicit conf sync opt-in ignored", err)
+	}
+	if Default().ICloud.Enabled || !Default().ICloud.IncludeConf {
+		t.Fatal("fresh sync defaults are unsafe or missing conf discovery")
+	}
+}
+
 func TestStaleSettingsCannotRestoreOldAPIKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sakamoto.yaml")
 	stale := Default()

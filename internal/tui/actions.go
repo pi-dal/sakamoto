@@ -405,6 +405,9 @@ func (m *model) handleInput(k tea.KeyMsg) tea.Cmd {
 			return nil
 		}
 		m.notice = "Saved; regenerate in Config and reconnect to apply"
+		if r.label == "iCloud directory" || r.label == "Additional source paths" {
+			m.notice = "Saved; iCloud watcher reloads within one minute (no VPN reconnect)"
+		}
 		m.editIndex = -1
 		m.editing = ""
 		m.input = ""
@@ -603,9 +606,11 @@ func (m *model) toggleSetting(i int) tea.Cmd {
 		return nil
 	}
 	r := m.cfgRows[i]
-	if r.label == "Sync node sources to iCloud" && !m.cfg.ICloud.Enabled && m.pendingDelete != "icloud:confirm" {
+	confirmCloud := r.label == "Sync sources to iCloud" && !m.cfg.ICloud.Enabled
+	confirmConf := r.label == "Include conf and rule includes" && m.cfg.ICloud.Enabled && !m.cfg.ICloud.IncludeConf
+	if (confirmCloud || confirmConf) && m.pendingDelete != "icloud:confirm" {
 		m.pendingDelete = "icloud:confirm"
-		m.notice = "Click again to confirm uploading selected sources (possibly including node passwords) to iCloud Drive"
+		m.notice = "Click again to upload source files and rules (possibly including credentials or private host mappings) to iCloud Drive"
 		return nil
 	}
 	m.pendingDelete = ""
@@ -616,6 +621,9 @@ func (m *model) toggleSetting(i int) tea.Cmd {
 		return nil
 	}
 	m.notice = "Saved · regenerate to apply on the next connection"
+	if r.label == "Sync sources to iCloud" || r.label == "Include conf and rule includes" {
+		m.notice = "Saved; iCloud watcher reloads within one minute (no VPN reconnect)"
+	}
 	return nil
 }
 func (m *model) generate() tea.Cmd {

@@ -61,9 +61,10 @@ type Config struct {
 		Service string `yaml:"service"` // macOS network service; default Wi-Fi
 	} `yaml:"system_proxy"`
 	ICloud struct {
-		Enabled   bool     `yaml:"enabled"`   // optional, off by default; uploads node links to iCloud Drive
-		Directory string   `yaml:"directory"` // absolute iCloud Drive directory
-		Files     []string `yaml:"files"`     // source filenames only; generated files are forbidden
+		Enabled     bool     `yaml:"enabled"`      // optional, off by default; uploads configured source files
+		IncludeConf bool     `yaml:"include_conf"` // include the local conf and its relative .conf dependencies
+		Directory   string   `yaml:"directory"`    // absolute iCloud Drive directory
+		Files       []string `yaml:"files"`        // additional relative source paths; generated files are forbidden
 	} `yaml:"icloud"`
 	TailscaleOptimize bool   `yaml:"tailscale_optimize"` // auto-detect Tailscale; default true
 	UTLSFingerprint   string `yaml:"utls_fingerprint"`   // global fingerprint override; empty uses node links
@@ -131,6 +132,7 @@ func Default() *Config {
 	c.SystemProxy.Service = "Wi-Fi"
 	c.ICloud.Directory = filepath.Join(home, "Library", "Mobile Documents", "com~apple~CloudDocs", "sakamoto")
 	c.ICloud.Files = []string{"nodes.txt"}
+	c.ICloud.IncludeConf = true
 	c.TailscaleOptimize = true
 	c.URLTest.URL = "https://www.gstatic.com/generate_204"
 	c.URLTest.Interval = "10m"
@@ -161,9 +163,18 @@ func Load(path string) (*Config, error) {
 	// proxy final rather than silently changing them to the new off=direct mode.
 	var marker struct {
 		Experiment *yaml.Node `yaml:"experiment"`
+		ICloud     *struct {
+			IncludeConf *bool `yaml:"include_conf"`
+		} `yaml:"icloud"`
 	}
 	if err := yaml.Unmarshal(b, &marker); err != nil {
 		return nil, err
+	}
+	// An old nodes-only consent must not silently expand to private confs.
+	// Fresh configs use the new default; existing iCloud sections opt in by
+	// explicitly setting include_conf or confirming the new TUI control.
+	if marker.ICloud != nil && marker.ICloud.IncludeConf == nil {
+		c.ICloud.IncludeConf = false
 	}
 	if marker.Experiment == nil {
 		raw, e := os.ReadFile(filepath.Join(filepath.Dir(path), "config.json"))

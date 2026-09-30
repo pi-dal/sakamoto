@@ -8,6 +8,7 @@
 ├── nodes.txt           # manual proxy share links, one per line
 ├── config.json         # generated sing-box configuration
 ├── auto-proxy.json     # local-only learned domains (experimental auto mode)
+├── sources/            # local conf/include sources; optional source-only iCloud sync
 ├── rules/              # generated binary rule sets
 ├── imports/            # cached remote Shadowrocket conf files
 └── logs/

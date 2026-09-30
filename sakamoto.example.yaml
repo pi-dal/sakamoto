@@ -38,5 +38,6 @@ allow_hosts: []
 subscriptions: []
 icloud:
   enabled: false
+  include_conf: true  # includes the actual local .conf and its relative .conf dependencies
   directory: /absolute/path/to/iCloudDrive/sakamoto
   files: [nodes.txt]

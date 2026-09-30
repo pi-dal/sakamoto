@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/pi-dal/sakamoto/internal/config"
 	"github.com/pi-dal/sakamoto/internal/gen"
+	"github.com/pi-dal/sakamoto/internal/icloud"
 	"github.com/pi-dal/sakamoto/internal/sbclient"
 	"github.com/pi-dal/sakamoto/internal/svc"
 	"github.com/sagernet/sing-box/daemon"
@@ -285,7 +286,8 @@ func (m *model) buildSettings() {
 		{label: "TUN · Network"},
 		toggle("Chain SOCKS exit", &c.ChainEnabled),
 		toggle("Optimize Tailscale", &c.TailscaleOptimize),
-		toggle("Sync node sources to iCloud", &c.ICloud.Enabled),
+		toggle("Sync sources to iCloud", &c.ICloud.Enabled),
+		toggle("Include conf and rule includes", &c.ICloud.IncludeConf),
 		{label: "iCloud directory", value: func() string { return c.ICloud.Directory }, edit: func(s string) error {
 			if !filepath.IsAbs(s) {
 				return fmt.Errorf("iCloud path must be absolute")
@@ -293,14 +295,14 @@ func (m *model) buildSettings() {
 			c.ICloud.Directory = s
 			return nil
 		}},
-		{label: "iCloud source files", value: func() string { return strings.Join(c.ICloud.Files, ",") }, edit: func(s string) error {
+		{label: "Additional source paths", value: func() string { return strings.Join(c.ICloud.Files, ",") }, edit: func(s string) error {
 			parts := splitNonEmpty(s, ",")
-			if len(parts) == 0 {
-				return fmt.Errorf("at least one source filename is required")
+			if len(parts) == 0 && !c.ICloud.IncludeConf {
+				return fmt.Errorf("choose source paths or enable conf sync")
 			}
 			for _, p := range parts {
-				if p != filepath.Base(p) || p == "config.json" || p == "sakamoto.yaml" || p == "auto-proxy.json" || p == "api-rotation.pending.json" || p == "proxy-restore.json" || p == "watch.sock" || p == "watch.lock" || strings.HasSuffix(p, ".srs") || strings.HasSuffix(p, ".log") {
-					return fmt.Errorf("only source filenames are allowed; generated files and API keys cannot be synced")
+				if !icloud.ValidSourceName(p) {
+					return fmt.Errorf("only relative source paths are allowed; generated state and keys cannot be synced")
 				}
 			}
 			c.ICloud.Files = parts
