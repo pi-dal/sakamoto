@@ -41,7 +41,14 @@ else:
  else:raise SystemExit('Old TUN still running; refusing another')
 PY
 }
-echo 'This will prepare/validate native DNS, stop the TUN once, refresh ONLY its root supervisor, and reconnect.'
+shadowrocket_connected() {
+  /usr/sbin/scutil --nc list | grep -E '\(Connected\).*com\.liguangming\.Shadowrocket' >/dev/null
+}
+if shadowrocket_connected; then
+  echo 'Shadowrocket VPN is connected. Leave it in place; do not start a second TUN or activate protected DNS.' >&2
+  exit 1
+fi
+echo 'This will prepare/validate native DNS, stop the TUN once if active, refresh an outdated root supervisor only, and connect.'
 echo 'Original system DNS will be saved. No extra DNS daemon is installed.'
 read -r -p 'Proceed with this planned reconnect and allow administrative changes? [y/N] ' answer
 [[ "$answer" == y || "$answer" == Y ]] || exit 0
@@ -55,6 +62,23 @@ candidate="$("$bin" --config "$dir/sakamoto.yaml" dns-prepare)"
 [[ "$candidate" == "$dir"/.dns-candidate-* && -f "$candidate/config.json" && -f "$candidate/sakamoto.yaml" ]] || { echo 'DNS candidate was not prepared safely.' >&2; exit 1; }
 was_connected=false
 [[ "$(sock_cmd status)" == connected* ]] && was_connected=true
+bootstrap_root() {
+  # bootout is asynchronous on macOS. A single immediate bootstrap can fail
+  # with launchd error 37 ("operation already in progress"), surfaced as 5.
+  local attempt=0
+  while (( attempt < 15 )); do
+    attempt=$((attempt + 1))
+    if sudo -n launchctl bootstrap system "$plist" 2>"$backup/bootstrap.err"; then
+      return 0
+    fi
+    if launchctl print "system/$label" >/dev/null 2>&1 && sock_cmd status >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  echo "Root service did not restart after retries: $(<"$backup/bootstrap.err")" >&2
+  return 1
+}
 rollback() {
   echo 'Activation failed; restoring the previous configuration.' >&2
   # A failing DNS restoration must NOT destroy its still-running listener.
@@ -68,13 +92,19 @@ rollback() {
   cp "$backup/config.json" "$dir/config.json"
   cp "$backup/sakamoto.yaml" "$dir/sakamoto.yaml"
   if ! sock_cmd status >/dev/null 2>&1; then
-    sudo -n launchctl bootstrap system "$plist" || true
+    bootstrap_root || { echo 'Previous files restored but root service is absent; keep fallback VPN until manual repair.' >&2; return 1; }
     for _ in {1..30}; do sock_cmd status >/dev/null 2>&1 && break; sleep 1; done
+    sock_cmd status >/dev/null || { echo 'Root service did not open its socket; keep fallback VPN until manual repair.' >&2; return 1; }
   fi
-  if [[ "$was_connected" == true ]]; then
-    restored="$(sock_cmd connect)" || return 1
-    [[ "$restored" == connected* ]] || { echo 'Old configuration restored but reconnect failed.' >&2; return 1; }
+  if shadowrocket_connected; then
+    echo 'Root service restored. Shadowrocket is now connected, so the old TUN will NOT be reconnected.' >&2
+    return 0
   fi
+  # The user explicitly requested a protected connection. If it failed while
+  # switching from Shadowrocket, reconnect the saved *unprotected* config;
+  # leaving both VPNs off would repeat the outage.
+  restored="$(sock_cmd connect)" || return 1
+  [[ "$restored" == connected* ]] || { echo 'Old configuration restored but reconnect failed.' >&2; return 1; }
 }
 committed=false
 trap '[[ "$committed" == true ]] || rollback' EXIT
@@ -84,13 +114,15 @@ if [[ "$was_connected" == true ]]; then
   [[ "$reply" == disconnected* ]] || { echo 'Disconnect refused; active network retained.' >&2; exit 1; }
   wait_child "$old"
 fi
-sudo -n launchctl bootout "system/$label"
-sudo -n launchctl bootstrap system "$plist"
-for _ in {1..30}; do
-  [[ "$(sock_cmd capabilities 2>/dev/null || true)" == native-dns-v1 ]] && break
-  sleep 1
-done
-[[ "$(sock_cmd capabilities)" == native-dns-v1 ]] || { echo 'Root daemon was not upgraded; no DNS override performed.' >&2; exit 1; }
+if [[ "$(sock_cmd capabilities)" != native-dns-v1 ]]; then
+  sudo -n launchctl bootout "system/$label"
+  bootstrap_root
+  for _ in {1..30}; do
+    [[ "$(sock_cmd capabilities 2>/dev/null || true)" == native-dns-v1 ]] && break
+    sleep 1
+  done
+  [[ "$(sock_cmd capabilities)" == native-dns-v1 ]] || { echo 'Root daemon was not upgraded; no DNS override performed.' >&2; exit 1; }
+fi
 # The existing plist must point to the installed binary. It is not replaced or
 # migrated here. Candidates preserve API credentials and selector defaults.
 cp "$candidate/config.json" "$dir/config.json.next"

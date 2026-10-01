@@ -65,6 +65,7 @@ func nativeDNSServerForTest(t *testing.T) (*Server, *dnsLifecycleSetup) {
 	setup := &dnsLifecycleSetup{servers: []string{}}
 	s := NewServer(path, dir)
 	s.dnsRun = setup.run
+	s.vpnConnected = func() bool { return false }
 	s.dnsProbe = func(string) error { return nil }
 	s.dnsPorts = func(string) error { return nil }
 	s.command = func(string, string, string) *exec.Cmd { return exec.Command("/bin/sleep", "30") }
@@ -103,6 +104,16 @@ func TestSupervisorFailedHealthDoesNotChangeSystemDNS(t *testing.T) {
 	}
 	if setup.sets != 0 || len(setup.servers) != 0 {
 		t.Fatal("DNS changed before native UDP/TCP health passed")
+	}
+}
+func TestSupervisorShadowrocketConflictDoesNotStartCoreOrChangeDNS(t *testing.T) {
+	s, setup := nativeDNSServerForTest(t)
+	s.vpnConnected = func() bool { return true }
+	if result := s.start(); !strings.Contains(result, "disconnect Shadowrocket VPN first") {
+		t.Fatal(result)
+	}
+	if s.child != nil || setup.sets != 0 {
+		t.Fatal("competing VPN changed lifecycle or DNS")
 	}
 }
 func TestSupervisorPortConflictDoesNotStartCoreOrChangeDNS(t *testing.T) {

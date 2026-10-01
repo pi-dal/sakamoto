@@ -26,25 +26,26 @@ func SockPath() string { return filepath.Join(config.DefaultDir(), SockName) }
 
 // Server is the root supervisor process.
 type Server struct {
-	cfgPath   string
-	workDir   string
-	mu        sync.Mutex
-	lifecycle sync.Mutex
-	child     *exec.Cmd
-	childDone chan struct{}
-	dnsRun    sysdns.Runner
-	dnsProbe  func(string) error
-	dnsPorts  func(string) error
-	command   func(string, string, string) *exec.Cmd
-	dnsStatus string
-	dnsWait   time.Duration
-	started   time.Time
-	restarts  int
-	logs      []string
+	cfgPath      string
+	workDir      string
+	mu           sync.Mutex
+	lifecycle    sync.Mutex
+	child        *exec.Cmd
+	childDone    chan struct{}
+	dnsRun       sysdns.Runner
+	dnsProbe     func(string) error
+	dnsPorts     func(string) error
+	vpnConnected func() bool
+	command      func(string, string, string) *exec.Cmd
+	dnsStatus    string
+	dnsWait      time.Duration
+	started      time.Time
+	restarts     int
+	logs         []string
 }
 
 func NewServer(cfgPath, workDir string) *Server {
-	return &Server{cfgPath: cfgPath, workDir: workDir, dnsRun: sysdns.Networksetup, dnsProbe: sysdns.Probe, dnsPorts: sysdns.PortsFree, dnsWait: 25 * time.Second,
+	return &Server{cfgPath: cfgPath, workDir: workDir, dnsRun: sysdns.Networksetup, dnsProbe: sysdns.Probe, dnsPorts: sysdns.PortsFree, vpnConnected: shadowrocketVPNConnected, dnsWait: 25 * time.Second,
 		command: func(binary, path, dir string) *exec.Cmd { return exec.Command(binary, "run", "-c", path, "-D", dir) },
 	}
 }
@@ -107,7 +108,7 @@ func (s *Server) monitorVPNConflict() {
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
-		if !shadowrocketVPNConnected() {
+		if !s.vpnConnected() {
 			continue
 		}
 		s.mu.Lock()
@@ -192,7 +193,7 @@ func (s *Server) startGeneration(expected *exec.Cmd, generation int) string {
 		return "already running"
 	}
 	s.mu.Unlock()
-	if shadowrocketVPNConnected() {
+	if s.vpnConnected() {
 		return "start failed: disconnect Shadowrocket VPN first; two TUNs cannot run together"
 	}
 	if err := validateAPIService(s.cfgPath); err != nil {
