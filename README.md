@@ -23,7 +23,16 @@ Edit `~/.sakamoto/sakamoto.yaml` to point `conf:` at your own Shadowrocket `.con
 sing-box check -c ~/.sakamoto/config.json
 ```
 
-For TUN and always-on fallback, install the macOS services *once*: `bash "$(brew --prefix)/share/sakamoto/scripts/install-macos.sh"` (source builds: `SAKAMOTO_BIN="$PWD/sakamoto" bash scripts/install-macos.sh`). It asks for confirmation before installing a root LaunchDaemon and never automatically connects the VPN. Do **not** connect Shadowrocket and sakamoto TUN simultaneously. Then run `sakamoto` and click **Connect**. Daily use requires only that one command; `daemon` and `watch` are launchd internals. `sakamoto help` lists keyboard shortcuts.
+For root TUN control and automatic group fallback **while connected**, preflight and install the macOS services *once*:
+
+```bash
+sakamoto setup --check  # read-only: validate config or report existing service state
+sakamoto setup          # interactive: install daemon/watch only when absent
+```
+
+For a source build in this repository, use `./sakamoto setup` instead. `setup` locates the packaged installer, asks for confirmation and administrator authorization on a fresh install, and **refuses to replace existing, partial or unavailable launchd services**. It does not start or reconnect the VPN; running it again on an installed machine only reports state. Do **not** connect Shadowrocket and sakamoto TUN simultaneously. Open `sakamoto` and click **Connect**. `daemon` and `watch` are launchd internals; `sakamoto help` lists shortcuts.
+
+**After a reboot, reconnect manually.** Launchd restarts the supervisor and starts the watcher at login, but neither starts sing-box's TUN. With protected DNS enabled, the supervisor attempts to restore the prior DHCP/static DNS from its private snapshot when no loopback DNS listener survives; it does **not** re-enable protection automatically. Do not assume proxy or DNS protection persists across a reboot. See [startup, failure and verification boundaries](docs/dns-protection.md#startup-and-reboot-behavior).
 
 ## Interface
 

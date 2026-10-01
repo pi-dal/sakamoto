@@ -33,6 +33,14 @@ The root daemon owns DNS changes, not the user watcher:
 
 Old root daemons cannot perform this lifecycle. New clients check `native-dns-v1` capability before protected-DNS connections; upgrading only the CLI does **not** upgrade the running root process. Known DNS state must never enter iCloud or git.
 
+## Startup and reboot behavior
+
+**The current release does not automatically reconnect the TUN or re-enable protected DNS after a reboot.** `sakamoto setup` only installs/checks the launchd services; it is not an auto-connect switch. The installed root LaunchDaemon has `RunAtLoad`/`KeepAlive`, but its `daemon` command only opens the control socket and waits for an explicit `connect`. The user LaunchAgent starts `watch` at login and retries the native API; it monitors an existing core rather than starting one. `dns_guard.enabled: true` and an on-disk protected config are not an auto-connect policy.
+
+When the supervisor starts without its former sing-box child (including a normal reboot), it sees the private DNS restore snapshot. **If port 53 is unowned and restoration succeeds**, it restores the saved DHCP/static DNS and removes the snapshot before accepting control commands. That avoids leaving the system pointed at an absent `127.0.0.1:53`, but ordinary DNS then uses the previous network resolver until you explicitly connect again. If the network service is unavailable, restoration fails, or another process owns port 53, do **not** assume either connectivity or DNS protection: the snapshot may remain and system DNS may still point to loopback without a working listener. Preserve the private snapshot and diagnose locally; never blindly delete it or stop a live protected resolver.
+
+After login, confirm the supervisor is available, open `sakamoto`, and explicitly **Connect** after checking that Shadowrocket is disconnected. Verify a `dns=protected` service status, `networksetup -getdnsservers Wi-Fi` returning `127.0.0.1`, and successful UDP/TCP queries to `@127.0.0.1`. If DNS is already `127.0.0.1` but the local listener is absent, resolve the restore failure **before** relying on the network. A real reboot/resume and network-change acceptance test is still required before claiming unattended startup protection. Legacy root plists without an explicit user/runtime directory can also depend on the console user being logged in; do not infer pre-login readiness from `RunAtLoad` alone.
+
 ## Safe activation
 
 First update the installed CLI and finish any active Pi work. Use the explicit interactive helper:
@@ -50,6 +58,6 @@ If health/read-back fails, activation restores previous files and reconnects the
 - `networksetup -getdnsservers Wi-Fi` should show only `127.0.0.1` while protected.
 - `scutil --dns` should show the protected resolver while preserving scoped mDNS/MagicDNS behavior.
 - Query both UDP and TCP locally, check ordinary proxy domains and private/Tailscale names, and inspect a DNS-leak test using known test domains. Registry geography alone is not proof of a query path.
-- Test normal disconnect: original DHCP/static settings must reappear before the listener exits. Then reconnect and verify protection again.
+- In a planned maintenance window, test normal disconnect: original DHCP/static settings must reappear before the listener exits. Then reconnect and verify protection again. This is not the same as reboot auto-connect, which is not implemented.
 
 Changing a YAML toggle alone never rewrites the running core. Generate/check and perform a planned reconnect after enabling/disabling protection; do not edit a live root plist without disconnecting first.

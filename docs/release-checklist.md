@@ -32,3 +32,4 @@ Manually inspect diffs and screenshots too: credentials may be base64 encoded in
 - Fallback checks fresh URL-test results; manual selection remains manual. The private `sakamoto recover` socket is single-watcher, user-only, rate-limited, and cannot start or restart the TUN.
 - Optional iCloud sync never uploads generated state and never overwrites simultaneous edits.
 - Protected system DNS is opt-in: UDP/TCP health before takeover, snapshot/read-back, restoration before listener stop, port-conflict/root-capability checks and rollback. No live DNS activation is claimed without the necessary administrative authorization.
+- Document the boot boundary accurately: `RunAtLoad` starts the daemon/watch jobs, not the TUN or protected DNS. Do not claim unattended auto-connect until a separate opt-in implementation has survived real reboot, DNS-restore failure and competing-VPN tests.

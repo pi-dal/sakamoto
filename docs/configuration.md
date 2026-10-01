@@ -62,7 +62,7 @@ An older generated config with no `clash_mode` rules exposes only Rule. After up
 
 ## Native protected system DNS
 
-Optional `dns_guard.enabled` uses a sing-box loopback DNS inbound and a root-supervisor transaction to save/restore macOS DNS. It is off by default, requires updating the root daemon while disconnected, and cannot be activated by upgrading only the CLI. Read [activation, rollback and scope limits](dns-protection.md) before enabling it. `sakamoto dns-prepare` makes a private candidate without changing live files; `sakamoto dns-restore` recovers an orphaned snapshot only while the core is stopped. `dns-restore.json` stays local and is forbidden in iCloud source sync.
+Optional `dns_guard.enabled` uses a sing-box loopback DNS inbound and a root-supervisor transaction to save/restore macOS DNS. It is off by default, requires updating the root daemon while disconnected, and cannot be activated by upgrading only the CLI. **This setting persists the configuration, not a boot-time connection:** `sakamoto setup` installs/checks the daemon/watch jobs, but after a reboot the TUN and protected DNS require an explicit Connect. Read [activation, rollback, startup behavior and scope limits](dns-protection.md) before enabling it. `sakamoto dns-prepare` makes a private candidate without changing live files; `sakamoto dns-restore` recovers an orphaned snapshot only while the core is stopped. `dns-restore.json` stays local and is forbidden in iCloud source sync.
 
 ## Experimental unmatched-domain policy
 
