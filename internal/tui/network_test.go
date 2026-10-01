@@ -64,6 +64,15 @@ func TestClassifyNetworkProbeNeverCallsSingleFailureAnOutage(t *testing.T) {
 		}
 	}
 }
+func TestFailedNetworkPathsRetainBothCauses(t *testing.T) {
+	routeErr := errors.New("synthetic routing failure")
+	mixedErr := errors.New("synthetic browser proxy failure")
+	result := classifyNetworkProbe(routeErr, mixedErr, true)
+	if !errors.Is(result.err, routeErr) || !errors.Is(result.err, mixedErr) {
+		t.Fatal("lost one of the independent probe failures", result.err)
+	}
+}
+
 func TestFailedProbeRetriesAndNeverPermanentlyMarksNetworkDown(t *testing.T) {
 	m := testModel(t)
 	m.serviceState = "connected"

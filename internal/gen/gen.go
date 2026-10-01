@@ -6,11 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -104,172 +102,7 @@ func Run(o Options) error {
 			directSets = append(directSets, "geoip-"+strings.ToLower(gp[0]))
 		}
 	}
-	var dnsServers []map[string]any
-	localTags, remoteTags := []string{}, []string{}
-	localPublic := "" // First public UDP resolver; private DNS can disappear with a VPN.
-	addServer := func(tag, typ, server string, detour bool) {
-		s := map[string]any{"tag": tag, "type": typ, "server": server}
-		if detour {
-			s["detour"] = exitTag
-			if localPublic != "" {
-				s["domain_resolver"] = localPublic // Bootstrap DoH using the public local resolver.
-			}
-		}
-		dnsServers = append(dnsServers, s)
-	}
-	for _, d := range splitCSV(p.general["dns-server"]) {
-		viaProxy := strings.HasSuffix(d, "#proxy")
-		d = strings.TrimSuffix(d, "#proxy")
-		switch {
-		case strings.HasPrefix(d, "https://"):
-			host := strings.TrimPrefix(d, "https://")
-			host = strings.SplitN(host, "/", 2)[0] // Keep the host; the default path is /dns-query.
-			tag := fmt.Sprintf("remote%d", len(remoteTags))
-			remoteTags = append(remoteTags, tag)
-			addServer(tag, "https", host, viaProxy)
-		case strings.HasPrefix(d, "tls://"):
-			tag := fmt.Sprintf("remote%d", len(remoteTags))
-			remoteTags = append(remoteTags, tag)
-			addServer(tag, "tls", strings.TrimPrefix(d, "tls://"), viaProxy)
-		default: // Bare IP: add to the local UDP resolver pool.
-			tag := fmt.Sprintf("local%d", len(localTags))
-			localTags = append(localTags, tag)
-			if localPublic == "" {
-				if a, err := netip.ParseAddr(strings.SplitN(d, ":", 2)[0]); err == nil && !a.IsPrivate() {
-					localPublic = tag
-				}
-			}
-			addServer(tag, "udp", d, false)
-		}
-	}
-	for _, d := range splitCSV(p.general["fallback-dns-server"]) { // Include fallback resolvers in the local pool.
-		tag := fmt.Sprintf("local%d", len(localTags))
-		localTags = append(localTags, tag)
-		if localPublic == "" {
-			if a, err := netip.ParseAddr(strings.SplitN(d, ":", 2)[0]); err == nil && !a.IsPrivate() {
-				localPublic = tag
-			}
-		}
-		addServer(tag, "udp", strings.TrimPrefix(strings.TrimPrefix(d, "tls://"), "https://"), false)
-	}
-	if len(localTags) == 0 {
-		localTags = []string{"local0"}
-		localPublic = "local0"
-		addServer("local0", "udp", "223.5.5.5", false)
-	}
-	if localPublic == "" {
-		localPublic = localTags[0]
-	}
-	// Pin DoH bootstrap resolution to public local DNS.
-	for _, s := range dnsServers {
-		if s["detour"] != nil {
-			s["domain_resolver"] = localPublic
-		}
-	}
-	if len(remoteTags) == 0 {
-		remoteTags = []string{"remote0"}
-		addServer("remote0", "https", "dns.google", true)
-		dnsServers[len(dnsServers)-1]["domain_resolver"] = localPublic
-	}
-	// Preserve the imported private resolver only for explicit LAN namespaces.
-	lanResolver := localTags[0]
-	if cfg.DNSGuard.Enabled {
-		const bootstrap = "dns-bootstrap"
-		dnsServers = append(dnsServers, map[string]any{
-			"tag": bootstrap, "type": "https", "server": cfg.DNSGuard.BootstrapIP,
-			"tls": map[string]any{"enabled": true, "server_name": cfg.DNSGuard.BootstrapServerName},
-		})
-		localPublic = bootstrap // Node/bootstrap resolution is direct but encrypted.
-		for _, server := range dnsServers {
-			tag, _ := server["tag"].(string)
-			if containsStr(remoteTags, tag) {
-				server["detour"] = exitTag
-				server["domain_resolver"] = bootstrap
-			}
-		}
-	}
-	// Resolve proxy server hostnames separately to avoid a detour bootstrap loop.
-	for _, n := range nodes {
-		n["domain_resolver"] = localPublic
-		if cfg.DNSGuard.Enabled {
-			host, _ := n["server"].(string)
-			host = strings.ToLower(host)
-			for _, suffix := range cfg.DNSGuard.LocalDomains {
-				if host == strings.ToLower(suffix) || strings.HasSuffix(host, "."+strings.ToLower(suffix)) {
-					n["domain_resolver"] = lanResolver
-				}
-			}
-			if ts.Present && (host == "ts.net" || strings.HasSuffix(host, ".ts.net")) {
-				n["domain_resolver"] = "ts-dns"
-			}
-		}
-	}
-	// DNS request rules use domain-only sets; IP CIDRs require response matching.
-	var dnsDirectSets []string
-	if direct, ok := p.bk["direct"]; ok && len(direct["domain"])+len(direct["domain_suffix"])+len(direct["domain_keyword"]) > 0 {
-		tag := "rs-direct"
-		if len(direct["ip_cidr"]) > 0 {
-			tag = "rs-direct-domains"
-		}
-		dnsDirectSets = []string{tag}
-	}
-	// Global DNS uses the same protocol as the primary remote resolver but
-	// always detours through the selected proxy chain, even if the imported
-	// resolver lacked Shadowrocket's #proxy suffix. Bootstrap remains local.
-	const globalDNS = "mode-global-dns"
-	for _, server := range dnsServers {
-		if server["tag"] == remoteTags[0] {
-			global := make(map[string]any, len(server)+2)
-			for key, value := range server {
-				global[key] = value
-			}
-			global["tag"], global["detour"], global["domain_resolver"] = globalDNS, exitTag, localPublic
-			dnsServers = append(dnsServers, global)
-			break
-		}
-	}
-	dnsRules := []map[string]any{}
-	if len(p.hosts) > 0 {
-		dnsServers = append(dnsServers, map[string]any{"type": "hosts", "tag": "sr-hosts", "predefined": p.hosts})
-		names := make([]string, 0, len(p.hosts))
-		for name := range p.hosts {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		dnsRules = append(dnsRules, map[string]any{"domain": names, "action": "route", "server": "sr-hosts"})
-	}
-	if ts.Present {
-		// Resolve *.ts.net with Tailscale quad100 before generic direct rules.
-		dnsServers = append(dnsServers, map[string]any{
-			"tag": "ts-dns", "type": "udp", "server": "100.100.100.100"})
-		dnsRules = append(dnsRules, map[string]any{
-			"domain_suffix": []string{"ts.net"}, "server": "ts-dns"})
-	}
-	// Protected DNS takes precedence over traffic mode: only explicit private
-	// namespaces and MagicDNS use LAN resolvers; public DNS stays on proxy DoH.
-	if cfg.DNSGuard.Enabled && len(cfg.DNSGuard.LocalDomains) > 0 {
-		dnsRules = append(dnsRules, map[string]any{"domain_suffix": cfg.DNSGuard.LocalDomains, "server": lanResolver, "action": "route"})
-	}
-	if !cfg.DNSGuard.Enabled {
-		dnsRules = append(dnsRules, map[string]any{"clash_mode": "Direct", "action": "route", "server": localPublic})
-	}
-	if len(dnsDirectSets) > 0 && !cfg.DNSGuard.Enabled {
-		// Explicit DIRECT domains use local DNS only in Rule mode. Otherwise
-		// Global would proxy traffic after resolving those names locally.
-		dnsRules = append(dnsRules, map[string]any{"clash_mode": "Rule", "rule_set": dnsDirectSets, "server": localPublic})
-	}
-	// private-ip-answer: evaluate remote DNS first, then reject private answers.
-	if strings.EqualFold(p.general["private-ip-answer"], "true") {
-		if cfg.DNSGuard.Enabled {
-			dnsRules = append(dnsRules, map[string]any{"action": "evaluate", "server": remoteTags[0]})
-		} else {
-			dnsRules = append(dnsRules,
-				map[string]any{"clash_mode": "Global", "action": "evaluate", "server": globalDNS},
-				map[string]any{"clash_mode": "Rule", "action": "evaluate", "server": remoteTags[0]})
-		}
-		dnsRules = append(dnsRules, map[string]any{"match_response": true, "ip_is_private": true, "action": "reject"})
-	}
-	dnsRules = append(dnsRules, map[string]any{"clash_mode": "Global", "action": "route", "server": globalDNS})
+	dns := buildDNS(p, cfg, nodes, exitTag, ts)
 
 	// 7) route + tun
 	routeRules := []map[string]any{
@@ -362,23 +195,19 @@ func Run(o Options) error {
 			routeRules[at] = map[string]any{"domain": learned.Domains, "action": "route", "outbound": exitTag}
 		}
 	}
-	ordinaryResolver := localPublic
-	if cfg.DNSGuard.Enabled {
-		ordinaryResolver = remoteTags[0]
-	}
 	config := map[string]any{
 		"log": map[string]any{"level": cfg.LogLevel, "timestamp": true},
 		"dns": map[string]any{
-			"servers": dnsServers,
-			"rules":   dnsRules,
-			"final":   remoteTags[0], "strategy": "ipv4_only",
+			"servers": dns.servers,
+			"rules":   dns.rules,
+			"final":   dns.final, "strategy": "ipv4_only",
 		},
 		"inbounds":  inbounds,
 		"outbounds": outbounds,
 		"route": map[string]any{
 			"rules": routeRules,
 			"final": finalTag, "auto_detect_interface": true, "rule_set": srsEntries,
-			"default_domain_resolver": map[string]any{"server": ordinaryResolver, "strategy": "ipv4_only"},
+			"default_domain_resolver": map[string]any{"server": dns.ordinaryResolver, "strategy": "ipv4_only"},
 		},
 		"services": []map[string]any{{
 			"type": "api", "listen": "127.0.0.1", "listen_port": 9090,
@@ -394,61 +223,11 @@ func Run(o Options) error {
 		return err
 	}
 
-	// 6) Write a sidecar template only if the user has not created one.
-	var chain []string
-	for _, t := range []string{"RealityAuto", "OthersAuto"} {
-		for _, m := range mainMembers {
-			if m == t {
-				chain = append(chain, t)
-			}
-		}
+	chain, err := writeTemplate(out, cfg, mainMembers)
+	if err != nil {
+		return err
 	}
-	sidecarPath := filepath.Join(out, "sakamoto.yaml")
-	if _, err := os.Stat(sidecarPath); os.IsNotExist(err) {
-		yamlText := fmt.Sprintf("api:\n  url: http://127.0.0.1:9090\n  secret: %s\n", cfg.API.Secret) +
-			"check_interval: 30s\nrecover_after: 2\ntest_settle: 5s\nfallback_enabled: true\n"
-		if len(chain) > 1 {
-			yamlText += "fallbacks:\n  MainProxy: [" + strings.Join(chain, ", ") + "]\n"
-		}
-		yamlText += "# Add subscriptions in Config; put manual share links in nodes.txt.\nsubscriptions: []\n"
-		if err := os.WriteFile(sidecarPath, []byte(yamlText), 0600); err != nil {
-			return fmt.Errorf("write template: %w", err)
-		}
-		reportf("→ %s (template)\n", sidecarPath)
-	}
-
-	// 8) Report unsupported source features without claiming parity.
-	if len(p.rewrites) > 0 {
-		reportf("  ⚠ [URL Rewrite] %d entries omitted (sing-box has no HTTP rewriting layer): %s\n",
-			len(p.rewrites), strings.Join(p.rewrites, " | "))
-	}
-	if len(p.mitm) > 0 {
-		reportf("  ⚠ [MITM] omitted (sing-box does not decrypt traffic): %s\n", strings.Join(p.mitm, " | "))
-	}
-	if len(p.proxies) > 0 {
-		reportf("  · [Proxy] %d entries omitted (nodes come from nodes.txt/subscriptions)\n", len(p.proxies))
-	}
-	if len(p.pgroups) > 0 {
-		reportf("  · [Proxy Group] %d entries replaced by RealityAuto/OthersAuto/ManualPick/MainProxy\n", len(p.pgroups))
-	}
-	if len(p.scripts) > 0 {
-		reportf("  ⚠ [Script]/[Host] %d entries omitted (no compatible script/host rewrite engine)\n", len(p.scripts))
-	}
-	// Report every unmapped [General] option for auditability.
-	handled := map[string]bool{"ipv6": true, "prefer-ipv6": true, "bypass-system": true,
-		"bypass-tun": true, "skip-proxy": true, "dns-server": true,
-		"fallback-dns-server": true, "private-ip-answer": true, "dns-direct-system": true,
-		"dns-direct-fallback-proxy": true, "icmp-auto-reply": true,
-		"always-reject-url-rewrite": true, "hijack-dns": true,
-		"tun-included-routes": true, "tun-excluded-routes": true,
-		"always-real-ip": true}
-	for k, v := range p.general {
-		if !handled[k] {
-			reportf("  ? [General] unmapped option: %s = %s\n", k, v)
-		}
-	}
-	reportf("→ %s  final route=%s, proxy exit=%s (detour to MainProxy)\n", cfgPath, finalTag, exitTag)
-	reportf("   fallback chain: %v\n", chain)
+	reportGeneration(p, cfgPath, finalTag, exitTag, chain)
 	return nil
 }
 

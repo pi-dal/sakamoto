@@ -57,6 +57,13 @@ var statusPID = regexp.MustCompile(`\bpid=(\d+)`)
 
 // Reconnect waits for the old sing-box process to release its TUN and listener
 // before asking the root daemon to start the checked on-disk config.
+func commandReplyError(command, reply string, err error) error {
+	if err != nil {
+		return fmt.Errorf("%s: %q: %w", command, strings.TrimSpace(reply), err)
+	}
+	return fmt.Errorf("%s: %q", command, strings.TrimSpace(reply))
+}
+
 func Reconnect() error {
 	cfg, err := config.Load(config.DefaultPath())
 	if err != nil {
@@ -75,7 +82,7 @@ func Reconnect() error {
 		old := statusPID.FindStringSubmatch(status)
 		reply, e := Send("disconnect")
 		if e != nil || !strings.HasPrefix(reply, "disconnected") {
-			return fmt.Errorf("disconnect: %q: %v", strings.TrimSpace(reply), e)
+			return commandReplyError("disconnect", reply, e)
 		}
 		if len(old) == 2 {
 			pid, _ := strconv.Atoi(old[1])
@@ -94,7 +101,7 @@ func Reconnect() error {
 	}
 	reply, err := Send("connect")
 	if err != nil || !strings.HasPrefix(reply, "connected") {
-		return fmt.Errorf("connect: %q: %v", strings.TrimSpace(reply), err)
+		return commandReplyError("connect", reply, err)
 	}
 	return nil
 }

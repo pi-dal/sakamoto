@@ -155,45 +155,18 @@ func sourcePairs(localDir string, cfg *config.Config) ([]sourcePair, error) {
 					continue
 				}
 				found = true
-				if len(data) > 16<<20 {
-					return fmt.Errorf("conf source exceeds the 16 MiB sync limit")
+				includes, err := localRuleIncludes(data)
+				if err != nil {
+					return err
 				}
-				if !ruleConfSection.MatchString(strings.TrimPrefix(string(data), "\ufeff")) {
-					return fmt.Errorf("automatic conf source lacks [General] or [Rule]")
-				}
-				section := ""
-				for _, line := range strings.Split(strings.TrimPrefix(string(data), "\ufeff"), "\n") {
-					line = strings.TrimSpace(inlineConfComment.Split(line, 2)[0])
-					if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-						section = strings.ToLower(line)
-						continue
+				for _, include := range includes {
+					child := filepath.Join(filepath.Dir(local), filepath.FromSlash(include))
+					childRel, err := filepath.Rel(base, child)
+					if err != nil {
+						return err
 					}
-					if section != "[general]" {
-						continue
-					}
-					key, value, ok := strings.Cut(line, "=")
-					if !ok || !strings.EqualFold(strings.TrimSpace(key), "include") {
-						continue
-					}
-					for _, include := range strings.Split(value, ",") {
-						include = strings.TrimSpace(include)
-						if include == "" {
-							continue
-						}
-						if strings.HasPrefix(include, "https://") || strings.HasPrefix(include, "http://") {
-							continue
-						} // fetched by the importer, not synced as local assets
-						if !ValidSourceName("conf/" + include) {
-							return fmt.Errorf("unsafe relative conf include")
-						}
-						child := filepath.Join(filepath.Dir(local), filepath.FromSlash(include))
-						childRel, err := filepath.Rel(base, child)
-						if err != nil {
-							return err
-						}
-						if err := discover(child, filepath.Join(cloudBase, childRel), depth+1); err != nil {
-							return err
-						}
+					if err := discover(child, filepath.Join(cloudBase, childRel), depth+1); err != nil {
+						return err
 					}
 				}
 			}
@@ -229,4 +202,43 @@ func sourcePairs(localDir string, cfg *config.Config) ([]sourcePair, error) {
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].name < result[j].name })
 	return result, nil
+}
+
+// localRuleIncludes parses only local relative includes in [General]. Remote
+// URLs are fetched by the importer, not treated as cloud file dependencies.
+func localRuleIncludes(data []byte) ([]string, error) {
+	if len(data) > 16<<20 {
+		return nil, fmt.Errorf("conf source exceeds the 16 MiB sync limit")
+	}
+	text := strings.TrimPrefix(string(data), "\ufeff")
+	if !ruleConfSection.MatchString(text) {
+		return nil, fmt.Errorf("automatic conf source lacks [General] or [Rule]")
+	}
+	var includes []string
+	section := ""
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(inlineConfComment.Split(line, 2)[0])
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			section = strings.ToLower(line)
+			continue
+		}
+		if section != "[general]" {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok || !strings.EqualFold(strings.TrimSpace(key), "include") {
+			continue
+		}
+		for _, include := range strings.Split(value, ",") {
+			include = strings.TrimSpace(include)
+			if include == "" || strings.HasPrefix(include, "https://") || strings.HasPrefix(include, "http://") {
+				continue
+			}
+			if !ValidSourceName("conf/" + include) {
+				return nil, fmt.Errorf("unsafe relative conf include")
+			}
+			includes = append(includes, include)
+		}
+	}
+	return includes, nil
 }

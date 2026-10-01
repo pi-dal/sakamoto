@@ -3,8 +3,10 @@ package security
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -37,6 +39,18 @@ func TestReplaceSecretKeepsLoopbackOnlyAndDisablesDashboard(t *testing.T) {
 		if _, err := replaceSecret([]byte(broken), "change-me", newSecret); err == nil {
 			t.Fatal("unsafe or mismatched API service accepted")
 		}
+	}
+}
+
+func TestRotationCommandErrorPreservesTransportCause(t *testing.T) {
+	transport := errors.New("synthetic socket failure")
+	wrapped := rotationCommandError("connect", " disconnected\n", transport)
+	if !errors.Is(wrapped, transport) || !strings.Contains(wrapped.Error(), "disconnected") {
+		t.Fatal("socket error or supervisor reply lost", wrapped)
+	}
+	refused := rotationCommandError("disconnect", "not running\n", nil)
+	if !strings.Contains(refused.Error(), "not running") || strings.Contains(refused.Error(), "<nil>") {
+		t.Fatal("unexpected supervisor reply was misreported", refused)
 	}
 }
 

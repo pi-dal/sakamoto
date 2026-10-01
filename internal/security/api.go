@@ -108,13 +108,13 @@ func RotateAPI(path string) error {
 		return fmt.Errorf("API rotation failed, previous config restored: %w", cause)
 	}
 	if reply, err := svc.Send("disconnect"); err != nil || !strings.HasPrefix(reply, "disconnected") {
-		return rollback(fmt.Errorf("disconnect: %q: %v", strings.TrimSpace(reply), err))
+		return rollback(rotationCommandError("disconnect", reply, err))
 	}
 	if m := pidPattern.FindStringSubmatch(status); len(m) == 2 {
 		waitExit(m[1])
 	}
 	if reply, err := svc.Send("connect"); err != nil || !strings.HasPrefix(reply, "connected") {
-		return rollback(fmt.Errorf("connect: %q: %v", strings.TrimSpace(reply), err))
+		return rollback(rotationCommandError("connect", reply, err))
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
@@ -133,6 +133,13 @@ func RotateAPI(path string) error {
 		}
 	}
 	return rollback(fmt.Errorf("new API not reachable: %w", ctx.Err()))
+}
+
+func rotationCommandError(command, reply string, err error) error {
+	if err != nil {
+		return fmt.Errorf("%s: %q: %w", command, strings.TrimSpace(reply), err)
+	}
+	return fmt.Errorf("%s: %q", command, strings.TrimSpace(reply))
 }
 
 func previousSafe(raw []byte) bool {

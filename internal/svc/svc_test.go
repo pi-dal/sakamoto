@@ -1,10 +1,22 @@
 package svc
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestCommandReplyErrorPreservesTransportCause(t *testing.T) {
+	transport := errors.New("synthetic socket failure")
+	if err := commandReplyError("connect", " denied\n", transport); !errors.Is(err, transport) || !strings.Contains(err.Error(), "denied") {
+		t.Fatal("lost supervisor reply or transport error", err)
+	}
+	if err := commandReplyError("disconnect", "not running\n", nil); !strings.Contains(err.Error(), "not running") || strings.Contains(err.Error(), "<nil>") {
+		t.Fatal("unexpected supervisor reply was misreported", err)
+	}
+}
 
 func TestSingBoxExecutableOverride(t *testing.T) {
 	t.Setenv("SAKAMOTO_SING_BOX", "/custom/homebrew/bin/sing-box")

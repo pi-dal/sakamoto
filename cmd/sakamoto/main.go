@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -231,7 +232,7 @@ func runWatch(ctx context.Context, path string) error {
 			fmt.Printf("[%s] %-6s %s\n", e.Time.Format("15:04:05"), e.Level, e.Message)
 		}
 	}()
-	if err := w.Run(ctx); err != nil && err != context.Canceled {
+	if err := w.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
 	return nil

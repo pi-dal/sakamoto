@@ -137,7 +137,7 @@ func prepare(path, secret string) (*preparedAPI, error) {
 	}
 	defer func() { _ = os.Remove(candidate) }()
 	if output, checkErr := exec.Command("sing-box", "check", "-D", dir, "-c", candidate).CombinedOutput(); checkErr != nil {
-		return nil, fmt.Errorf("new API config rejected: %v: %s", checkErr, strings.TrimSpace(string(output)))
+		return nil, fmt.Errorf("new API config rejected: %w: %s", checkErr, strings.TrimSpace(string(output)))
 	}
 	return &preparedAPI{cfg, oldYAML, oldJSON, newYAML, newJSON}, nil
 }
@@ -232,13 +232,16 @@ func ConnectWithPending(path string) (string, bool, error) {
 		connectErr = verifyAPI(p.cfg)
 	}
 	if connectErr != nil || !strings.HasPrefix(reply, "connected") {
+		if connectErr == nil {
+			connectErr = fmt.Errorf("unexpected supervisor reply %q", strings.TrimSpace(reply))
+		}
 		if restoreErr := p.restore(path); restoreErr != nil {
-			return reply, false, fmt.Errorf("API activation failed (%v); safe staged credential kept: %w", connectErr, restoreErr)
+			return reply, false, fmt.Errorf("API activation failed (%w); safe staged credential kept: %w", connectErr, restoreErr)
 		}
 		if restoreErr := svc.Reconnect(); restoreErr != nil {
-			return reply, false, fmt.Errorf("API activation failed (%v); previous files restored but reconnect failed: %w", connectErr, restoreErr)
+			return reply, false, fmt.Errorf("API activation failed (%w); previous files restored but reconnect failed: %w", connectErr, restoreErr)
 		}
-		return reply, false, fmt.Errorf("API activation failed; previous configuration restored: %v %s", connectErr, strings.TrimSpace(reply))
+		return reply, false, fmt.Errorf("API activation failed; previous configuration restored: %w", connectErr)
 	}
 	if err := CancelPendingAPI(path); err != nil {
 		return reply, true, fmt.Errorf("new API active but pending-file cleanup failed: %w", err)

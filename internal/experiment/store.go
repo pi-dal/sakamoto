@@ -207,7 +207,7 @@ func Stage(dir, domain, outbound string) (func() error, error) {
 		return nil, err
 	}
 	if output, err := exec.Command("sing-box", "check", "-D", dir, "-c", candidate.Name()).CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("auto rule check: %v: %s", err, strings.TrimSpace(string(output)))
+		return nil, fmt.Errorf("auto rule check: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 	prevState, stateErr := os.ReadFile(filepath.Join(dir, FileName))
 	if stateErr != nil && !os.IsNotExist(stateErr) {

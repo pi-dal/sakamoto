@@ -60,7 +60,7 @@ func classifyNetworkProbe(routeErr, mixedErr error, mixedEnabled bool) networkMs
 		return networkMsg{path: "browser proxy (system routing unverified)"}
 	}
 	if mixedEnabled {
-		return networkMsg{err: fmt.Errorf("system routing: %v; browser proxy: %v", routeErr, mixedErr)}
+		return networkMsg{err: fmt.Errorf("system routing: %w; browser proxy: %w", routeErr, mixedErr)}
 	}
 	return networkMsg{err: fmt.Errorf("system routing: %w", routeErr)}
 }

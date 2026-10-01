@@ -177,6 +177,24 @@ func TestExternalConfMapsToPortableCloudFolder(t *testing.T) {
 	requireText(t, filepath.Join(cloud, "conf/main.conf"), main)
 	requireText(t, filepath.Join(cloud, "conf/ad.conf"), ad)
 }
+func TestLocalRuleIncludesIgnoresRemoteAndComments(t *testing.T) {
+	data := []byte("\ufeff[General]\ninclude = rules/a.conf, https://rules.example/list.conf, b.conf // explanation\n[Rule]\ninclude = ignored.conf\n")
+	includes, err := localRuleIncludes(data)
+	if err != nil || strings.Join(includes, ",") != "rules/a.conf,b.conf" {
+		t.Fatalf("unexpected local includes: %v (%v)", includes, err)
+	}
+	for _, input := range []string{"not a rule file", "[General]\ninclude=../secret.conf\n", "[Rule]\ninclude=config.json\n"} {
+		_, err := localRuleIncludes([]byte(input))
+		if input == "[Rule]\ninclude=config.json\n" {
+			if err != nil {
+				t.Fatal("[Rule] includes are not source dependencies", err)
+			}
+		} else if err == nil {
+			t.Fatalf("accepted unsafe rule input %q", input)
+		}
+	}
+}
+
 func TestIncludeConfCanBeDisabled(t *testing.T) {
 	local, cloud, cfg := ruleSyncConfig(t)
 	cfg.ICloud.IncludeConf = false
