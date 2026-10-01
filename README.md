@@ -70,7 +70,7 @@ go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run ./...
 go build ./cmd/sakamoto
 ```
 
-Code-quality baseline: `fuck-u-code analyze . -f json` improved from **65.9** to **about 78** after splitting oversized modules and handling unchecked I/O; the Go linter reports **0 issues**. The installed `fuck-u-code` shell parser may fall back to regex; treat its score as a trend, not a correctness proof. CI enforces tests, vet and the pinned Go linter.
+Code-quality baseline: `fuck-u-code analyze . -f json` improved from **65.9** to **about 80** after splitting oversized modules and handling unchecked I/O; the Go linter reports **0 issues**. The installed `fuck-u-code` shell parser may fall back to regex; treat its score as a trend, not a correctness proof. CI enforces tests, vet and the pinned Go linter.
 
 On macOS sign your local build ad hoc when copying to a different location: `codesign -s - -f ./sakamoto`. Stage an API credential with `sakamoto rotate-api` (no change to the live connection; applied at the next normal TUI connect). Use `sakamoto rotate-api --apply-now` only when accepting an immediate brief reconnect. The key is never printed. Do not commit generated binary, actual node links, subscription URLs, API secret, `auto-proxy.json` (visited domains), `.srs`, logs or generated `config.json`.
 
