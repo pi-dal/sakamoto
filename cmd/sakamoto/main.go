@@ -26,6 +26,8 @@ const usage = `sakamoto — a macOS sing-box controller inspired by Shadowrocket
 
 Usage:
   sakamoto              Open the TUI (groups, tests, VPN, config and logs)
+  sakamoto setup        Interactively install macOS daemon/watch services (no VPN start)
+  sakamoto setup --check  Read-only service/config preflight (no changes)
   sakamoto daemon       Root supervisor (LaunchDaemon); manages sing-box and
                         accepts connect/disconnect commands on a Unix socket
   sakamoto watch        LaunchAgent for automatic proxy group fallback
@@ -69,6 +71,13 @@ func main() {
 	case "tui":
 		if err := runTUI(ctx, *cfgPath); err != nil {
 			fatal("tui", err)
+		}
+	case "setup":
+		if len(args) > 2 || (len(args) == 2 && args[1] != "--check") {
+			fatal("setup", fmt.Errorf("only --check is supported; setup never enables reboot auto-connect"))
+		}
+		if err := runSetup(*cfgPath, len(args) == 2); err != nil {
+			fatal("setup", err)
 		}
 	case "daemon":
 		if err := runDaemon(); err != nil {
