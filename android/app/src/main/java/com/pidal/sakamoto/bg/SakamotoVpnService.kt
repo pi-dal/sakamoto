@@ -78,6 +78,10 @@ class SakamotoVpnService : VpnService(), PlatformInterface {
 
     override fun usePlatformAutoDetectInterfaceControl(): Boolean = true
 
+    // The app does not provide a platform-local DNS transport. Returning null
+    // lets libbox use the configured DNS servers inside the tunnel.
+    override fun localDNSTransport(): LocalDNSTransport? = null
+
     override fun autoDetectInterfaceControl(fd: Int) {
         protect(fd)
     }

@@ -1,5 +1,6 @@
 package com.pidal.sakamoto
 
+import com.pidal.sakamoto.runtime.*
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue

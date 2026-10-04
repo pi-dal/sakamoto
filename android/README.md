@@ -101,16 +101,15 @@ reimplemented in Kotlin. `MobilecoreRuntime` is a thin scheduler around the
 bridge; `OutboundGroupItem.URLTestDelay` feeds `Mobilecore.nodeStatus`, so
 the Home page shows **selected ≠ reachable** in the TUI's own vocabulary.
 
-## Build from clean (once the toolchain exists)
+## Build from clean
 
 ```sh
-# 1. Toolchain (see "Missing on this machine" below for exact installs)
-#    JDK 17 (upstream checkJavaVersion requires openjdk 17 exactly):
-mise use -g java temurin-17
-#    Android SDK + NDK:
+# 1. Toolchain (JDK is only the Kotlin/Gradle build runtime; app code is Kotlin)
+mise use -g java@corretto-17.0.20.8.1
+# Android SDK + NDK (adjust ANDROID_HOME for another machine):
 brew install --cask android-commandlinetools
-export ANDROID_HOME="$HOME/Library/Android/sdk"
-sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+export ANDROID_HOME="/opt/homebrew/share/android-commandlinetools"
+sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;28.2.13676358"
 
 # 2. gomobile (GOPATH/bin; mise users: the explicit GOBIN matters)
 GOBIN="$(go env GOPATH)/bin" go install github.com/sagernet/gomobile/cmd/gomobile@latest
@@ -128,16 +127,20 @@ cd android
 ./gradlew test                         # unit tests (state models; bridge calls need the AARs)
 ```
 
-## Missing on this machine (honest blockers, verified)
+## Toolchain status
 
-Checked 2026-10-04: `ANDROID_HOME` unset, `~/Library/Android/sdk` absent,
-`/usr/bin/java` is the macOS stub ("Unable to locate a Java Runtime"), no
-standalone `gradle`. Consequence: **the Kotlin sources have not been compiled
-here** — they are written against the exact v1.14.2 bindings and upstream
-sources cited above, with every place that depends on the generated AARs
-marked `STATUS PENDING SDK BUILD VERIFICATION`. Nothing in this tree claims a
-build that did not happen. No Android-SDK-sized installs were performed
-without owner approval.
+Verified 2026-10-05 on the maintainer's Apple Silicon machine:
+
+- mise-managed OpenJDK 17 (Corretto 17.0.20)
+- Android command-line tools, API 35, Build Tools 35.0.0
+- NDK 28.2.13676358
+- `android/scripts/build-libbox.sh` and `build-mobilecore.sh`: pass
+- `./gradlew test :app:assembleDebug`: pass
+
+NDK 28.2 is intentional: the current v1.14.2 Cronet archive uses AArch64
+relocations rejected by NDK 27's linker. The generated legacy API-21 AAR is
+not linked into the default API-24 variant, and the duplicate gomobile `go.*`
+runtime is retained only in `libbox.aar`.
 
 ## Signing (placeholders, like iOS)
 

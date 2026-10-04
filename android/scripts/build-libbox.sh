@@ -92,7 +92,7 @@ Restore the toolchain first (exact commands for this machine, macOS + mise):
 
   brew install --cask android-commandlinetools          # SDK manager, no IDE
   export ANDROID_HOME="\$HOME/Library/Android/sdk"       # put in your shell rc
-  sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+  sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;28.2.13676358"
 
   mise use -g java temurin-17                            # upstream requires openjdk 17
   java --version                                          # must print openjdk 17
@@ -107,7 +107,7 @@ if ! command -v sdkmanager >/dev/null 2>&1 && [ ! -d "${ANDROID_HOME:-${ANDROID_
 fi
 
 # Upstream checkJavaVersion demands openjdk 17 exactly.
-JAVA_BIN="${JAVA_HOME:+${JAVA_HOME}/bin}java"
+JAVA_BIN="${JAVA_HOME:+${JAVA_HOME}/bin/}java"
 if command -v "${JAVA_BIN}" >/dev/null 2>&1; then
     JAVA_VERSION="$("${JAVA_BIN}" --version 2>&1 | head -1 || true)"
     case "${JAVA_VERSION}" in
@@ -188,7 +188,7 @@ if ! go run ./cmd/internal/build_libbox -target android; then
 
 build-libbox[android]: upstream builder failed. Common causes:
   - fresh checkout needs:  cd ${SING_BOX_SOURCE} && go mod download
-  - NDK missing:           sdkmanager "ndk;27.2.12479018"
+  - NDK missing:           sdkmanager "ndk;28.2.13676358"
   - wrong java:            mise use -g java temurin-17   (must be openjdk 17)
 EOF
     exit 1

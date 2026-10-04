@@ -1,6 +1,7 @@
 package com.pidal.sakamoto.runtime
 
 import io.nekohasekai.libbox.TailscaleEndpointStatus
+import io.nekohasekai.libbox.TailscaleEndpointStatusIterator
 import io.nekohasekai.libbox.TailscalePeer
 import io.nekohasekai.libbox.TailscalePingResult
 
@@ -14,7 +15,7 @@ import io.nekohasekai.libbox.TailscalePingResult
  */
 object TailscaleBinding {
 
-    fun mapUpdate(endpoints: Iterator<TailscaleEndpointStatus>): List<TailscaleEndpointSummary> {
+    fun mapUpdate(endpoints: TailscaleEndpointStatusIterator): List<TailscaleEndpointSummary> {
         val result = mutableListOf<TailscaleEndpointSummary>()
         while (endpoints.hasNext()) {
             result.add(mapEndpoint(endpoints.next()))
@@ -24,10 +25,10 @@ object TailscaleBinding {
 
     fun mapEndpoint(status: TailscaleEndpointStatus): TailscaleEndpointSummary {
         val peers = mutableListOf<TailscalePeerSummary>()
-        val groups = status.userGroups
+        val groups = status.userGroups()
         while (groups.hasNext()) {
             val group = groups.next()
-            val peerIterator = group.peers
+            val peerIterator = group.peers()
             while (peerIterator.hasNext()) {
                 peers.add(mapPeer(peerIterator.next()))
             }
@@ -52,7 +53,7 @@ object TailscaleBinding {
 
     fun mapPeer(peer: TailscalePeer): TailscalePeerSummary {
         val ips = mutableListOf<String>()
-        val ipIterator = peer.tailscaleIPs
+        val ipIterator = peer.tailscaleIPs()
         while (ipIterator.hasNext()) ips.add(ipIterator.next())
         return TailscalePeerSummary(
             stableID = peer.stableID,

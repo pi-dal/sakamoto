@@ -47,7 +47,10 @@ android {
 
 dependencies {
     // Local gomobile bindings — built by android/scripts/*.sh, never committed.
-    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar", "*.jar"))))
+    // The default API-24 build uses the full libbox AAR. The legacy API-21
+    // AAR is generated for a future flavor split and must not be linked into
+    // the same variant (both AARs export identical Java package names).
+    implementation(files("libs/libbox.aar", "libs/mobilecore.aar"))
 
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")

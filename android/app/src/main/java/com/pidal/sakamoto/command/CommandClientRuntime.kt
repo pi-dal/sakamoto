@@ -187,7 +187,7 @@ object CommandClientRuntime : CommandClientHandler {
     private val tailscaleStatusHandler = object : TailscaleStatusHandler {
         override fun onStatusUpdate(status: TailscaleStatusUpdate?) {
             if (status == null) return
-            TailscaleRuntime.applyEndpoints(TailscaleBinding.mapUpdate(status.endpoints))
+            TailscaleRuntime.applyEndpoints(TailscaleBinding.mapUpdate(status.endpoints()))
         }
 
         override fun onError(message: String?) {

@@ -31,7 +31,7 @@ build-mobilecore[android]: ANDROID_HOME/ANDROID_SDK_ROOT is not set.
 
   brew install --cask android-commandlinetools
   export ANDROID_HOME="\$HOME/Library/Android/sdk"
-  sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+  sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;28.2.13676358"
 EOF
     exit 1
 fi
@@ -69,6 +69,51 @@ gomobile bind \
     -javapkg=com.pidal.sakamoto \
     -libname=mobilecore \
     ./pkg/mobilecore
+
+# libbox.aar and mobilecore.aar are both gomobile bindings, so each embeds
+# the same go.Seq/go.Universe Java runtime classes. Keep that runtime in the
+# primary libbox AAR only; Gradle rejects duplicate classes when both AARs are
+# linked into one application. The mobilecore Java bridge still uses the
+# identical runtime supplied by libbox.
+python3 - "${OUTPUT_DIR}/mobilecore.aar" <<'PY'
+import io
+import os
+import sys
+import tempfile
+import zipfile
+
+aar_path = sys.argv[1]
+with zipfile.ZipFile(aar_path, "r") as aar:
+    entries = {info.filename: aar.read(info) for info in aar.infolist()}
+
+classes = entries.get("classes.jar")
+if classes is None:
+    raise SystemExit("mobilecore.aar has no classes.jar")
+
+with zipfile.ZipFile(io.BytesIO(classes), "r") as jar:
+    kept = {
+        info.filename: jar.read(info)
+        for info in jar.infolist()
+        if not info.filename.startswith("go/")
+    }
+
+classes_out = io.BytesIO()
+with zipfile.ZipFile(classes_out, "w", zipfile.ZIP_DEFLATED) as jar:
+    for name, data in kept.items():
+        jar.writestr(name, data)
+entries["classes.jar"] = classes_out.getvalue()
+
+fd, tmp_path = tempfile.mkstemp(suffix=".aar", dir=os.path.dirname(aar_path))
+os.close(fd)
+try:
+    with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as aar:
+        for name, data in entries.items():
+            aar.writestr(name, data)
+    os.replace(tmp_path, aar_path)
+finally:
+    if os.path.exists(tmp_path):
+        os.unlink(tmp_path)
+PY
 
 cat <<EOF
 

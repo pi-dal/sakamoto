@@ -137,7 +137,7 @@ class TailscaleFragment : Fragment() {
             b.exitCandidatesContainer.addView(empty)
             return
         }
-        val endpointTag = primary.endpointTag
+        val endpointTag = primary?.endpointTag ?: return
         for (candidate in candidates) {
             val button = MaterialButton(requireContext())
             button.text = getString(R.string.ts_candidate_button, candidate.displayName)

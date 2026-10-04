@@ -24,8 +24,8 @@ object TailscaleConfigInjection {
             throw ConfigInjectionError.InvalidConfig(e.message ?: "not JSON")
         }
         val endpoints = root.optJSONArray("endpoints")
-            ?: throw ConfigInjectionError.NoTailscaleEndpoint
-        if (endpoints.length() == 0) throw ConfigInjectionError.NoTailscaleEndpoint
+            ?: throw ConfigInjectionError.NoTailscaleEndpoint()
+        if (endpoints.length() == 0) throw ConfigInjectionError.NoTailscaleEndpoint()
 
         var found = false
         val next = JSONArray()
@@ -42,7 +42,7 @@ object TailscaleConfigInjection {
             }
             next.put(item)
         }
-        if (!found) throw ConfigInjectionError.NoTailscaleEndpoint
+        if (!found) throw ConfigInjectionError.NoTailscaleEndpoint()
         root.put("endpoints", next)
         return root.toString()
     }
