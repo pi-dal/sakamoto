@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/pi-dal/sakamoto/internal/config"
+	"github.com/pi-dal/sakamoto/internal/core"
 	"github.com/pi-dal/sakamoto/internal/svc"
 	"github.com/sagernet/sing-box/daemon"
 )
@@ -116,20 +117,15 @@ func (m *model) onNetwork(v networkMsg) {
 	} // Ignore a late result after disconnect.
 	m.netChecking = false
 	if v.err != nil {
+		// A single failed probe is Unverified, never "network down": the
+		// shared core policy retries with a capped exponential backoff.
 		m.networkProbeFailures++
-		backoff := 10 * time.Second
-		for i := 1; i < m.networkProbeFailures && backoff < time.Minute; i++ {
-			backoff *= 2
-		}
-		if backoff > time.Minute {
-			backoff = time.Minute
-		}
-		m.nextNetworkProbe = time.Now().Add(backoff)
-		m.networkState = "Unverified"
+		m.nextNetworkProbe = time.Now().Add(core.NextProbeRetry(m.networkProbeFailures))
+		m.networkState = string(core.ProbeUnverified)
 		m.notice = "TUN running; probe did not pass yet, retrying: " + v.err.Error()
 	} else {
 		m.networkProbeFailures = 0
-		m.nextNetworkProbe = time.Now().Add(2 * time.Minute)
+		m.nextNetworkProbe = time.Now().Add(core.ProbeSuccessRefresh)
 		m.networkState = "Available · " + v.path
 		m.notice = "Network probe passed: " + v.path
 	}
@@ -217,6 +213,12 @@ func (m *model) onMouse(v tea.MouseMsg) tea.Cmd {
 	return nil
 }
 func (m *model) onKey(v tea.KeyMsg) tea.Cmd {
+	if m.policyEditing {
+		return m.handlePolicyInput(v)
+	}
+	if m.configForm {
+		return m.handleConfigFormInput(v)
+	}
 	if m.importing {
 		return m.handleImportInput(v)
 	}
@@ -254,6 +256,12 @@ func (m *model) onKey(v tea.KeyMsg) tea.Cmd {
 		case settingsPage:
 			m.settingsScroll++
 			m.cfgCursor = min(len(m.cfgRows)-1, m.cfgCursor+1)
+		case configPage:
+			if m.configDetail == policySection {
+				m.policyCursor = min(max(0, len(m.cfg.PolicyRules)-1), m.policyCursor+1)
+			} else {
+				m.move(1)
+			}
 		default:
 			m.move(1)
 		}
@@ -263,6 +271,12 @@ func (m *model) onKey(v tea.KeyMsg) tea.Cmd {
 			m.aboutScroll = max(0, m.aboutScroll-1)
 		case settingsPage:
 			m.cfgCursor = max(0, m.cfgCursor-1)
+		case configPage:
+			if m.configDetail == policySection {
+				m.policyCursor = max(0, m.policyCursor-1)
+			} else {
+				m.move(-1)
+			}
 		default:
 			m.move(-1)
 		}
@@ -273,7 +287,11 @@ func (m *model) onKey(v tea.KeyMsg) tea.Cmd {
 		case homePage:
 			return m.selectCurrent()
 		case configPage:
-			m.configDetail = 0
+			if m.configDetail == policySection {
+				m.beginPolicyEdit(m.policyCursor)
+			} else {
+				m.configDetail = 0
+			}
 		case aboutPage:
 			m.aboutCopyright = !m.aboutCopyright
 			m.aboutScroll = 0
@@ -289,7 +307,9 @@ func (m *model) onKey(v tea.KeyMsg) tea.Cmd {
 	case "g":
 		return m.generate()
 	case "a":
-		if m.page == configPage {
+		if m.page == configPage && m.configDetail == policySection {
+			m.beginPolicyEdit(-1)
+		} else if m.page == configPage {
 			m.importing = true
 			m.importKind = "conf"
 			m.input = ""
@@ -306,7 +326,14 @@ func (m *model) onKey(v tea.KeyMsg) tea.Cmd {
 		if m.page == configPage && m.configDetail == 3 {
 			return m.deleteSelectedNode()
 		}
+		if m.page == configPage && m.configDetail == policySection {
+			return m.deletePolicyRule()
+		}
 	case "e":
+		if m.page == configPage && m.configDetail == policySection {
+			m.beginPolicyEdit(m.policyCursor)
+			return nil
+		}
 		if m.page == configPage {
 			return m.editConfig()
 		}

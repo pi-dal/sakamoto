@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/url"
 	"os"
@@ -42,8 +43,9 @@ type Config struct {
 	BlockQUIC     bool        `yaml:"block_quic"`    // reject UDP:443 to force TCP; default true
 	BlockSTUN     bool        `yaml:"block_stun"`    // reject detected STUN; default true
 	Experiment    struct {
-		Mode      string `yaml:"mode"`      // off: direct fallback; on: proxy fallback; auto: learn failed hosts
-		Threshold int    `yaml:"threshold"` // distinct spaced direct failures; default 3
+		Mode          string `yaml:"mode"`            // off: direct fallback; on: proxy fallback; auto: learn failed hosts
+		Threshold     int    `yaml:"threshold"`       // distinct spaced direct failures; default 3
+		CFRegionBlock bool   `yaml:"cf_region_block"` // learn Cloudflare regional-block domains as proxy rules
 	} `yaml:"experiment"`
 
 	// Shadowrocket application-level setting equivalents.
@@ -73,8 +75,9 @@ type Config struct {
 		Directory   string   `yaml:"directory"`    // absolute iCloud Drive directory
 		Files       []string `yaml:"files"`        // additional relative source paths; generated files are forbidden
 	} `yaml:"icloud"`
-	TailscaleOptimize bool   `yaml:"tailscale_optimize"` // auto-detect Tailscale; default true
-	UTLSFingerprint   string `yaml:"utls_fingerprint"`   // global fingerprint override; empty uses node links
+	TailscaleOptimize bool         `yaml:"tailscale_optimize"` // auto-detect Tailscale; default true
+	UTLSFingerprint   string       `yaml:"utls_fingerprint"`   // global fingerprint override; empty uses node links
+	PolicyRules       []PolicyRule `yaml:"policy"`             // user overrides: host/domain → proxy/direct/reject
 
 	// URLTest parameters match Shadowrocket's interval/tolerance/timeout/URL.
 	URLTest struct {
@@ -82,6 +85,13 @@ type Config struct {
 		Interval  string `yaml:"interval"`  // default 10m
 		Tolerance int    `yaml:"tolerance"` // default 100ms
 	} `yaml:"urltest"`
+}
+
+// PolicyRule is a user-owned routing override. Match accepts a hostname,
+// *.suffix, keyword:value, cidr:value, or an http(s) URL (the host is used).
+type PolicyRule struct {
+	Match  string `yaml:"match"`
+	Action string `yaml:"action"` // proxy | direct | reject
 }
 
 // SubSource identifies a subscription URL and its format (auto detects it).
@@ -209,6 +219,9 @@ func Load(path string) (*Config, error) {
 	if err := c.ValidateDNSGuard(); err != nil {
 		return nil, err
 	}
+	if err := c.ValidatePolicy(); err != nil {
+		return nil, err
+	}
 	return c, nil
 }
 
@@ -267,6 +280,43 @@ func (c *Config) ValidateDNSGuard() error {
 	return nil
 }
 
+// ValidatePolicy rejects malformed user routing overrides before generation.
+func (c *Config) ValidatePolicy() error {
+	for i, rule := range c.PolicyRules {
+		match := strings.TrimSpace(rule.Match)
+		if match == "" || strings.ContainsAny(match, "\x00\r\n") {
+			return fmt.Errorf("policy[%d].match must be one hostname, URL, keyword, or CIDR", i)
+		}
+		isURL := strings.Contains(match, "://")
+		if !isURL && strings.ContainsAny(match, " \t,") {
+			return fmt.Errorf("policy[%d].match must be one hostname, URL, keyword, or CIDR", i)
+		}
+		lower := strings.ToLower(match)
+		for _, prefix := range []string{"keyword:", "domain:", "suffix:"} {
+			if strings.HasPrefix(lower, prefix) && strings.TrimSpace(match[len(prefix):]) == "" {
+				return fmt.Errorf("policy[%d].match has an empty value", i)
+			}
+		}
+		if strings.HasPrefix(lower, "cidr:") {
+			if _, _, err := net.ParseCIDR(strings.TrimSpace(match[len("cidr:"):])); err != nil {
+				return fmt.Errorf("policy[%d].match has an invalid CIDR", i)
+			}
+		}
+		if isURL {
+			u, err := url.Parse(match)
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
+				return fmt.Errorf("policy[%d].match has an invalid HTTP(S) URL", i)
+			}
+		}
+		switch strings.ToLower(strings.TrimSpace(rule.Action)) {
+		case "proxy", "direct", "reject":
+		default:
+			return fmt.Errorf("policy[%d].action must be proxy, direct, or reject", i)
+		}
+	}
+	return nil
+}
+
 // ValidateExperiment rejects unknown modes instead of silently widening direct access.
 func (c *Config) ValidateExperiment() error {
 	switch c.Experiment.Mode {
@@ -287,6 +337,9 @@ func (c *Config) MarshalYAML() ([]byte, error) { return yaml.Marshal(c) }
 // rotation to silently put the old API key back on disk.
 func (c *Config) Save(path string) error {
 	if err := c.ValidateDNSGuard(); err != nil {
+		return err
+	}
+	if err := c.ValidatePolicy(); err != nil {
 		return err
 	}
 	if raw, err := os.ReadFile(path); err == nil {

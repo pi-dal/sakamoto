@@ -88,6 +88,24 @@ func TestTrackerExpiresAttemptsAndRequiresThirtyMinuteWindow(t *testing.T) {
 	}
 }
 
+func TestTrackerDetectsOnlyExplicitCloudflareRegionBlocks(t *testing.T) {
+	at := time.Now()
+	tracker := NewTracker(3)
+	tracker.Connection(conn("cf", "", "example.com", 0, daemon.ConnectionEventType_CONNECTION_EVENT_NEW), at)
+	log := "connection: open connection to example.com:443 using outbound/direct[direct]: HTTP 403 Cloudflare error 1009 country or region blocked"
+	if got := tracker.CloudflareRegionBlock(log, at, false); got != "" {
+		t.Fatal("must require a healthy proxy before learning")
+	}
+	tracker.Connection(conn("cf", "", "example.com", 0, daemon.ConnectionEventType_CONNECTION_EVENT_NEW), at)
+	if got := tracker.CloudflareRegionBlock(log, at, true); got != "example.com" {
+		t.Fatalf("expected region block, got %q", got)
+	}
+	tracker.Connection(conn("generic", "", "generic.example", 0, daemon.ConnectionEventType_CONNECTION_EVENT_NEW), at)
+	if got := tracker.CloudflareRegionBlock("connection: open connection to generic.example:443 using outbound/direct[direct]: HTTP 403", at, true); got != "" {
+		t.Fatal("generic 403 must not be treated as a region block")
+	}
+}
+
 func TestTrackerDoesNotLearnHTTPChallengesOrExistingProxyRoutes(t *testing.T) {
 	tracker := NewTracker(1)
 	at := time.Now()

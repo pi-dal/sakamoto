@@ -12,6 +12,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/pi-dal/sakamoto/internal/core"
 	"github.com/pi-dal/sakamoto/internal/gen"
 	"github.com/sagernet/sing-box/daemon"
 )
@@ -114,6 +115,70 @@ func exitFromConfig(cfgPath string) string {
 func (m *model) addHit(x0, x1, y int, action string, index int) {
 	m.hits = append(m.hits, hit{x0, x1, y, action, index})
 }
+
+// servicePhaseState maps the supervisor report to the shared service
+// lifecycle. The supervisor protocol only reports connected/disconnected;
+// "unavailable" is this TUI's local marker for an unreachable supervisor.
+func servicePhaseState(state string) core.ServiceState {
+	switch state {
+	case "connected":
+		return core.ServiceRunning
+	case "unavailable":
+		return core.ServiceUnavailable
+	default:
+		return core.ServiceStopped
+	}
+}
+
+// probePhaseState maps the stored probe display value to the shared probe
+// state. Reachable keeps the historical "Available" display prefix.
+func probePhaseState(networkState string) core.ProbeState {
+	switch {
+	case strings.HasPrefix(networkState, "Available"):
+		return core.ProbeReachable
+	case networkState == string(core.ProbeUnverified):
+		return core.ProbeUnverified
+	case networkState == string(core.ProbeChecking):
+		return core.ProbeChecking
+	default:
+		return core.ProbeIdle
+	}
+}
+
+// statusBadge derives the status-bar badge from the shared core phase model.
+// The precedence (conflict over probe, unavailable over everything) lives in
+// core.PhaseOf; the label strings must stay identical to the historical TUI
+// output because mouse hit regions are measured from the rendered width.
+func (m *model) statusBadge() (label, styled string) {
+	phase := core.PhaseOf(servicePhaseState(m.serviceState), probePhaseState(m.networkState), m.shadowrocket)
+	switch phase {
+	case core.PhaseReachable:
+		label = "● Network reachable"
+		styled = good.Render(label)
+	case core.PhaseUnverified:
+		label = "● TUN running · retrying probe"
+		styled = accent.Render(label)
+	case core.PhaseConflict:
+		label = "⚠ VPN conflict"
+		styled = bad.Render(label)
+	case core.PhaseUnavailable:
+		label = "● Supervisor unavailable"
+		styled = bad.Render(label)
+	case core.PhaseStarting:
+		label = "● Connecting…"
+		styled = accent.Render(label)
+	case core.PhaseStopping:
+		label = "● Disconnecting…"
+		styled = accent.Render(label)
+	case core.PhaseTUNRunning:
+		label = "● TUN running"
+		styled = good.Render(label)
+	default:
+		label = "● Disconnected"
+		styled = bad.Render(label)
+	}
+	return label, styled
+}
 func framedLine(text string, inner int) string {
 	text = ansi.Truncate(text, inner, "…")
 	return "│ " + text + strings.Repeat(" ", max(0, inner-lipgloss.Width(text))) + " │\n"
@@ -161,28 +226,7 @@ func (m *model) View() string {
 	w, inner := m.width, m.width-4
 	var b strings.Builder
 	b.WriteString("┌" + strings.Repeat("─", w-2) + "┐\n")
-	stateLabel := "● Disconnected"
-	state := bad.Render(stateLabel)
-	if m.serviceState == "connected" {
-		stateLabel = "● TUN running"
-		state = good.Render(stateLabel)
-	}
-	if m.serviceState == "connected" && strings.HasPrefix(m.networkState, "Available") {
-		stateLabel = "● Network reachable"
-		state = good.Render(stateLabel)
-	}
-	if m.serviceState == "connected" && m.networkState == "Unverified" {
-		stateLabel = "● TUN running · retrying probe"
-		state = accent.Render(stateLabel)
-	}
-	if m.serviceState == "unavailable" {
-		stateLabel = "● Supervisor unavailable"
-		state = bad.Render(stateLabel)
-	}
-	if m.serviceState == "connected" && m.shadowrocket {
-		stateLabel = "⚠ VPN conflict"
-		state = bad.Render(stateLabel)
-	}
+	stateLabel, state := m.statusBadge()
 	label := "[ Connect ]"
 	if m.serviceState == "connected" {
 		label = "[ Disconnect ]"
@@ -460,7 +504,9 @@ func (m *model) renderNodeDetail(b *strings.Builder, startY int) {
 	b.WriteString("\n")
 }
 
-var configSections = []string{"General", "Routing", "Proxy groups", "Nodes & sources", "DNS", "Import limits"}
+var configSections = []string{"General", "Routing", "Proxy groups", "Nodes & sources", "DNS", "Import limits", "Policy"}
+
+const policySection = 6
 
 func (m *model) sectionDetails(i int) []string {
 	data, _ := os.ReadFile(filepath.Join(filepath.Dir(m.cfgPath), "config.json"))
@@ -532,39 +578,12 @@ func (m *model) sectionDetails(i int) []string {
 	}
 }
 func (m *model) renderConfig(b *strings.Builder, startY int) {
+	if m.configForm {
+		m.renderConfigForm(b, startY)
+		return
+	}
 	if m.importing {
-		title := "Import Shadowrocket .conf"
-		hint := "Merge includes and generate a sing-box config"
-		switch m.importKind {
-		case "node":
-			title = "Add node"
-			hint = "Paste one share link; credentials stay hidden"
-		case "node-edit":
-			title = "Edit node"
-			hint = "Ctrl+U clears input; Ctrl+R briefly reveals it"
-		case "subscription":
-			title = "Add subscription"
-			hint = "Format: name|HTTPS URL"
-		case "subscription-edit":
-			title = "Edit subscription"
-			hint = "Format: name|HTTPS URL (Ctrl+R reveals it)"
-		}
-		b.WriteString(" " + accent.Render(title) + "\n\n")
-		display := m.input
-		if (m.importKind == "node" || m.importKind == "node-edit") && !m.revealInput {
-			display = fmt.Sprintf("●●● (%d chars)", len([]rune(m.input)))
-		} else if (m.importKind == "subscription" || m.importKind == "subscription-edit") && !m.revealInput {
-			if name, link, ok := strings.Cut(display, "|"); ok {
-				display = name + "|" + fmt.Sprintf("●●● (%d chars)", len([]rune(link)))
-			}
-		} else if u, err := url.Parse(display); err == nil && u.RawQuery != "" {
-			display = strings.SplitN(display, "?", 2)[0] + "?…"
-		}
-		if display == "" {
-			display = "Paste an address or share link"
-		}
-		b.WriteString(" Input  " + trunc(display, max(25, m.width-12)) + "▏\n\n")
-		b.WriteString(" " + hint + "\n Enter confirm   Esc cancel\n")
+		m.renderImportForm(b, startY)
 		return
 	}
 	// An older plaintext snapshot must not masquerade as current compiled rules.
@@ -572,8 +591,16 @@ func (m *model) renderConfig(b *strings.Builder, startY int) {
 		b.WriteString(" " + bad.Render(warning) + "\n")
 		startY++
 	}
+	if m.policyEditing {
+		m.renderPolicyEditor(b, startY)
+		return
+	}
 	if m.configDetail == 3 {
 		m.renderSources(b, startY)
+		return
+	}
+	if m.configDetail == policySection {
+		m.renderPolicy(b, startY)
 		return
 	}
 	if m.configDetail >= 0 && m.configDetail < len(configSections) {
@@ -628,6 +655,211 @@ func (m *model) renderConfig(b *strings.Builder, startY int) {
 		x += lipgloss.Width(bt.text) + 2
 	}
 }
+func (m *model) renderImportForm(b *strings.Builder, startY int) {
+	title := "Import Shadowrocket .conf"
+	hint := "Merge includes and generate a sing-box config"
+	switch m.importKind {
+	case "node":
+		title = "Add node"
+		hint = "Paste one share link; credentials stay hidden"
+	case "node-edit":
+		title = "Edit node"
+		hint = "Ctrl+U clears input; Ctrl+R briefly reveals it"
+	case "subscription":
+		title = "Add subscription"
+		hint = "Format: name|HTTPS URL"
+	case "subscription-edit":
+		title = "Edit subscription"
+		hint = "Format: name|HTTPS URL (Ctrl+R reveals it)"
+	}
+	paneWidth := min(76, max(48, m.width-8))
+	paneLeft := max(0, (m.width-4-paneWidth)/2)
+	innerWidth := paneWidth - 4
+	prefix := strings.Repeat(" ", paneLeft)
+	box := func(text string) {
+		b.WriteString(prefix + "│ " + padLine(trunc(text, innerWidth), innerWidth) + " │\n")
+	}
+	display := m.input
+	if (m.importKind == "node" || m.importKind == "node-edit") && !m.revealInput {
+		display = fmt.Sprintf("●●● (%d chars)", len([]rune(m.input)))
+	} else if (m.importKind == "subscription" || m.importKind == "subscription-edit") && !m.revealInput {
+		if name, link, ok := strings.Cut(display, "|"); ok {
+			display = name + "|" + fmt.Sprintf("●●● (%d chars)", len([]rune(link)))
+		}
+	} else if u, err := url.Parse(display); err == nil && u.RawQuery != "" {
+		display = strings.SplitN(display, "?", 2)[0] + "?…"
+	}
+	if display == "" {
+		display = "Paste an address or share link"
+	}
+	b.WriteString(prefix + "╭" + strings.Repeat("─", paneWidth-2) + "╮\n")
+	box(title)
+	box("Input  " + display + "▏")
+	box(hint)
+	box("[ Confirm ]    [ Cancel ]")
+	confirmX := paneLeft + 1
+	m.addHit(confirmX, confirmX+lipgloss.Width("[ Confirm ]"), startY+4, "import-confirm", 0)
+	cancelX := paneLeft + 1 + lipgloss.Width("[ Confirm ]    ")
+	m.addHit(cancelX, cancelX+lipgloss.Width("[ Cancel ]"), startY+4, "import-cancel", 0)
+	b.WriteString(prefix + "╰" + strings.Repeat("─", paneWidth-2) + "╯\n")
+}
+
+func (m *model) renderConfigForm(b *strings.Builder, startY int) {
+	if m.formCfg == nil {
+		return
+	}
+	paneWidth := min(82, max(48, m.width-8))
+	paneLeft := max(0, (m.width-4-paneWidth)/2)
+	innerWidth := paneWidth - 4
+	prefix := strings.Repeat(" ", paneLeft)
+	box := func(text string) {
+		b.WriteString(prefix + "│ " + padLine(trunc(text, innerWidth), innerWidth) + " │\n")
+	}
+	b.WriteString(prefix + "╭" + strings.Repeat("─", paneWidth-2) + "╮\n")
+	box("Edit sakamoto.yaml")
+	box("↑↓ choose · Enter selects / edits · Ctrl+S save · Esc cancel")
+
+	available := max(2, m.height-startY-8)
+	if m.formCursor < m.formScroll {
+		m.formScroll = m.formCursor
+	}
+	if m.formCursor >= m.formScroll+available {
+		m.formScroll = m.formCursor - available + 1
+	}
+	m.formScroll = max(0, min(m.formScroll, max(0, len(m.formRows)-available)))
+	end := min(len(m.formRows), m.formScroll+available)
+	for i := m.formScroll; i < end; i++ {
+		r := m.formRows[i]
+		y := startY + 2 + i - m.formScroll
+		if r.value == nil {
+			box("  " + r.label)
+			continue
+		}
+		value := r.value()
+		if m.formEditing && i == m.formEditIndex {
+			value = m.formInput + "▏"
+		} else if len(r.choices) > 0 {
+			value = "‹ " + value + " ›"
+		} else if r.toggle != nil {
+			value = "[" + value + "]"
+		} else {
+			value = "= " + value
+		}
+		line := fmt.Sprintf("%-31s %s", r.label, value)
+		if i == m.formCursor || m.hovered("form-field", i) {
+			line = ">" + line
+		}
+		box(trunc(line, innerWidth))
+		m.addHit(paneLeft+1, paneLeft+1+paneWidth, y, "form-field", i)
+	}
+	if m.formNotice != "" {
+		box("! " + m.formNotice)
+	}
+	footerY := startY + 2 + (end - m.formScroll) + 1
+	if m.formNotice != "" {
+		footerY++
+	}
+	box("[ Save ]    [ Cancel ]")
+	m.addHit(paneLeft+1, paneLeft+1+lipgloss.Width("[ Save ]"), footerY, "form-save", 0)
+	cancelX := paneLeft + 1 + lipgloss.Width("[ Save ]    ")
+	m.addHit(cancelX, cancelX+lipgloss.Width("[ Cancel ]"), footerY, "form-cancel", 0)
+	b.WriteString(prefix + "╰" + strings.Repeat("─", paneWidth-2) + "╯\n")
+}
+
+func (m *model) renderPolicy(b *strings.Builder, startY int) {
+	b.WriteString(" " + accent.Render("Routing policy") + "  [ Back ]\n")
+	m.addHit(2+lipgloss.Width("Routing policy")+2, 2+lipgloss.Width("Routing policy")+2+lipgloss.Width("[ Back ]"), startY, "back", 0)
+	b.WriteString(" Match a hostname, not a URL path; https://example.com/a becomes example.com.\n")
+	b.WriteString(" direct overrides proxy; reject always wins. Global/Direct mode still changes ordinary unmatched traffic.\n\n")
+	y := startY + 3
+	if len(m.cfg.PolicyRules) == 0 {
+		b.WriteString("   No custom rules. Imported conf rules are still active.\n")
+		y++
+	} else {
+		available := max(1, m.height-y-7)
+		start := min(m.policyCursor, max(0, len(m.cfg.PolicyRules)-available))
+		for i := start; i < len(m.cfg.PolicyRules) && i < start+available; i++ {
+			rule := m.cfg.PolicyRules[i]
+			action := strings.ToUpper(rule.Action)
+			line := fmt.Sprintf("   %-7s %s", action, policyDisplayMatch(rule.Match))
+			if i == m.policyCursor || m.hovered("policy-rule", i) {
+				line = focus.Render(">" + line)
+			} else if strings.EqualFold(rule.Action, "reject") {
+				line = bad.Render(line)
+			} else if strings.EqualFold(rule.Action, "direct") {
+				line = muted.Render(line)
+			}
+			b.WriteString(trunc(line, max(25, m.width-5)) + "\n")
+			m.addHit(0, max(50, m.width), y, "policy-rule", i)
+			y++
+		}
+	}
+	b.WriteString("\n")
+	buttonsY := y + 1
+	x := 1
+	for _, button := range []struct{ text, action string }{
+		{"[ Add rule ]", "policy-add"}, {"[ Edit rule ]", "policy-edit"}, {"[ Remove rule ]", "policy-delete"},
+	} {
+		b.WriteString(" " + muted.Render(button.text))
+		m.addHit(x, x+lipgloss.Width(button.text), buttonsY, button.action, 0)
+		x += lipgloss.Width(button.text) + 2
+	}
+}
+
+func policyDisplayMatch(match string) string {
+	if u, err := url.Parse(match); err == nil && u.Hostname() != "" {
+		return u.Hostname() + " (URL host)"
+	}
+	return match
+}
+
+func (m *model) renderPolicyEditor(b *strings.Builder, startY int) {
+	paneWidth := min(76, max(48, m.width-8))
+	paneLeft := max(0, (m.width-4-paneWidth)/2)
+	innerWidth := paneWidth - 4
+	prefix := strings.Repeat(" ", paneLeft)
+	box := func(text string) {
+		b.WriteString(prefix + "│ " + padLine(trunc(text, innerWidth), innerWidth) + " │\n")
+	}
+	title := "Add policy rule"
+	if m.policyEditIndex >= 0 {
+		title = "Edit policy rule"
+	}
+	b.WriteString(prefix + "╭" + strings.Repeat("─", paneWidth-2) + "╮\n")
+	box(title)
+	box("Match: hostname, *.suffix, keyword:foo, cidr:192.0.2.0/24, or URL")
+	match := m.policyMatch + "▏"
+	if m.policyField != 0 {
+		match = m.policyMatch
+	}
+	line := "Match   = " + match
+	if m.policyField == 0 {
+		line = ">" + line
+	}
+	box(line)
+	m.addHit(paneLeft+1, paneLeft+1+paneWidth, startY+2, "policy-match", 0)
+	action := "‹ " + strings.ToLower(m.policyAction) + " ›"
+	line = "Action  " + action
+	if m.policyField == 1 {
+		line = ">" + line
+	}
+	box(line)
+	m.addHit(paneLeft+1, paneLeft+1+paneWidth, startY+3, "policy-action", 0)
+	box("Enter edits/selects · Tab/↑↓ moves · Ctrl+S saves")
+	if m.policyNotice != "" {
+		box("! " + m.policyNotice)
+	}
+	footerY := startY + 6
+	if m.policyNotice != "" {
+		footerY++
+	}
+	box("[ Save ]    [ Cancel ]")
+	m.addHit(paneLeft+1, paneLeft+1+lipgloss.Width("[ Save ]"), footerY, "policy-save", 0)
+	cancelX := paneLeft + 1 + lipgloss.Width("[ Save ]    ")
+	m.addHit(cancelX, cancelX+lipgloss.Width("[ Cancel ]"), footerY, "policy-cancel", 0)
+	b.WriteString(prefix + "╰" + strings.Repeat("─", paneWidth-2) + "╯\n")
+}
+
 func (m *model) renderSources(b *strings.Builder, startY int) {
 	b.WriteString(" " + accent.Render("Nodes & sources") + "  [ Back ]\n")
 	m.addHit(2+lipgloss.Width("Nodes & sources")+2, 2+lipgloss.Width("Nodes & sources")+2+lipgloss.Width("[ Back ]"), startY, "back", 0)

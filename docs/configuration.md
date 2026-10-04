@@ -28,6 +28,7 @@ block_quic: true
 experiment:
   mode: off          # off | on | auto
   threshold: 3      # 1–20 spaced direct failures
+  cf_region_block: false  # learn explicit Cloudflare region blocks
 tun_stack: gvisor
 system_proxy:
   enabled: true
@@ -60,15 +61,37 @@ All modes keep hosts/MagicDNS, private-address and TUN route exclusions, reject/
 
 An older generated config with no `clash_mode` rules exposes only Rule. After upgrading the CLI, regenerate and validate the config, then perform **one planned TUN reconnect** to load the rules. Thereafter switching modes through the API does not require another TUN restart. A CLI update alone cannot alter the routing of a core already running an old config.
 
+## User policy overrides
+
+Open **Config → Policy** to add rules without hand-editing the Shadowrocket source. Each rule has a match and an action:
+
+```yaml
+policy:
+  - match: "example.com"
+    action: proxy
+  - match: "*.corp.example"
+    action: direct
+  - match: "keyword:tracker"
+    action: reject
+  - match: "cidr:192.0.2.0/24"
+    action: direct
+```
+
+A plain hostname is an exact domain match. `*.example.com` matches the suffix; `keyword:` matches a domain keyword; `cidr:` matches an IP range. An `http(s)` URL is accepted for convenience, but only its hostname is routable by the TUN—URL paths such as `/login` are not distinguished. In the TUI, `proxy`, `direct`, and `reject` are selectable options; the match is an editable field.
+
+User rules are merged before generation and survive refreshing or replacing the imported `.conf`. `reject` has priority over routing, and `direct` has priority over `proxy` when the same match appears in both. Explicit private/Tailscale exclusions remain direct. Global and Direct modes still take precedence over ordinary public split routing, so these rules are primarily for Rule mode.
+
 ## Native protected system DNS
 
 Optional `dns_guard.enabled` uses a sing-box loopback DNS inbound and a root-supervisor transaction to save/restore macOS DNS. It is off by default, requires updating the root daemon while disconnected, and cannot be activated by upgrading only the CLI. **This setting persists the configuration, not a boot-time connection:** `sakamoto setup` installs/checks the daemon/watch jobs, but after a reboot the TUN and protected DNS require an explicit Connect. Read [activation, rollback, startup behavior and scope limits](dns-protection.md) before enabling it. `sakamoto dns-prepare` makes a private candidate without changing live files; `sakamoto dns-restore` recovers an orphaned snapshot only while the core is stopped. `dns-restore.json` stays local and is forbidden in iCloud source sync.
 
 ## Experimental unmatched-domain policy
 
-In Settings, click the **Unmatched policy** three-state switch (or press Enter) to cycle **off → on → auto → off**; its highlighted value is the current selection, not a text editor. Edit **Direct failure threshold** separately, or set `experiment.mode`/`experiment.threshold` in YAML. `off` (the default for new setups) **always** sends unmatched traffic direct. Existing sidecars without this setting whose already-generated `route.final` was a proxy are migrated to `on` when loaded, to avoid silently widening direct traffic. `on` forces unmatched traffic through the generated proxy exit; explicit source `REJECT`, `DIRECT`, local-network, and Tailscale bypasses retain priority. `auto` starts with unmatched traffic direct. When three **separate** TCP direct dial timeouts to the same observed hostname occur at least 10 seconds apart within 30 minutes, and the chosen proxy has a fresh successful URL test, it saves the hostname in private `auto-proxy.json`, checks the generated config, and reconnects to apply it. A successful direct response resets its counter. The threshold is configurable from 1 to 20. Learned rules go after explicit DIRECT and before explicit PROXY; they survive regeneration, and are ignored while mode is off/on. Removing a name from `auto-proxy.json` followed by generation/reconnection reverses it.
+In Settings, click the **Unmatched policy** three-state switch (or press Enter) to cycle **off → on → auto → off**; its highlighted value is the current selection, not a text editor. Edit **Direct failure threshold** separately, or set `experiment.mode`/`experiment.threshold` in YAML. `off` (the default for new setups) **always** sends unmatched traffic direct. Existing sidecars without this setting whose already-generated `route.final` was a proxy are migrated to `on` when loaded, to avoid silently widening direct traffic. `on` forces unmatched traffic through the generated proxy exit; explicit source `REJECT`, `DIRECT`, local-network, and Tailscale bypasses retain priority. `auto` starts with unmatched traffic direct. When three **separate** TCP direct dial timeouts to the same observed hostname occur at least 10 seconds apart within 30 minutes, and the chosen proxy has a fresh successful URL test, it saves the hostname in private `auto-proxy.json`, checks the generated config, and reconnects to apply it. A successful direct response resets its counter. The threshold is configurable from 1 to 20. Learned rules go after explicit DIRECT and before explicit PROXY; they survive regeneration, and are ignored while unmatched mode is off/on unless the separate CF-region experiment is enabled. Removing a name from `auto-proxy.json` followed by generation/reconnection reverses it.
 
-**Scope:** auto is not a general "this website failed, change the node" feature. It learns only a hostname whose connection reached the unmatched **direct fallback**, not an explicit DIRECT/PROXY/REJECT rule. Existing proxy rules already route via the proxy, so HTTP 403, browser challenges, rate limits or server errors do not become learned routes. A fixed chained SOCKS exit may present the same public IP despite switching entry nodes. Use the watcher recovery interface for confirmed node failures; never treat an HTTP challenge alone as proof a node is dead.
+Set `experiment.cf_region_block: true` to enable the separate Cloudflare experiment. It only reacts to an explicit Cloudflare regional restriction signal (Cloudflare error 1009 or a Cloudflare-marked country/region denial) observed on an unmatched direct connection while a proxy URL test is healthy. It then adds the hostname to the private learned proxy set, validates the generated config, and reconnects once to apply it. Generic HTTP 403s, browser challenges, DNS failures, and connections already routed through a proxy are deliberately ignored.
+
+**Scope:** these experiments are not a general "this website failed, change the node" feature. They learn only a hostname whose connection reached the unmatched **direct fallback**, not an explicit DIRECT/PROXY/REJECT rule. Existing proxy rules already route via the proxy, so HTTP 403, browser challenges, rate limits or server errors do not become learned routes. A fixed chained SOCKS exit may present the same public IP despite switching entry nodes. Use the watcher recovery interface for confirmed node failures; never treat an HTTP challenge alone as proof a node is dead.
 
 **Activation:** saving a mode changes the YAML immediately; watcher monitoring reloads on its next interval, but existing generated routes are not rewritten by that save. Regenerate and reconnect once to apply a changed fallback/learned-rule configuration. In Global or Direct routing mode, mode rules take precedence over the unmatched policy; auto is useful for ordinary Rule-mode fallback.
 

@@ -39,6 +39,26 @@ func TestFailedSubscriptionDoesNotSilentlyDropNodes(t *testing.T) {
 	}
 }
 
+func TestUserPolicyRulesNormalizeAndApply(t *testing.T) {
+	cfg := config.Default()
+	cfg.PolicyRules = []config.PolicyRule{
+		{Match: "https://Example.com/login?token=hidden", Action: "proxy"},
+		{Match: "*.local.test", Action: "direct"},
+		{Match: "keyword:tracker", Action: "reject"},
+		{Match: "cidr:192.0.2.0/24", Action: "direct"},
+	}
+	p := &parsedConf{bk: buckets{}, general: map[string]string{}}
+	if err := applyPolicyRules(p, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if !p.bk["proxy"]["domain"]["example.com"] ||
+		!p.bk["direct"]["domain_suffix"]["local.test"] ||
+		!p.bk["reject"]["domain_keyword"]["tracker"] ||
+		!p.bk["direct"]["ip_cidr"]["192.0.2.0/24"] {
+		t.Fatalf("policy rules were not normalized: %#v", p.bk)
+	}
+}
+
 func TestDirectOverridesAreCompiledBeforeRuleSets(t *testing.T) {
 	p := &parsedConf{bk: buckets{}, general: map[string]string{
 		"skip-proxy":     "*.local.test,10.0.0.0/8",

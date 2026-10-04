@@ -15,6 +15,7 @@ block_stun: true
 experiment:
   mode: off  # off | on | auto
   threshold: 3
+  cf_region_block: false  # learn explicit Cloudflare regional blocks
 tun_stack: gvisor
 log_level: info
 dns_guard:
@@ -42,6 +43,8 @@ nodes_file: /absolute/path/to/.sakamoto/nodes.txt
 srjson: /path/to/Shadowrocket.json
 allow_hosts: []
 subscriptions: []
+# Optional user-owned overrides. Match hostnames, not URL paths.
+policy: []
 icloud:
   enabled: false
   include_conf: true  # includes the actual local .conf and its relative .conf dependencies

@@ -59,6 +59,82 @@ func TestUnmatchedPolicyIsThreeStateSwitchNotTextEditor(t *testing.T) {
 	}
 }
 
+func TestCFRegionExperimentIsVisibleInSettings(t *testing.T) {
+	m := testModel(t)
+	m.page, m.height = settingsPage, 24
+	m.serviceState = "unavailable"
+	m.View()
+	if !strings.Contains(m.View(), "CF region auto-proxy") {
+		t.Fatal("CF experiment toggle should be visible in Settings")
+	}
+	for i, row := range m.cfgRows {
+		if row.label != "CF region auto-proxy" {
+			continue
+		}
+		m.cfgCursor = i
+		for _, h := range m.hits {
+			if h.action == "setting" && h.index == i {
+				m.click(h.x0, h.y)
+				if m.cfg.Experiment.CFRegionBlock {
+					return
+				}
+				t.Fatal("CF experiment toggle did not apply")
+			}
+		}
+		t.Fatal("CF experiment toggle is not clickable")
+	}
+	t.Fatal("CF experiment toggle missing")
+}
+
+func TestCustomPolicyRulePane(t *testing.T) {
+	m := testModel(t)
+	m.page, m.height = configPage, 32
+	m.View()
+	var section hit
+	for _, h := range m.hits {
+		if h.action == "section" && h.index == policySection {
+			section = h
+			break
+		}
+	}
+	if section.action == "" {
+		t.Fatal("policy section is not visible")
+	}
+	m.click(section.x0, section.y)
+	m.View()
+	var add hit
+	for _, h := range m.hits {
+		if h.action == "policy-add" {
+			add = h
+			break
+		}
+	}
+	if add.action == "" {
+		t.Fatal("policy add action is not visible")
+	}
+	m.click(add.x0, add.y)
+	if !m.policyEditing || !strings.Contains(m.View(), "Add policy rule") {
+		t.Fatal("policy editor did not open")
+	}
+	m.policyMatch = "https://Example.com/login"
+	m.policyField = 1
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	if m.policyAction != "direct" {
+		t.Fatalf("policy action was not selected: %s", m.policyAction)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if m.policyEditing || len(m.cfg.PolicyRules) != 1 {
+		t.Fatal("policy rule was not saved")
+	}
+	loaded, err := config.Load(m.cfgPath)
+	if err != nil || len(loaded.PolicyRules) != 1 || loaded.PolicyRules[0].Action != "direct" {
+		t.Fatalf("policy rule was not persisted: %v", err)
+	}
+	if !strings.Contains(m.notice, "regenerate") {
+		t.Fatal("policy activation boundary missing")
+	}
+}
+
 func TestPolicySaveFailureRestoresTheOriginalState(t *testing.T) {
 	m := testModel(t)
 	index := policyIndex(t, m)

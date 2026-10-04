@@ -13,6 +13,11 @@ import (
 // an observed TCP connection that had no matching route rule (route.final).
 // Never infer a failure merely from zero traffic or a closed connection.
 var directFailure = regexp.MustCompile(`(?i)connection: open connection to ([a-z0-9.-]+):(\d+) using outbound/direct\[direct\]:.*dial tcp .*i/o timeout`)
+var directConnection = regexp.MustCompile(`(?i)connection: open connection to ([a-z0-9.-]+):(\d+) using outbound/direct\[direct\]`)
+
+// Cloudflare's 1009 is the explicit country/region restriction. The text
+// forms require a Cloudflare marker as well, avoiding generic HTTP 403s.
+var cfRegionBlock = regexp.MustCompile(`(?i)(?:\b(?:error|code)\s*1009\b|\b1009\b.{0,80}(?:country|region)|cloudflare.{0,120}(?:country|region|error\s*1009)|(?:country|region).{0,120}(?:cloudflare|cf-ray))`)
 
 type attempt struct {
 	key, domain string
@@ -72,6 +77,35 @@ func (t *Tracker) Connection(ev *daemon.ConnectionEvent, now time.Time) {
 		return
 	}
 	t.active[ev.Id] = attempt{key: domain + ":" + port, domain: domain, seen: now}
+}
+
+// CloudflareRegionBlock returns a direct hostname only for an explicit
+// Cloudflare regional restriction, never for a generic 403 or challenge.
+func (t *Tracker) CloudflareRegionBlock(log string, now time.Time, proxyHealthy bool) string {
+	t.prune(now)
+	if !proxyHealthy || !cfRegionBlock.MatchString(log) {
+		return ""
+	}
+	match := directConnection.FindStringSubmatch(log)
+	if len(match) != 3 {
+		return ""
+	}
+	domain := Domain(match[1])
+	if domain == "" {
+		return ""
+	}
+	key := domain + ":" + match[2]
+	for id, a := range t.active {
+		if now.Sub(a.seen) > 2*time.Minute {
+			delete(t.active, id)
+			continue
+		}
+		if a.key == key {
+			delete(t.active, id)
+			return domain
+		}
+	}
+	return ""
 }
 
 // Failure returns a newly learned domain only after spaced, independent

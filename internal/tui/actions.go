@@ -4,19 +4,28 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/pi-dal/sakamoto/internal/config"
+	"github.com/pi-dal/sakamoto/internal/core"
 	"github.com/pi-dal/sakamoto/internal/gen"
 	"github.com/pi-dal/sakamoto/internal/security"
 	"github.com/pi-dal/sakamoto/internal/svc"
 )
 
 func (m *model) scrollBy(n int) {
+	if m.configForm && !m.formEditing {
+		available := max(2, m.height-6-8)
+		m.formScroll = max(0, min(max(0, len(m.formRows)-available), m.formScroll+n))
+		m.formCursor = m.formScroll
+		for m.formCursor < len(m.formRows) && m.formRows[m.formCursor].value == nil {
+			m.formCursor++
+		}
+		return
+	}
 	if m.page == homePage {
 		m.scroll = max(0, min(max(0, len(m.rows)-1), m.scroll+n))
 		// Keep the cursor in the scrolled viewport rather than snapping back.
@@ -39,6 +48,15 @@ func (m *model) scrollBy(n int) {
 	}
 }
 func (m *model) click(x, y int) tea.Cmd {
+	if m.policyEditing {
+		return m.clickPolicyEditor(x, y)
+	}
+	if m.configForm {
+		return m.clickConfigForm(x, y)
+	}
+	if m.importing {
+		return m.clickImportForm(x, y)
+	}
 	for _, h := range m.hits {
 		if y != h.y || x < h.x0 || x >= h.x1 {
 			continue
@@ -81,6 +99,15 @@ func (m *model) click(x, y int) tea.Cmd {
 		case "section":
 			m.configDetail = h.index
 			m.detailScroll = 0
+		case "policy-rule":
+			m.policyCursor = h.index
+			m.pendingDelete = ""
+		case "policy-add":
+			m.beginPolicyEdit(-1)
+		case "policy-edit":
+			m.beginPolicyEdit(m.policyCursor)
+		case "policy-delete":
+			return m.deletePolicyRule()
 		case "source":
 			m.sourceCursor = h.index
 			m.pendingDelete = ""
@@ -555,15 +582,15 @@ func (m *model) testAll() tea.Cmd {
 		return testDispatchMsg{batch: batch, errors: errors}
 	}
 }
+
+// nextMode cycles Rule → Global → Direct using the shared core policy;
+// unknown or unreported modes start the cycle at Rule.
 func nextMode(current string) string {
-	switch strings.ToLower(strings.TrimSpace(current)) {
-	case "rule":
-		return "Global"
-	case "global":
-		return "Direct"
-	default:
-		return "Rule"
+	mode, err := core.ParseRoutingMode(current)
+	if err != nil {
+		mode = "" // NextRoutingMode treats an unknown mode as the cycle start.
 	}
+	return string(core.NextRoutingMode(mode))
 }
 func (m *model) cycleMode() tea.Cmd {
 	if m.conn == nil {
@@ -637,10 +664,327 @@ func (m *model) generate() tea.Cmd {
 	}
 }
 func (m *model) editConfig() tea.Cmd {
-	editor := os.Getenv("EDITOR")
-	if editor == "" {
-		editor = "vi"
+	formCfg, err := cloneConfig(m.cfg)
+	if err != nil {
+		m.notice = "Could not open config form: " + err.Error()
+		return nil
 	}
-	cmd := exec.Command(editor, m.cfgPath)
-	return tea.ExecProcess(cmd, func(err error) tea.Msg { return actionMsg{text: "Config editor closed; press g to generate", err: err} })
+	m.formCfg = formCfg
+	m.formRows = m.settingsRows(formCfg)
+	m.configForm = true
+	m.formEditing = false
+	m.formInput = ""
+	m.formEditIndex = -1
+	m.formCursor = firstEditableRow(m.formRows)
+	m.formScroll = 0
+	m.formNotice = "Enter selects · custom values open an editor"
+	return nil
+}
+
+func firstEditableRow(rows []cfgRow) int {
+	for i, r := range rows {
+		if r.value != nil {
+			return i
+		}
+	}
+	return 0
+}
+
+func (m *model) closeConfigForm() {
+	m.configForm = false
+	m.formEditing = false
+	m.formInput = ""
+	m.formEditIndex = -1
+	m.formCfg = nil
+	m.formRows = nil
+	m.formNotice = ""
+}
+
+func (m *model) formMove(delta int) {
+	if len(m.formRows) == 0 {
+		return
+	}
+	i := m.formCursor
+	for i += delta; i >= 0 && i < len(m.formRows); i += delta {
+		if m.formRows[i].value != nil {
+			m.formCursor = i
+			return
+		}
+	}
+}
+
+func (m *model) formSelect(i int) {
+	if i < 0 || i >= len(m.formRows) || m.formRows[i].value == nil {
+		return
+	}
+	m.formCursor = i
+	r := m.formRows[i]
+	if len(r.choices) > 0 {
+		old := r.value()
+		next := r.choices[0]
+		for j, value := range r.choices {
+			if strings.EqualFold(value, old) {
+				next = r.choices[(j+1)%len(r.choices)]
+				break
+			}
+		}
+		if err := r.edit(next); err != nil {
+			m.formNotice = err.Error()
+		} else {
+			m.formNotice = r.label + " → " + next
+		}
+		return
+	}
+	if r.toggle != nil {
+		r.toggle()
+		m.formNotice = r.label + " → " + r.value()
+		return
+	}
+	if r.edit != nil {
+		m.formEditing = true
+		m.formEditIndex = i
+		m.formInput = r.value()
+		m.formNotice = "Enter accepts · Esc cancels this value"
+	}
+}
+
+func (m *model) handleConfigFormInput(k tea.KeyMsg) tea.Cmd {
+	if !m.formEditing {
+		switch k.String() {
+		case "esc":
+			m.closeConfigForm()
+		case "up", "k":
+			m.formMove(-1)
+		case "down", "j":
+			m.formMove(1)
+		case "left", "h", "right", "l", "enter", "space":
+			m.formSelect(m.formCursor)
+		case "ctrl+s":
+			return m.saveConfigForm()
+		}
+		return nil
+	}
+	switch k.String() {
+	case "esc":
+		m.formEditing = false
+		m.formEditIndex = -1
+		m.formInput = ""
+		m.formNotice = "Edit canceled"
+	case "enter":
+		r := m.formRows[m.formEditIndex]
+		if err := r.edit(strings.TrimSpace(m.formInput)); err != nil {
+			m.formNotice = err.Error()
+			return nil
+		}
+		m.formEditing = false
+		m.formEditIndex = -1
+		m.formInput = ""
+		m.formNotice = r.label + " updated"
+	case "backspace":
+		if len(m.formInput) > 0 {
+			runes := []rune(m.formInput)
+			m.formInput = string(runes[:len(runes)-1])
+		}
+	default:
+		if k.Type == tea.KeyRunes && len([]rune(m.formInput))+len(k.Runes) < 250 {
+			m.formInput += string(k.Runes)
+		}
+	}
+	return nil
+}
+
+func (m *model) saveConfigForm() tea.Cmd {
+	if m.formEditing {
+		return nil
+	}
+	if err := m.formCfg.Save(m.cfgPath); err != nil {
+		m.formNotice = "Save failed: " + err.Error()
+		return nil
+	}
+	*m.cfg = *m.formCfg
+	m.buildSettings()
+	m.closeConfigForm()
+	m.notice = "Settings saved; regenerate in Config and reconnect to apply"
+	return nil
+}
+
+func (m *model) clickImportForm(x, y int) tea.Cmd {
+	for _, h := range m.hits {
+		if y != h.y || x < h.x0 || x >= h.x1 {
+			continue
+		}
+		switch h.action {
+		case "import-confirm":
+			return m.handleImportInput(tea.KeyMsg{Type: tea.KeyEnter})
+		case "import-cancel":
+			return m.handleImportInput(tea.KeyMsg{Type: tea.KeyEsc})
+		}
+	}
+	return nil
+}
+
+func (m *model) clickPolicyEditor(x, y int) tea.Cmd {
+	for _, h := range m.hits {
+		if y != h.y || x < h.x0 || x >= h.x1 {
+			continue
+		}
+		switch h.action {
+		case "policy-match":
+			m.policyField = 0
+		case "policy-action":
+			m.policyField = 1
+			m.cyclePolicyAction(1)
+		case "policy-save":
+			return m.savePolicyRule()
+		case "policy-cancel":
+			m.closePolicyEditor()
+		}
+		return nil
+	}
+	return nil
+}
+
+func (m *model) beginPolicyEdit(index int) {
+	m.policyEditing = true
+	m.policyEditIndex = index
+	m.policyField = 0
+	m.policyNotice = ""
+	if index >= 0 && index < len(m.cfg.PolicyRules) {
+		m.policyMatch = m.cfg.PolicyRules[index].Match
+		m.policyAction = strings.ToLower(m.cfg.PolicyRules[index].Action)
+	} else {
+		m.policyMatch = ""
+		m.policyAction = "proxy"
+	}
+}
+
+func (m *model) closePolicyEditor() {
+	m.policyEditing = false
+	m.policyEditIndex = -1
+	m.policyField = 0
+	m.policyMatch = ""
+	m.policyAction = ""
+	m.policyNotice = ""
+}
+
+func (m *model) cyclePolicyAction(delta int) {
+	choices := []string{"proxy", "direct", "reject"}
+	current := 0
+	for i, action := range choices {
+		if m.policyAction == action {
+			current = i
+			break
+		}
+	}
+	current = (current + delta + len(choices)) % len(choices)
+	m.policyAction = choices[current]
+}
+
+func (m *model) handlePolicyInput(k tea.KeyMsg) tea.Cmd {
+	switch k.String() {
+	case "esc":
+		m.closePolicyEditor()
+	case "ctrl+s":
+		return m.savePolicyRule()
+	case "tab", "down":
+		m.policyField = (m.policyField + 1) % 2
+	case "up":
+		m.policyField = (m.policyField + 1) % 2
+	case "left":
+		if m.policyField == 1 {
+			m.cyclePolicyAction(-1)
+		}
+	case "right", "space":
+		if m.policyField == 1 {
+			m.cyclePolicyAction(1)
+		}
+	case "enter":
+		if m.policyField == 1 {
+			m.cyclePolicyAction(1)
+		} else {
+			m.policyField = 1
+		}
+	case "backspace":
+		if m.policyField == 0 && len(m.policyMatch) > 0 {
+			runes := []rune(m.policyMatch)
+			m.policyMatch = string(runes[:len(runes)-1])
+		}
+	default:
+		if m.policyField == 0 && k.Type == tea.KeyRunes && len([]rune(m.policyMatch))+len(k.Runes) < 256 {
+			m.policyMatch += string(k.Runes)
+		}
+	}
+	return nil
+}
+
+func (m *model) savePolicyRule() tea.Cmd {
+	rule := config.PolicyRule{Match: strings.TrimSpace(m.policyMatch), Action: strings.ToLower(strings.TrimSpace(m.policyAction))}
+	if rule.Match == "" {
+		m.policyNotice = "Enter a hostname, URL, keyword, or CIDR"
+		return nil
+	}
+	if rule.Action != "proxy" && rule.Action != "direct" && rule.Action != "reject" {
+		m.policyNotice = "Choose proxy, direct, or reject"
+		return nil
+	}
+	old := append([]config.PolicyRule(nil), m.cfg.PolicyRules...)
+	if m.policyEditIndex >= 0 && m.policyEditIndex < len(m.cfg.PolicyRules) {
+		m.cfg.PolicyRules[m.policyEditIndex] = rule
+	} else {
+		m.cfg.PolicyRules = append(m.cfg.PolicyRules, rule)
+	}
+	if err := m.cfg.Save(m.cfgPath); err != nil {
+		m.cfg.PolicyRules = old
+		m.policyNotice = "Save failed: " + err.Error()
+		return nil
+	}
+	m.policyCursor = len(m.cfg.PolicyRules) - 1
+	m.closePolicyEditor()
+	m.notice = "Policy saved; regenerate in Config and reconnect to apply"
+	return nil
+}
+
+func (m *model) deletePolicyRule() tea.Cmd {
+	if m.policyCursor < 0 || m.policyCursor >= len(m.cfg.PolicyRules) {
+		m.notice = "Select a policy rule first"
+		return nil
+	}
+	rule := m.cfg.PolicyRules[m.policyCursor]
+	key := "policy:" + fmt.Sprintf("%d:%s:%s", m.policyCursor, rule.Match, rule.Action)
+	if m.pendingDelete != key {
+		m.pendingDelete = key
+		m.notice = "Click Remove rule again to confirm: " + policyDisplayMatch(rule.Match)
+		return nil
+	}
+	m.pendingDelete = ""
+	old := append([]config.PolicyRule(nil), m.cfg.PolicyRules...)
+	m.cfg.PolicyRules = append(m.cfg.PolicyRules[:m.policyCursor], m.cfg.PolicyRules[m.policyCursor+1:]...)
+	if err := m.cfg.Save(m.cfgPath); err != nil {
+		m.cfg.PolicyRules = old
+		m.notice = "Remove failed: " + err.Error()
+		return nil
+	}
+	if m.policyCursor >= len(m.cfg.PolicyRules) {
+		m.policyCursor = max(0, len(m.cfg.PolicyRules)-1)
+	}
+	m.notice = "Policy removed; regenerate in Config and reconnect to apply"
+	return nil
+}
+
+func (m *model) clickConfigForm(x, y int) tea.Cmd {
+	for _, h := range m.hits {
+		if y != h.y || x < h.x0 || x >= h.x1 {
+			continue
+		}
+		switch h.action {
+		case "form-field":
+			m.formSelect(h.index)
+		case "form-save":
+			return m.saveConfigForm()
+		case "form-cancel":
+			m.closeConfigForm()
+		}
+		return nil
+	}
+	return nil
 }

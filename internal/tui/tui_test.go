@@ -286,6 +286,71 @@ func TestMouseConfigAndSettingEditor(t *testing.T) {
 	}
 }
 
+func TestConfigFormEditsChoicesAndCustomValues(t *testing.T) {
+	m := testModel(t)
+	m.page = configPage
+	m.height = 40
+	m.View()
+	var edit hit
+	for _, h := range m.hits {
+		if h.action == "edit-config" {
+			edit = h
+			break
+		}
+	}
+	if edit.action == "" {
+		t.Fatal("edit settings button missing")
+	}
+	m.click(edit.x0, edit.y)
+	if !m.configForm || m.formCfg == nil || !strings.Contains(m.View(), "Edit sakamoto.yaml") {
+		t.Fatal("config form did not open")
+	}
+	var stack, port hit
+	for _, h := range m.hits {
+		if h.action != "form-field" {
+			continue
+		}
+		switch m.formRows[h.index].label {
+		case "TUN stack":
+			stack = h
+		case "Listen port":
+			port = h
+		}
+	}
+	if stack.action == "" || port.action == "" {
+		t.Fatal("form fields missing")
+	}
+	m.click(stack.x0, stack.y)
+	if m.formCfg.TunStack != "mixed" {
+		t.Fatalf("choice was not cycled: %s", m.formCfg.TunStack)
+	}
+	m.click(port.x0, port.y)
+	m.formInput = "12081"
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.formEditing || m.formCfg.MixedInbound.Port != 12081 {
+		t.Fatal("custom field was not accepted")
+	}
+	m.View()
+	var save hit
+	for _, h := range m.hits {
+		if h.action == "form-save" {
+			save = h
+			break
+		}
+	}
+	if save.action == "" {
+		t.Fatal("form save button missing")
+	}
+	m.click(save.x0, save.y)
+	if m.configForm {
+		t.Fatal("config form did not close after save")
+	}
+	loaded, err := config.Load(m.cfgPath)
+	if err != nil || loaded.MixedInbound.Port != 12081 || loaded.TunStack != "mixed" {
+		t.Fatalf("form values were not persisted: %v", err)
+	}
+}
+
 func TestActionReloadsRotatedCredentialWithoutExposingIt(t *testing.T) {
 	m := testModel(t)
 	newer := config.Default()

@@ -10,10 +10,33 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/pi-dal/sakamoto/internal/config"
+	"github.com/pi-dal/sakamoto/pkg/mobileconf"
 	"github.com/sagernet/sing-box/common/srs"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
 )
+
+// applyPolicyRules adds user-owned overrides before compiling SRS. Direct rules
+// are intentionally compiled into the direct set, which has priority over proxy.
+func applyPolicyRules(p *parsedConf, cfg *config.Config) error {
+	for i, rule := range cfg.PolicyRules {
+		action := strings.ToLower(strings.TrimSpace(rule.Action))
+		match, kind, err := normalizePolicyMatch(rule.Match)
+		if err != nil {
+			return fmt.Errorf("policy[%d]: %w", i, err)
+		}
+		bkAdd(p.bk, action, kind, match)
+	}
+	return nil
+}
+
+// normalizePolicyMatch delegates to the shared implementation in
+// pkg/mobileconf, which also backs the iOS Policy validation — both sides
+// accept and fold matches identically.
+func normalizePolicyMatch(raw string) (string, string, error) {
+	return mobileconf.NormalizePolicyMatch(raw)
+}
 
 // buildRules resolves all direct overrides BEFORE compiling SRS so DNS and route sets agree.
 func buildRules(p *parsedConf, rulesDir string, hc *http.Client, ts tailscaleInfo) ([]map[string]any, error) {

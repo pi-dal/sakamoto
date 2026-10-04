@@ -20,6 +20,7 @@ import (
 	"github.com/pi-dal/sakamoto/internal/sbclient"
 	"github.com/pi-dal/sakamoto/internal/svc"
 	"github.com/sagernet/sing-box/daemon"
+	"gopkg.in/yaml.v3"
 )
 
 var (
@@ -129,6 +130,19 @@ type model struct {
 	importing, importBusy                           bool
 	importKind                                      string
 	editIndex                                       int
+	configForm                                      bool
+	formEditing                                     bool
+	formInput                                       string
+	formEditIndex                                   int
+	formCursor, formScroll                          int
+	formNotice                                      string
+	formCfg                                         *config.Config
+	formRows                                        []cfgRow
+	policyCursor                                    int
+	policyEditing                                   bool
+	policyField                                     int
+	policyEditIndex                                 int
+	policyMatch, policyAction, policyNotice         string
 	dataIDs                                         []string
 	selectedConn                                    string
 	batch                                           *testBatch
@@ -136,7 +150,7 @@ type model struct {
 
 func Run(ctx context.Context, cfg *config.Config, path string) error {
 	m := &model{cfg: cfg, cfgPath: path, conns: map[string]*daemon.Connection{}, height: 24, width: 80,
-		menuRow: -1, detailRow: -1, configDetail: -1, editIndex: -1, hoverX: -1, hoverY: -1}
+		menuRow: -1, detailRow: -1, configDetail: -1, editIndex: -1, formEditIndex: -1, policyEditIndex: -1, hoverX: -1, hoverY: -1}
 	m.exitLabel = exitFromConfig(path)
 	m.groups = offlineGroups(path)
 	m.rebuildRows()
@@ -250,7 +264,10 @@ func tick() tea.Cmd            { return tea.Tick(2*time.Second, func(time.Time) 
 func (m *model) Init() tea.Cmd { return tea.Batch(tick(), queryService) }
 
 func (m *model) buildSettings() {
-	c := m.cfg
+	m.cfgRows = m.settingsRows(m.cfg)
+}
+
+func (m *model) settingsRows(c *config.Config) []cfgRow {
 	on := func(v bool) string {
 		if v {
 			return "On"
@@ -261,7 +278,7 @@ func (m *model) buildSettings() {
 		return cfgRow{label: label, value: func() string { return on(*v) }, toggle: func() { *v = !*v }}
 	}
 	choice := func(label string, p *string, allowed ...string) cfgRow {
-		return cfgRow{label: label, value: func() string { return *p }, edit: func(v string) error {
+		row := cfgRow{label: label, value: func() string { return *p }, edit: func(v string) error {
 			for _, x := range allowed {
 				if strings.EqualFold(v, x) {
 					*p = x
@@ -270,6 +287,8 @@ func (m *model) buildSettings() {
 			}
 			return fmt.Errorf("allowed values: %s", strings.Join(allowed, " / "))
 		}}
+		row.choices = allowed
+		return row
 	}
 	cycleChoice := func(label string, p *string, allowed ...string) cfgRow {
 		row := choice(label, p, allowed...)
@@ -294,7 +313,7 @@ func (m *model) buildSettings() {
 			return nil
 		}}
 	}
-	m.cfgRows = []cfgRow{
+	return []cfgRow{
 		{label: "TUN · Network"},
 		toggle("Chain SOCKS exit", &c.ChainEnabled),
 		toggle("Optimize Tailscale", &c.TailscaleOptimize),
@@ -322,7 +341,8 @@ func (m *model) buildSettings() {
 		}},
 		toggle("Strict routing", &c.StrictRoute),
 		choice("TUN stack", &c.TunStack, "system", "gvisor", "mixed"),
-		{label: "Experimental · Unmatched traffic"},
+		{label: "Experimental · Traffic policy"},
+		toggle("CF region auto-proxy", &c.Experiment.CFRegionBlock),
 		cycleChoice("Unmatched policy", &c.Experiment.Mode, "off", "on", "auto"),
 		{label: "Direct failure threshold", value: func() string { return fmt.Sprint(c.Experiment.Threshold) }, edit: func(s string) error {
 			v, err := strconv.Atoi(s)
@@ -413,6 +433,18 @@ func (m *model) buildSettings() {
 			return nil
 		}},
 	}
+}
+
+func cloneConfig(src *config.Config) (*config.Config, error) {
+	raw, err := src.MarshalYAML()
+	if err != nil {
+		return nil, err
+	}
+	dst := config.Default()
+	if err := yaml.Unmarshal(raw, dst); err != nil {
+		return nil, err
+	}
+	return dst, nil
 }
 
 func (m *model) rebuildRows() {

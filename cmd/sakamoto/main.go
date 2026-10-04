@@ -20,7 +20,7 @@ import (
 	"github.com/pi-dal/sakamoto/internal/watch"
 )
 
-const version = "0.2.7"
+const version = "0.2.8"
 
 const usage = `sakamoto — a macOS sing-box controller inspired by Shadowrocket
 
@@ -46,7 +46,8 @@ TUI keys:
   c / space   Connect or disconnect       u  Test all nodes
   m           Cycle Rule / Global / Direct (new connections)
   a           Import conf URL/path in Config  g  Regenerate config
-  e           Edit config     Esc  Back/cancel   q  Quit
+  e           Edit config in TUI form (choose or edit fields)
+  Esc         Back/cancel     q  Quit
 
 Add share links to ~/.sakamoto/nodes.txt and press g in the TUI to regenerate.
 `

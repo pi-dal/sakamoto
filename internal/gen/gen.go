@@ -50,6 +50,9 @@ func Run(o Options) error {
 	if err := cfg.ValidateExperiment(); err != nil {
 		return err
 	}
+	if err := cfg.ValidatePolicy(); err != nil {
+		return err
+	}
 	if err := cfg.ValidateDNSGuard(); err != nil {
 		return err
 	}
@@ -66,6 +69,9 @@ func Run(o Options) error {
 
 	p, err := parseConf(o.ConfPath, hc)
 	if err != nil {
+		return err
+	}
+	if err := applyPolicyRules(p, cfg); err != nil {
 		return err
 	}
 	if isRemote(o.ConfPath) {
@@ -182,7 +188,7 @@ func Run(o Options) error {
 	if cfg.Experiment.Mode == "on" {
 		finalTag = exitTag
 	}
-	if cfg.Experiment.Mode == "auto" {
+	if cfg.Experiment.Mode == "auto" || cfg.Experiment.CFRegionBlock {
 		learned, err := experiment.Load(out)
 		if err != nil {
 			return fmt.Errorf("load auto-proxy rules: %w", err)

@@ -165,7 +165,7 @@ func (w *Watcher) runOnce(ctx context.Context) error {
 		connectionCh, connectionErrors = c.SubscribeConnections(subCtx, 500)
 		logCh, logErrors = c.SubscribeLog(subCtx)
 	}
-	if w.cfg.Experiment.Mode == "auto" {
+	if w.experimentEnabled() {
 		startAuto()
 	}
 	tick := time.NewTicker(w.cfg.CheckInterval)
@@ -211,7 +211,7 @@ func (w *Watcher) runOnce(ctx context.Context) error {
 			if !ok {
 				return fmt.Errorf("auto connection stream closed")
 			}
-			if w.cfg.Experiment.Mode == "auto" && events != nil {
+			if w.experimentEnabled() && events != nil {
 				for _, ev := range events.Events {
 					tracker.Connection(ev, time.Now())
 				}
@@ -220,13 +220,20 @@ func (w *Watcher) runOnce(ctx context.Context) error {
 			if !ok {
 				return fmt.Errorf("auto log stream closed")
 			}
-			if w.cfg.Experiment.Mode == "auto" && entry != nil {
+			if w.experimentEnabled() && entry != nil {
 				for _, msg := range entry.Messages {
-					if msg.Level != daemon.LogLevel_ERROR {
+					if msg.Level != daemon.LogLevel_ERROR && !w.cfg.Experiment.CFRegionBlock {
 						continue
 					}
-					if domain := tracker.Failure(msg.Message, time.Now(), w.proxyHealthy()); domain != "" {
-						w.learnDomain(ctx, domain)
+					if w.cfg.Experiment.Mode == "auto" {
+						if domain := tracker.Failure(msg.Message, time.Now(), w.proxyHealthy()); domain != "" {
+							w.learnDomain(ctx, domain, "repeated direct timeouts")
+						}
+					}
+					if w.cfg.Experiment.CFRegionBlock {
+						if domain := tracker.CloudflareRegionBlock(msg.Message, time.Now(), w.proxyHealthy()); domain != "" {
+							w.learnDomain(ctx, domain, "Cloudflare region block")
+						}
 					}
 				}
 			}
@@ -259,10 +266,10 @@ func (w *Watcher) runOnce(ctx context.Context) error {
 				continue
 			}
 			if latest, err := config.Load(w.cfgPath); err == nil {
-				if latest.Experiment.Mode == "auto" && autoCancel == nil {
+				if experimentEnabled(latest) && autoCancel == nil {
 					startAuto()
 				}
-				if latest.Experiment.Mode != "auto" && autoCancel != nil {
+				if !experimentEnabled(latest) && autoCancel != nil {
 					autoCancel()
 					autoCancel = nil
 					connectionCh = nil
@@ -338,6 +345,14 @@ func (w *Watcher) evaluate(ctx context.Context, c *sbclient.Client, started int6
 
 // proxyHealthy requires a recent successful URL test of the selected exit
 // group; during a general outage a direct timeout must not poison routing.
+func (w *Watcher) experimentEnabled() bool {
+	return experimentEnabled(w.cfg)
+}
+
+func experimentEnabled(cfg *config.Config) bool {
+	return cfg.Experiment.Mode == "auto" || cfg.Experiment.CFRegionBlock
+}
+
 func (w *Watcher) proxyHealthy() bool {
 	if w.lastSnap == nil {
 		return false
@@ -349,7 +364,7 @@ func (w *Watcher) proxyHealthy() bool {
 	return aliveFresh(w.lastSnap, main.Selected, time.Now().Add(-2*time.Minute).Unix())
 }
 
-func (w *Watcher) learnDomain(ctx context.Context, domain string) {
+func (w *Watcher) learnDomain(ctx context.Context, domain, reason string) {
 	if ctx.Err() != nil {
 		return
 	}
@@ -372,7 +387,7 @@ func (w *Watcher) learnDomain(ctx context.Context, domain string) {
 	if rollback == nil {
 		return
 	}
-	w.emit("info", "%s: repeated direct timeouts; proxy rule saved, reconnecting to apply", domain)
+	w.emit("info", "%s: %s; proxy rule saved, reconnecting to apply", domain, reason)
 	reconnectErr := svc.Reconnect()
 	if reconnectErr == nil {
 		probeCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
