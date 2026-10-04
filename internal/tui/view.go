@@ -697,7 +697,14 @@ func (m *model) renderImportForm(b *strings.Builder, startY int) {
 	box(title)
 	box("Input  " + display + "▏")
 	box(hint)
-	box("[ Confirm ]    [ Cancel ]")
+	confirmLabel, cancelLabel := "[ Confirm ]", "[ Cancel ]"
+	if m.hovered("import-confirm", 0) {
+		confirmLabel = focus.Render(confirmLabel)
+	}
+	if m.hovered("import-cancel", 0) {
+		cancelLabel = focus.Render(cancelLabel)
+	}
+	box(confirmLabel + "    " + cancelLabel)
 	confirmX := paneLeft + 1
 	m.addHit(confirmX, confirmX+lipgloss.Width("[ Confirm ]"), startY+4, "import-confirm", 0)
 	cancelX := paneLeft + 1 + lipgloss.Width("[ Confirm ]    ")
@@ -748,7 +755,7 @@ func (m *model) renderConfigForm(b *strings.Builder, startY int) {
 		}
 		line := fmt.Sprintf("%-31s %s", r.label, value)
 		if i == m.formCursor || m.hovered("form-field", i) {
-			line = ">" + line
+			line = focus.Render(">" + line)
 		}
 		box(trunc(line, innerWidth))
 		m.addHit(paneLeft+1, paneLeft+1+paneWidth, y, "form-field", i)
@@ -760,7 +767,14 @@ func (m *model) renderConfigForm(b *strings.Builder, startY int) {
 	if m.formNotice != "" {
 		footerY++
 	}
-	box("[ Save ]    [ Cancel ]")
+	saveLabel, cancelLabel := "[ Save ]", "[ Cancel ]"
+	if m.hovered("form-save", 0) {
+		saveLabel = focus.Render(saveLabel)
+	}
+	if m.hovered("form-cancel", 0) {
+		cancelLabel = focus.Render(cancelLabel)
+	}
+	box(saveLabel + "    " + cancelLabel)
 	m.addHit(paneLeft+1, paneLeft+1+lipgloss.Width("[ Save ]"), footerY, "form-save", 0)
 	cancelX := paneLeft + 1 + lipgloss.Width("[ Save ]    ")
 	m.addHit(cancelX, cancelX+lipgloss.Width("[ Cancel ]"), footerY, "form-cancel", 0)
@@ -835,14 +849,14 @@ func (m *model) renderPolicyEditor(b *strings.Builder, startY int) {
 	}
 	line := "Match   = " + match
 	if m.policyField == 0 {
-		line = ">" + line
+		line = focus.Render(">" + line)
 	}
 	box(line)
 	m.addHit(paneLeft+1, paneLeft+1+paneWidth, startY+2, "policy-match", 0)
 	action := "‹ " + strings.ToLower(m.policyAction) + " ›"
 	line = "Action  " + action
 	if m.policyField == 1 {
-		line = ">" + line
+		line = focus.Render(">" + line)
 	}
 	box(line)
 	m.addHit(paneLeft+1, paneLeft+1+paneWidth, startY+3, "policy-action", 0)
@@ -854,7 +868,14 @@ func (m *model) renderPolicyEditor(b *strings.Builder, startY int) {
 	if m.policyNotice != "" {
 		footerY++
 	}
-	box("[ Save ]    [ Cancel ]")
+	saveLabel, cancelLabel := "[ Save ]", "[ Cancel ]"
+	if m.hovered("policy-save", 0) {
+		saveLabel = focus.Render(saveLabel)
+	}
+	if m.hovered("policy-cancel", 0) {
+		cancelLabel = focus.Render(cancelLabel)
+	}
+	box(saveLabel + "    " + cancelLabel)
 	m.addHit(paneLeft+1, paneLeft+1+lipgloss.Width("[ Save ]"), footerY, "policy-save", 0)
 	cancelX := paneLeft + 1 + lipgloss.Width("[ Save ]    ")
 	m.addHit(cancelX, cancelX+lipgloss.Width("[ Cancel ]"), footerY, "policy-cancel", 0)
