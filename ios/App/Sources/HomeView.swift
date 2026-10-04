@@ -41,6 +41,7 @@ struct HomeView: View {
                 Button("Run probe") {
                     Task { await model.runProbe() }
                 }
+                .sakamotoGlassButton()
                 .disabled(model.phase != .tunRunning && model.phase != .reachable && model.phase != .unverified)
             } header: {
                 Text("Network")
@@ -53,6 +54,7 @@ struct HomeView: View {
             groupsSection
         }
         .navigationTitle("Home")
+        .listStyle(.insetGrouped)
         .task { await model.activate() }
     }
 
@@ -63,6 +65,8 @@ struct HomeView: View {
                 .foregroundStyle(phaseColor)
             Spacer()
         }
+        .padding(12)
+        .sakamotoGlassCard()
     }
 
     private var connectButton: some View {
@@ -78,7 +82,7 @@ struct HomeView: View {
             Text(model.phase == .disconnected || model.phase == .unavailable ? "Connect" : "Disconnect")
                 .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.borderedProminent)
+        .sakamotoGlassButton(prominent: true)
         .disabled(model.busy)
     }
 
@@ -93,6 +97,7 @@ struct HomeView: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .sakamotoGlassButton()
         .disabled(!model.commandChannelActive)
     }
 
@@ -172,13 +177,13 @@ struct HomeView: View {
                     Task { await model.selectNode(groupTag: group.tag, node: node) }
                 }
                 .font(.footnote)
-                .buttonStyle(.bordered)
+                .sakamotoGlassButton()
             }
             Button("Test") {
                 Task { await model.testNode(node) }
             }
             .font(.footnote)
-            .buttonStyle(.bordered)
+            .sakamotoGlassButton()
         }
     }
 

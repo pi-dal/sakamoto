@@ -125,6 +125,7 @@ struct DataView: View {
             logsSection
         }
         .navigationTitle("Data")
+        .listStyle(.insetGrouped)
         .task { model.activate() }
     }
 

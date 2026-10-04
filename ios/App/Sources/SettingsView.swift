@@ -144,7 +144,10 @@ final class SettingsModel: ObservableObject {
 
 struct SettingsView: View {
     @ObservedObject var model: SettingsModel
+    @ObservedObject var sync: ICloudSyncModel
     let commanding: LibboxCoreCommanding?
+
+    @State private var confirmSyncEnable = false
 
     var body: some View {
         List {
@@ -152,10 +155,25 @@ struct SettingsView: View {
             editableSection
             hostOwnedSection
             applySection
+            iCloudSyncSection
             tailscaleSection
         }
         .navigationTitle("Settings")
-        .task { model.activate() }
+        .listStyle(.insetGrouped)
+        .task {
+            model.activate()
+            sync.activate()
+        }
+        .confirmationDialog(
+            "Sync sources to iCloud?",
+            isPresented: $confirmSyncEnable,
+            titleVisibility: .visible
+        ) {
+            Button("Enable sync", role: .destructive) { sync.confirmEnable() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Node share links, subscription feed URLs (they usually contain access tokens) and the imported rule conf (it can contain proxy credentials and private host mappings) will be uploaded to your iCloud Drive. Consider Advanced Data Protection. Generated configs, keys and logs never sync.")
+        }
     }
 
     private var runtimeSection: some View {
@@ -170,6 +188,7 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .sakamotoGlassButton()
             .disabled(!model.channelActive)
             HStack {
                 Text("Command channel")
@@ -251,7 +270,82 @@ struct SettingsView: View {
             Button("Regenerate + Reconnect") {
                 Task { await model.regenerateAndApply() }
             }
+            .sakamotoGlassButton(prominent: true)
             .disabled(model.store.configState == .clean)
+        }
+    }
+
+    private var iCloudSyncSection: some View {
+        Section {
+            Toggle("Sync sources to iCloud", isOn: Binding(
+                get: { sync.settings.enabled },
+                set: { enabled in
+                    if enabled {
+                        // Second-step confirmation with the credential-risk
+                        // copy (docs/icloud.md: enabling needs confirmation).
+                        confirmSyncEnable = true
+                    } else {
+                        sync.disable()
+                    }
+                }
+            ))
+            if sync.settings.enabled {
+                Toggle("Include conf & rule includes", isOn: Binding(
+                    get: { sync.settings.includesConf },
+                    set: { sync.setIncludeConf($0) }
+                ))
+                Button {
+                    sync.syncNow()
+                } label: {
+                    HStack {
+                        Text("Sync now")
+                        if sync.syncing { Spacer(); ProgressView() }
+                    }
+                }
+                .sakamotoGlassButton()
+                .disabled(sync.syncing)
+            }
+            HStack {
+                Text("Last sync")
+                Spacer()
+                Text(sync.status.timestamp.map { ICloudSyncFormatting.timestamp($0) } ?? "never")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            if sync.settings.enabled {
+                if case .conflict(_, let names) = sync.status {
+                    Text("Conflict — not overwritten: " + names.joined(separator: ", "))
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                    Text("Both sides changed without a shared baseline. Keep the copy you want staged here, then sync again.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Additional source paths")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    TextField("nodes.txt\npolicy.json", text: $sync.additionalPathsDraft, axis: .vertical)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.footnote)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                    Button("Save paths") { sync.commitAdditionalPathsDraft() }
+                        .font(.footnote)
+                }
+            }
+            if let notice = sync.notice {
+                Text(notice)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            Text(sync.status.summary)
+                .font(.footnote)
+                .foregroundStyle(sync.status.isConflict ? Color.red : Color.secondary)
+        } header: {
+            Text("iCloud Sync")
+        } footer: {
+            Text("Off by default and never required: generated config.json, .srs, keys, Keychain content and logs stay local. The container id (iCloud.com.pidal.sakamoto) is a placeholder until a real Team signs the app — sync reports unavailable until then.")
         }
     }
 

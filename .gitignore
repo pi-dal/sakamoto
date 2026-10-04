@@ -25,3 +25,11 @@ watch.lock
 /ios/Frameworks/
 # Xcode project is generated from ios/project.yml (`xcodegen generate`)
 /ios/*.xcodeproj
+
+# Android integration: gomobile AAR bindings and Gradle build output
+# (never committed; built by android/scripts/*.sh)
+/android/app/libs/
+/android/.gradle/
+/android/build/
+/android/app/build/
+/android/local.properties

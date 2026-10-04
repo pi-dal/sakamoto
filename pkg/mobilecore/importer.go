@@ -60,14 +60,16 @@ func ValidatePolicyAction(action string) error {
 // It never carries the raw link, passwords, UUIDs or public keys. Field
 // semantics mirror mobileconf.NodeLinkInfo (kept as a distinct struct here
 // because gobind only binds types declared in this package).
+//
+// Port-range links (hysteria2 mport=) report Port=0: gomobile skips []string
+// struct fields, so the range list stays in the unbound mobileconf struct.
 type NodeLinkInfo struct {
 	Tag    string
 	Type   string
 	Server string
-	// Port is server_port when the link has a single port; 0 when only a
-	// port range (ServerPorts) is present.
+	// Port is server_port when the link has a single port; 0 when the link
+	// carries only a port range.
 	Port          int32
-	ServerPorts   []string
 	HasCredential bool
 }
 
@@ -88,7 +90,6 @@ func ParseShareLink(raw string) (*NodeLinkInfo, error) {
 		Type:          info.Type,
 		Server:        info.Server,
 		Port:          info.Port,
-		ServerPorts:   info.ServerPorts,
 		HasCredential: info.HasCredential,
 	}, nil
 }
@@ -98,85 +99,105 @@ func ParseShareLink(raw string) (*NodeLinkInfo, error) {
 // layer calls this before fetching so the entry points never diverge.
 func ValidateSourceURL(source string) error { return mobileconf.ValidSource(source) }
 
-// ConfReport is what iOS shows after importing a Shadowrocket conf: honest
-// counts plus the work that remains host-side. Includes and remote rule sets
-// are reported as pending references — never as generated rules or nodes.
-type ConfReport struct {
-	TotalRules  int32
-	ProxyRules  int32
-	DirectRules int32
-	RejectRules int32
-	// FinalTarget is the raw FINAL action ("DIRECT"/"PROXY"/custom), empty
-	// when the conf does not set one.
-	FinalTarget string
-	// HostCount is the number of exact [Host] IP overrides.
-	HostCount int32
-	// DNSResolvers lists the conf's dns-server entries (display values).
-	DNSResolvers []string
-	// IncludesPending are masked include references the device did not
-	// resolve; the host generator merges them during Regenerate.
-	IncludesPending []string
-	// RuleSetsPending are masked remote RULE-SET references not fetched on
-	// the device.
-	RuleSetsPending []string
-	// Unsupported carries the migration notes for sections sing-box cannot
-	// reproduce ([URL Rewrite], [MITM], [Script]/[Host]); [Proxy]/[Proxy
-	// Group] counts are reported because nodes come from nodes.txt,
-	// subscriptions and sakamoto groups instead.
-	Unsupported []string
-}
-
-// ParseConfContent parses Shadowrocket conf CONTENT (already fetched or read
-// by the app) and returns the validation report. It never fetches anything
-// and never resolves includes: those become pending entries. An error means
-// the content is not a usable Shadowrocket conf — callers must keep the
-// last-known-good import untouched.
-func ParseConfContent(content string) (*ConfReport, error) {
+// ParseConfContentJSON parses Shadowrocket conf CONTENT (already fetched or
+// read by the app) and returns the validation report as a JSON object —
+// content in, content out. Shape (asserted in importer_test.go, mirrored by
+// the Swift Codable ConfigModel.ImportSummary):
+//
+//	{"totalRules": n, "proxyRules": n, "directRules": n, "rejectRules": n,
+//	 "finalTarget": "", "hostCount": n, "dnsResolvers": [],
+//	 "includesPending": [], "ruleSetsPending": [], "unsupported": []}
+//
+// The device never fetches anything and never resolves includes: those
+// become pending entries. Includes and remote rule sets are masked
+// references — pending work for the host generator, never generated rules.
+// An error means the content is not a usable Shadowrocket conf — callers
+// must keep the last-known-good import untouched. (The report travels as
+// one JSON string because gomobile bind cannot carry []string across the
+// boundary; it silently skips struct fields of slice type, which is worse
+// than an explicit contract.)
+func ParseConfContentJSON(content string) (string, error) {
 	doc, err := mobileconf.ParseDocument(content, mobileconf.Hooks{})
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	report := &ConfReport{
-		TotalRules:  int32(doc.TotalRules()),
-		ProxyRules:  int32(doc.RuleCount("proxy")),
-		DirectRules: int32(doc.RuleCount("direct")),
-		RejectRules: int32(doc.RuleCount("reject")),
-		FinalTarget: doc.Final,
-		HostCount:   int32(len(doc.Hosts)),
-	}
+	var resolvers []string
 	if servers := strings.TrimSpace(doc.General["dns-server"]); servers != "" {
-		report.DNSResolvers = strings.Split(servers, ",")
-		for i := range report.DNSResolvers {
-			report.DNSResolvers[i] = strings.TrimSpace(report.DNSResolvers[i])
+		for _, resolver := range strings.Split(servers, ",") {
+			if r := strings.TrimSpace(resolver); r != "" {
+				resolvers = append(resolvers, r)
+			}
 		}
 	}
+	var includes, ruleSets []string
 	for _, inc := range doc.Includes {
-		report.IncludesPending = append(report.IncludesPending, mobileconf.DisplaySource(inc))
+		includes = append(includes, mobileconf.DisplaySource(inc))
 	}
 	for _, ref := range doc.RuleSets {
-		report.RuleSetsPending = append(report.RuleSetsPending, mobileconf.DisplaySource(ref.URL))
+		ruleSets = append(ruleSets, mobileconf.DisplaySource(ref.URL))
 	}
+	var unsupported []string
 	if len(doc.Rewrites) > 0 {
-		report.Unsupported = append(report.Unsupported,
+		unsupported = append(unsupported,
 			fmt.Sprintf("[URL Rewrite] %d entries omitted (sing-box does not rewrite URLs)", len(doc.Rewrites)))
 	}
 	if len(doc.Mitm) > 0 {
-		report.Unsupported = append(report.Unsupported,
+		unsupported = append(unsupported,
 			fmt.Sprintf("[MITM] %d entries omitted (sing-box does not decrypt traffic)", len(doc.Mitm)))
 	}
 	if len(doc.Scripts) > 0 {
-		report.Unsupported = append(report.Unsupported,
+		unsupported = append(unsupported,
 			fmt.Sprintf("[Script]/[Host] %d entries omitted (no script engine)", len(doc.Scripts)))
 	}
 	if len(doc.Proxies) > 0 {
-		report.Unsupported = append(report.Unsupported,
+		unsupported = append(unsupported,
 			fmt.Sprintf("[Proxy] %d entries: nodes come from manual links/subscriptions", len(doc.Proxies)))
 	}
 	if len(doc.PGroups) > 0 {
-		report.Unsupported = append(report.Unsupported,
+		unsupported = append(unsupported,
 			fmt.Sprintf("[Proxy Group] %d entries replaced by sakamoto groups", len(doc.PGroups)))
 	}
-	return report, nil
+	// nil slices must encode as [] (Swift decodes option-free lists).
+	if resolvers == nil {
+		resolvers = []string{}
+	}
+	if includes == nil {
+		includes = []string{}
+	}
+	if ruleSets == nil {
+		ruleSets = []string{}
+	}
+	if unsupported == nil {
+		unsupported = []string{}
+	}
+	report := struct {
+		TotalRules      int32    `json:"totalRules"`
+		ProxyRules      int32    `json:"proxyRules"`
+		DirectRules     int32    `json:"directRules"`
+		RejectRules     int32    `json:"rejectRules"`
+		FinalTarget     string   `json:"finalTarget"`
+		HostCount       int32    `json:"hostCount"`
+		DNSResolvers    []string `json:"dnsResolvers"`
+		IncludesPending []string `json:"includesPending"`
+		RuleSetsPending []string `json:"ruleSetsPending"`
+		Unsupported     []string `json:"unsupported"`
+	}{
+		TotalRules:      int32(doc.TotalRules()),
+		ProxyRules:      int32(doc.RuleCount("proxy")),
+		DirectRules:     int32(doc.RuleCount("direct")),
+		RejectRules:     int32(doc.RuleCount("reject")),
+		FinalTarget:     doc.Final,
+		HostCount:       int32(len(doc.Hosts)),
+		DNSResolvers:    resolvers,
+		IncludesPending: includes,
+		RuleSetsPending: ruleSets,
+		Unsupported:     unsupported,
+	}
+	b, err := json.Marshal(report)
+	if err != nil {
+		return "", fmt.Errorf("encode report: %w", err)
+	}
+	return string(b), nil
 }
 
 // ValidateConfigJSON performs the in-process STRUCTURAL check of a generated

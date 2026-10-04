@@ -20,6 +20,18 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>NSUbiquitousContainers</key>
+	<dict>
+		<key>iCloud.com.pidal.sakamoto</key>
+		<dict>
+			<key>NSUbiquitousContainerIsDocumentScopePublic</key>
+			<true/>
+			<key>NSUbiquitousContainerName</key>
+			<string>sakamoto</string>
+			<key>NSUbiquitousContainerSupportedFolderLevels</key>
+			<string>Any</string>
+		</dict>
+	</dict>
 	<key>SakamotoAppGroupIdentifier</key>
 	<string>group.com.pidal.sakamoto</string>
 	<key>SakamotoProviderBundleIdentifier</key>

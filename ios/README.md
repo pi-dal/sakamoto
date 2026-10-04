@@ -17,6 +17,8 @@ tunnel process; this is not a CLI probe and not an external-daemon count).
 | App-side `CoreCommanding` (mode/selection/URL test/groups) | `App/Sources/LibboxCoreCommanding.swift` |
 | Built-in Tailscale adapter (status stream, exit node, logout, ping) | `App/Sources/TailscaleController.swift` + `SakamotoKit/TailscaleVocabulary.swift` |
 | Auth-key storage | Keychain (`App/Sources/TailscaleKeychainStore.swift`), injected into the endpoint config at start (`TailscaleConfigInjection`) |
+| Config tab: Import / Policy / Nodes & sources / Generate·Apply | `App/Sources/ConfigView.swift` + `ConfigStore.swift`; parsing/validation via `pkg/mobileconf` + `pkg/mobilecore/importer.go` (real, tested) |
+| iCloud source sync (Settings → Sync sources to iCloud) | `SakamotoKit/ICloudSyncStore.swift` (actor, conflict-safe baseline pass, unit-tested in memory) + `App/Sources/ICloudSyncModel.swift` + real ubiquity container / `NSFileCoordinator` writes; entitlements are real declarations with a **placeholder container id** |
 | Unsigned simulator build | `xcodebuild … CODE_SIGNING_ALLOWED=NO build` (verified) |
 | Device build / VPN entitlement grant | **blocked on a real signing Team** (see below) — not faked |
 
@@ -104,6 +106,80 @@ reachable; one failed probe stays Unverified; selected ≠ reachable; mode
 changes are the Rule → Global → Direct cycle; unavailable modes surface
 "regenerate the config and reconnect" instead of silently no-oping.
 
+## Config tab: what is real on device, what stays host-owned
+
+`pkg/mobileconf` is the platform-independent parser (stdlib only, no
+sing-box imports — Mobilecore.xcframework is statically linked next to
+Libbox.xcframework and duplicate sing-box packages would break app linking).
+`internal/gen` delegates to it, so the iOS importer validates with the exact
+host semantics. On device:
+
+- **Import config**: `.conf` URL fetch (URLSession) or Files App document,
+  parsed in-process via `MobilecoreParseConfContentJSON` — rule counts,
+  pending include/RULE-SET references (masked) and unsupported-section
+  notes ([URL Rewrite]/[MITM]/[Script]). A failed fetch/parse keeps the
+  last-known-good import (`ConfigStore.commitImport` is the only writer).
+- **Policy**: match/action validated by `MobilecoreNormalizePolicyRule`
+  (both host validation layers), staged on device; the host folds them into
+  rules during Regenerate.
+- **Nodes & sources**: share links validated by `MobilecoreParseShareLink`
+  (credential-free summary, leak-tested), stored nodes.txt-compatible;
+  subscription METADATA only, rendered "Pending — fetched on the host".
+  Raw links and URLs render masked until revealed and never enter action
+  strings or logs.
+- **Generate/Apply**: `MobilecoreValidateConfigJSON` (structural, in-process)
+  → Keychain auth-key injection → provider reload. The .srs compilation and
+  `sing-box check` stay on the sakamoto host; Regenerate + Reconnect
+  collapse into one provider reload on iOS and the UI says so.
+
+Reports cross the gomobile boundary as one JSON string (`[]string` struct
+fields and returns are silently skipped by gomobile bind — a silent drop
+would fake completeness, so the contract is explicit JSON pinned by Go
+tests and mirrored by the Swift `Codable` side).
+
+## iCloud sync: what is real, what is placeholder
+
+`SakamotoKit/ICloudSyncStore.swift` is a faithful port of
+`internal/icloud/sync.go` + `sources.go` semantics onto the app's staged
+state (docs/icloud.md is the authority):
+
+- **Scope (allowlist + denylist double guard).** Only what the app stages:
+  `nodes.txt` (manual share links), `policy.json`, `subscriptions.json`
+  (feed metadata — URLs can carry access tokens, which the enable dialog
+  names), and `conf/<file>.conf` (the locally imported Shadowrocket conf,
+  gated by the include-conf consent). NEVER synced — rejected by name at any
+  depth (`ICloudSyncPaths.isValidSourceName`, the `ValidSourceName` port):
+  generated config.json, `.srs`, `*.db`, sockets/locks, logs, key material
+  (`.key/.pem`), `auth.json`/`secrets.zsh`, API-rotation state, the sync's
+  own `icloud-state.json`, hidden/traversal components, the `logs/` top
+  dir. Generated sing-box content and the Keychain auth key never enter the
+  payload at all.
+- **Conflict rules.** sha256 baseline in the app-support
+  `icloud-state.json`; one-sided first use copies; identical sides refresh
+  the baseline; both sides changed without a shared baseline → the pass
+  STOPS with a `.conflict` status naming the files — nothing is ever
+  overwritten; deletions are not propagated and a cloud-side deletion stops
+  the pass instead of being silently restored; the whole graph is
+  preflighted before any copy; a mid-pass failure keeps completed baselines.
+- **Real iCloud, no fakery.** `FileManager.url(forUbiquityContainerIdentifier:)`
+  resolves the container; cloud writes/reads go through `NSFileCoordinator`
+  with atomic (temp+rename) writes, mode 0600 / dirs 0700; symlinks refused.
+  No account/entitlement → status `unavailable`, local features untouched.
+  No UserDefaults is pretending to be a cloud.
+- **Unit-tested in memory.** 19 tests (`ICloudSyncTests`) cover the denylist,
+  include parsing, baseline, conflict, deletion, mid-pass failure, symlink
+  refusal, size caps and a two-device convergence scenario — filesystem and
+  clock are injected protocols, so no test touches iCloud.
+
+**Placeholder until a real Team signs the app:** the ubiquity container id
+`iCloud.com.pidal.sakamoto` (three places, replaced together:
+`App/Sakamoto.entitlements`, the `NSUbiquitousContainers` entry in
+`project.yml`, `UbiquityICloudContainer.placeholderContainerID`). The
+`com.apple.developer.icloud-*` entitlements are real declarations; Apple
+grants the iCloud capability only to a provisioned Team — until then sync
+reports `unavailable` instead of pretending. The PacketTunnel target
+deliberately has NO iCloud entitlements: sync is an app-process feature.
+
 ## Directory map
 
 | Path | What |
@@ -111,7 +187,7 @@ changes are the Rule → Global → Direct cycle; unavailable modes surface
 | `project.yml` | XcodeGen source of truth (targets, entitlements wiring, frameworks). The `.xcodeproj` is generated, git-ignored. |
 | `App/Sources/` | App-target sources (compiled by Xcode only): entry, Home/Config/Data/Settings/About, Tailscale tool page, `ConfigStore` (saved config + state machine), LibboxCoreCommanding, TailscaleController, Keychain store, app-process `LibboxSetup` |
 | `Extension/` | Tunnel-target sources: `SakamotoPacketTunnelProvider`, `ExtensionPlatformInterface`, `ExtensionSupport` (all carry upstream GPLv3 headers) |
-| `Sources/SakamotoKit/` | SwiftPM vocabulary (`Vocabulary`, `TailscaleVocabulary`, `DataVocabulary`, `SettingsSemantics`, `TailscaleEndpointProvisioning`), IPC codec, `TunnelStartOptions`, `CoreCommanding` protocol |
+| `Sources/SakamotoKit/` | SwiftPM vocabulary (`Vocabulary`, `TailscaleVocabulary`, `DataVocabulary`, `SettingsSemantics`, `TailscaleEndpointProvisioning`), IPC codec, `TunnelStartOptions`, `CoreCommanding` protocol, iCloud sync core (`ICloudSyncVocabulary/Filesystem/Store`) |
 | `Sources/SakamotoNE/` | `NETunnelController` (NEVPNManager / provider messages) |
 | `Tests/SakamotoKitTests/` | contract alignment + IPC codec + Data folding + Settings merges + Tailscale vocabulary/injection/provisioning tests |
 | `contract/vocabulary.json` | golden generated from Go |
@@ -171,8 +247,10 @@ xcodebuild -project Sakamoto.xcodeproj -scheme Sakamoto \
 
 1. Set `DEVELOPMENT_TEAM` in `ios/project.yml`; replace the placeholder
    bundle IDs / app group if desired; `xcodegen generate`.
-2. Register an App ID with the NetworkExtension capability for both bundle
-   IDs, create the app group, and let Xcode refresh provisioning.
+2. Register an App ID with the NetworkExtension **and iCloud Documents**
+   capabilities for both bundle IDs, create the app group, and the iCloud
+   container `iCloud.com.pidal.sakamoto` (or replace the placeholder in all
+   three places listed above); let Xcode refresh provisioning.
 3. Run on device; paste a generated sing-box config (or one produced by
    `sakamoto` on the host) in Config → Save → Regenerate + Reconnect.
 4. Optional: store a Tailscale auth key (Tailscale tab) — or leave it empty

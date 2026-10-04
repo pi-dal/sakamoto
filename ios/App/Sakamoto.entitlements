@@ -13,5 +13,19 @@
 	<array>
 		<string>group.com.pidal.sakamoto</string>
 	</array>
+	<!-- iCloud Documents (ubiquity container) for the source-sync feature
+	     (Settings → Sync sources to iCloud). The container id is a PLACEHOLDER
+	     matching UbiquityICloudContainer.placeholderContainerID and the
+	     NSUbiquitousContainers entry in project.yml — replace all three
+	     together with a real Team. The PacketTunnel target deliberately has
+	     NO iCloud entitlements: sync is an app-process feature. -->
+	<key>com.apple.developer.icloud-container-identifiers</key>
+	<array>
+		<string>iCloud.com.pidal.sakamoto</string>
+	</array>
+	<key>com.apple.developer.icloud-services</key>
+	<array>
+		<string>CloudDocuments</string>
+	</array>
 </dict>
 </plist>

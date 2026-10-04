@@ -47,6 +47,7 @@ struct TailscaleView: View {
             authKeySection
         }
         .navigationTitle("Tailscale")
+        .listStyle(.insetGrouped)
         .onAppear {
             controller.subscribe()
             loadDrafts()
@@ -224,7 +225,7 @@ struct TailscaleView: View {
                     Task { await controller.setExitNode(endpointTag: endpoint.endpointTag, peer: nil) }
                 }
                 .font(.footnote)
-                .buttonStyle(.bordered)
+                .sakamotoGlassButton()
             }
         }
         Menu("Set exit node") {
@@ -264,7 +265,7 @@ struct TailscaleView: View {
                 Task { await controller.ping(endpointTag: endpoint.endpointTag, peer: peer) }
             }
             .font(.footnote)
-            .buttonStyle(.bordered)
+            .sakamotoGlassButton()
             .disabled(!controller.channelActive)
             if let result = controller.pingResults[peer.stableID] {
                 Text(result.error ?? (result.isDirect == true ? "\(result.latencyMS ?? 0) ms direct" : "\(result.latencyMS ?? 0) ms"))

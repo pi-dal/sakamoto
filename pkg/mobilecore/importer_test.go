@@ -123,9 +123,24 @@ func TestParseConfContentReport(t *testing.T) {
 		"[Rule]\nDOMAIN-SUFFIX,a.example,DIRECT\nDOMAIN,b.example,REJECT\nIP-CIDR,10.0.0.0/8,DIRECT\n" +
 		"RULE-SET,https://lists.example.com/ads.txt?token=SECRET,REJECT\nFINAL,DIRECT\n" +
 		"\n[URL Rewrite]\n^https?://x - reject\n[MITM]\nhostname=x\n"
-	report, err := ParseConfContent(conf)
+	reportJSON, err := ParseConfContentJSON(conf)
 	if err != nil {
-		t.Fatalf("ParseConfContent: %v", err)
+		t.Fatalf("ParseConfContentJSON: %v", err)
+	}
+	var report struct {
+		TotalRules      int32    `json:"totalRules"`
+		ProxyRules      int32    `json:"proxyRules"`
+		DirectRules     int32    `json:"directRules"`
+		RejectRules     int32    `json:"rejectRules"`
+		FinalTarget     string   `json:"finalTarget"`
+		HostCount       int32    `json:"hostCount"`
+		DNSResolvers    []string `json:"dnsResolvers"`
+		IncludesPending []string `json:"includesPending"`
+		RuleSetsPending []string `json:"ruleSetsPending"`
+		Unsupported     []string `json:"unsupported"`
+	}
+	if err := json.Unmarshal([]byte(reportJSON), &report); err != nil {
+		t.Fatalf("report is not valid JSON: %v", err)
 	}
 	if report.TotalRules != 3 || report.DirectRules != 2 || report.RejectRules != 1 || report.ProxyRules != 0 {
 		t.Fatalf("counts: %+v", report)
@@ -139,10 +154,9 @@ func TestParseConfContentReport(t *testing.T) {
 	if len(report.IncludesPending) != 2 || len(report.RuleSetsPending) != 1 {
 		t.Fatalf("pending: %v / %v", report.IncludesPending, report.RuleSetsPending)
 	}
-	rendered, _ := json.Marshal(report)
 	for _, secret := range []string{"TOKEN", "SECRET"} {
-		if strings.Contains(string(rendered), secret) {
-			t.Fatalf("ConfReport leaked %q: %s", secret, rendered)
+		if strings.Contains(reportJSON, secret) {
+			t.Fatalf("report leaked %q: %s", secret, reportJSON)
 		}
 	}
 	if len(report.Unsupported) == 0 {
@@ -150,12 +164,25 @@ func TestParseConfContentReport(t *testing.T) {
 	}
 }
 
+func TestParseConfContentEmptyListsEncodeAsArrays(t *testing.T) {
+	reportJSON, err := ParseConfContentJSON("[Rule]\nDOMAIN,a.example,DIRECT\n")
+	if err != nil {
+		t.Fatalf("ParseConfContentJSON: %v", err)
+	}
+	for _, key := range []string{"dnsResolvers", "includesPending", "ruleSetsPending", "unsupported"} {
+		// Swift decodes option-free lists: null would break the contract.
+		if strings.Contains(reportJSON, `"`+key+`":null`) {
+			t.Fatalf("%s encoded as null: %s", key, reportJSON)
+		}
+	}
+}
+
 func TestParseConfContentRejectsNonConf(t *testing.T) {
-	if _, err := ParseConfContent("not a conf"); err == nil {
+	if _, err := ParseConfContentJSON("not a conf"); err == nil {
 		t.Fatal("expected error for non-conf content")
 	}
 	// Error text must not echo arbitrary content.
-	_, err := ParseConfContent("totally unrelated SECRETCONTENT")
+	_, err := ParseConfContentJSON("totally unrelated SECRETCONTENT")
 	if err == nil || strings.Contains(err.Error(), "SECRETCONTENT") {
 		t.Fatalf("error should be generic: %v", err)
 	}

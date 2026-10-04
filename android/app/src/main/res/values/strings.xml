@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">sakamoto</string>
+
+    <string name="tab_home">Home</string>
+    <string name="tab_config">Config</string>
+    <string name="tab_data">Data</string>
+    <string name="tab_settings">Settings</string>
+    <string name="tab_about">About</string>
+
+    <string name="channel_service">Tunnel service</string>
+    <string name="channel_events">Tunnel events</string>
+    <string name="status_starting">Starting…</string>
+    <string name="status_running">Running</string>
+    <string name="connect">Connect</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="cycle_mode">Cycle mode (Rule → Global → Direct)</string>
+    <string name="url_test">URL test</string>
+
+    <string name="phase_label">Phase</string>
+    <string name="mode_label">Routing mode</string>
+    <string name="selected_label">Selected node</string>
+    <string name="config_state_label">Config state</string>
+    <string name="service_state_label">Service state</string>
+    <string name="probe_state_label">Probe state</string>
+
+    <!-- Config page: the same four TUI section names, adapted to Android. -->
+    <string name="config_import_title">Import config</string>
+    <string name="config_import_hint">Shadowrocket .conf content or URL</string>
+    <string name="config_policy_title">Policy</string>
+    <string name="config_nodes_title">Nodes &amp; sources</string>
+    <string name="config_generate_title">Generate · Apply</string>
+    <string name="config_save">Save</string>
+    <string name="config_apply">Regenerate + Reconnect</string>
+    <string name="config_host_boundary">Rule-set (.srs) compilation and sing-box check stay on the sakamoto host. This page stages and validates only.</string>
+
+    <!-- Settings page boundary note (mirrors iOS Settings). -->
+    <string name="settings_host_boundary">Chain exits, fallbacks and subscriptions are host-owned (sakamoto.yaml); only the generated config and the runtime channel live on device.</string>
+
+    <!-- Config page dynamic strings. -->
+    <string name="policy_empty">No staged policy rules yet.</string>
+    <string name="nodes_count">Staged manual nodes: %1$d</string>
+    <string name="subscriptions_count">Staged subscriptions (metadata only): %1$d</string>
+    <string name="import_error_empty">Enter a config URL first.</string>
+    <string name="import_error_scheme">Only http(s) URLs are imported here; local file import is a follow-up.</string>
+    <string name="import_error_fetch">Fetch failed: %1$s</string>
+    <string name="import_error_parse">Parse failed: %1$s</string>
+    <string name="import_summary">Parsed: %1$d rules (proxy %2$d / direct %3$d / reject %4$d)</string>
+    <string name="apply_error_no_config">No saved config — import or paste one first.</string>
+    <string name="apply_error_check">Structural check failed: %1$s</string>
+
+    <!-- Data page. -->
+    <string name="data_no_status">No status stream yet — connect first.</string>
+    <string name="data_status">Connections in/out: %1$d/%2$d\nUplink: %3$d B\nDownlink: %4$d B</string>
+    <string name="data_connections_note">Groups: %1$s</string>
+    <string name="data_tailscale_note">Tailscale is built into the tunnel (with_tailscale AAR). Live status, exit node, logout and ping live on the Tailscale page (Settings → Built-in Tailscale).</string>
+
+    <!-- Settings page. -->
+    <string name="settings_runtime">Phase: %1$s\nMode: %2$s\nConfig state: %3$s</string>
+    <string name="settings_tailscale_entry">Built-in Tailscale</string>
+
+    <!-- Tailscale page (built-in endpoint; libbox v1.14.2 command RPCs). -->
+    <string name="ts_not_subscribed">Not subscribed — connect the tunnel first.</string>
+    <string name="ts_open_auth_url">Open login URL</string>
+    <string name="ts_tailnet_line">Tailnet: %1$s · MagicDNS: %2$s</string>
+    <string name="ts_exit_line">Exit node: %1$s</string>
+    <string name="ts_exit_none">No exit node selected.</string>
+    <string name="ts_authkey_title">Auth key (optional)</string>
+    <string name="ts_authkey_stored">Stored: %1$s (AES-GCM, Android Keystore)</string>
+    <string name="ts_authkey_absent">Not stored — the auth-URL login flow is used.</string>
+    <string name="ts_authkey_store">Store key</string>
+    <string name="ts_authkey_delete">Remove key</string>
+    <string name="ts_authkey_note">The key is encrypted with an Android Keystore key inside app-private storage, injected into the endpoint config only at start/reload, never logged and never shown in full.</string>
+    <string name="ts_authkey_hint">tskey-auth-…</string>
+    <string name="ts_exit_candidates">Exit node candidates</string>
+    <string name="ts_candidate_button">Use %1$s</string>
+    <string name="ts_no_candidates">No candidates (exit node options come from your tailnet policy).</string>
+    <string name="ts_clear_exit">Clear exit node</string>
+    <string name="ts_peers">Peers</string>
+    <string name="ts_ping_exit">Ping exit node</string>
+    <string name="ts_no_ping_target">No exit node to ping yet.</string>
+    <string name="ts_logout">Log out</string>
+    <string name="ts_logout_confirm">Log this device out of the tailnet?</string>
+    <string name="ts_unsupported_title">Not supported (and why)</string>
+    <string name="ts_no_browser">No browser available to open the login URL.</string>
+
+    <!-- About page. -->
+    <string name="about_version">sakamoto %1$s</string>
+    <string name="about_license">This app is free software: licensed under the GNU General Public License v3.0. There is NO WARRANTY, to the extent permitted by law.</string>
+    <string name="about_singbox">Powered by sing-box — the universal proxy platform by SagerNet (github.com/SagerNet/sing-box), used here through its libbox mobile library (v1.14.2, built with with_tailscale). sing-box is GPL-3.0; this app embeds it as the tunnel core.</string>
+    <string name="about_tailscale">Tailscale integration is the sing-box built-in Tailscale endpoint (embedded tsnet client). It is independent open-source code; not affiliated with, endorsed by, or connected to Tailscale, Inc.</string>
+    <string name="about_unofficial">This is an unofficial client built for personal use. State vocabulary, phase folding and routing semantics are shared with the sakamoto host via pkg/mobilecore.</string>
+    <string name="about_state_semantics">Home/Config/Data/Settings semantics mirror the sakamoto macOS TUI: phases fold in Go, this app renders.</string>
+</resources>
