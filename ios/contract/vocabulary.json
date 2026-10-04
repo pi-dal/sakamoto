@@ -1,0 +1,68 @@
+{
+  "contractVersion": 1,
+  "source": "github.com/pi-dal/sakamoto/pkg/mobilecore",
+  "serviceStates": [
+    "Stopped",
+    "Starting",
+    "Running",
+    "Stopping",
+    "Unavailable"
+  ],
+  "sessionPhases": [
+    "Disconnected",
+    "Starting",
+    "TUNRunning",
+    "Reachable",
+    "Unverified",
+    "Conflict",
+    "Unavailable",
+    "Stopping"
+  ],
+  "probeStates": [
+    "Idle",
+    "Checking",
+    "Reachable",
+    "Unverified"
+  ],
+  "probePaths": [
+    "system routing",
+    "browser proxy",
+    "system routing and browser proxy",
+    "system routing (browser proxy unverified)",
+    "browser proxy (system routing unverified)"
+  ],
+  "routingModes": [
+    "Rule",
+    "Global",
+    "Direct"
+  ],
+  "routingModeCycle": [
+    "Rule",
+    "Global",
+    "Direct"
+  ],
+  "nodeStatuses": [
+    "Untested",
+    "Testing",
+    "Reachable",
+    "Failed"
+  ],
+  "configStates": [
+    "Clean",
+    "NeedsRegenerate",
+    "NeedsReconnect"
+  ],
+  "configEvents": [
+    "modified",
+    "regenerate_succeeded",
+    "regenerate_failed",
+    "applied"
+  ],
+  "noticeKinds": [
+    "Info",
+    "Progress",
+    "Success",
+    "Warning",
+    "Error"
+  ]
+}

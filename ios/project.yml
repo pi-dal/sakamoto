@@ -1,0 +1,102 @@
+# sakamoto iOS app + PacketTunnel extension.
+#
+# Generated Xcode project: `xcodegen generate` from this file (the .xcodeproj
+# itself is git-ignored — the source of truth is here).
+#
+# PLACEHOLDER SIGNING VALUES (see ios/README.md before device use):
+#   - DEVELOPMENT_TEAM is empty by default; set it here or in an exported
+#     xcconfig when building for a real device.
+#   - The app group "group.com.pidal.sakamoto" and bundle IDs
+#     com.pidal.sakamoto{,.PacketTunnel} are development placeholders.
+#   - Entitlements are real declarations (packet-tunnel-provider +
+#     application-groups); Apple only grants the NetworkExtension
+#     entitlement to a provisioned Team — a stub cannot emulate it.
+name: Sakamoto
+options:
+  bundleIdPrefix: com.pidal
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+packages:
+  SakamotoiOS:
+    path: .
+
+settings:
+  base:
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+    CURRENT_PROJECT_VERSION: 1
+    MARKETING_VERSION: 0.1.0
+    SWIFT_VERSION: "5.10"
+
+targets:
+  Sakamoto:
+    type: application
+    platform: iOS
+    sources:
+      - path: App/Sources
+    dependencies:
+      - package: SakamotoiOS
+        product: SakamotoKit
+      - package: SakamotoiOS
+        product: SakamotoNE
+      - target: SakamotoPacketTunnel
+        embed: true
+        codeSign: true
+      - framework: Frameworks/Libbox.xcframework
+        embed: true
+      - framework: Frameworks/Mobilecore.xcframework
+        embed: true
+      - sdk: libresolv.tbd
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pidal.sakamoto
+        CODE_SIGN_ENTITLEMENTS: App/Sakamoto.entitlements
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: sakamoto
+        SakamotoAppGroupIdentifier: group.com.pidal.sakamoto
+        SakamotoProviderBundleIdentifier: com.pidal.sakamoto.PacketTunnel
+        UILaunchScreen: {}
+
+  SakamotoPacketTunnel:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Extension
+    dependencies:
+      - framework: Frameworks/Libbox.xcframework
+        embed: false
+      - package: SakamotoiOS
+        product: SakamotoKit
+      - sdk: libresolv.tbd
+      # libbox's Go runtime references UIKit (background-task bookkeeping);
+      # static archives carry no auto-link hints, so link it explicitly.
+      - sdk: UIKit.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pidal.sakamoto.PacketTunnel
+        CODE_SIGN_ENTITLEMENTS: Extension/SakamotoPacketTunnel.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks"
+    info:
+      path: Extension/Info.plist
+      properties:
+        CFBundleDisplayName: sakamoto Tunnel
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.networkextension.packet-tunnel
+        SakamotoAppGroupIdentifier: group.com.pidal.sakamoto
+
+schemes:
+  Sakamoto:
+    build:
+      targets:
+        Sakamoto: all
+        SakamotoPacketTunnel: all
+    run:
+      config: Debug

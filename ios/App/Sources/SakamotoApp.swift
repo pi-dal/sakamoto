@@ -1,0 +1,83 @@
+import SwiftUI
+import NetworkExtension
+import SakamotoKit
+import SakamotoNE
+
+// sakamoto iOS app entry. Placeholder bundle identifiers live in
+// ios/project.yml (com.pidal.sakamoto / com.pidal.sakamoto.PacketTunnel);
+// the provider bundle ID must match the PacketTunnel target exactly or
+// NEVPNManager refuses to start the tunnel.
+//
+// Page structure mirrors the macOS TUI: Home / Config / Data / Settings /
+// About. The built-in Tailscale endpoint is a tool entry under Settings.
+//
+// Command-channel lifecycle lives in LibboxCoreCommanding (desired state +
+// retries); NOTHING connects at app start. HomeModel drives start/stop from
+// the tunnel observations, so first launch (no tunnel yet) boots with the
+// channel honestly "Unavailable" and picks it up when the tunnel connects.
+
+@main
+struct SakamotoApp: App {
+    @StateObject private var store: ConfigStore
+    @StateObject private var homeModel: HomeModel
+    @StateObject private var configModel: ConfigModel
+    @StateObject private var settingsModel: SettingsModel
+
+    private let tunnel: NETunnelController
+    private let commanding: LibboxCoreCommanding
+
+    init() {
+        try? AppServiceSetup.apply()
+        let tunnel = NETunnelController(
+            providerBundleIdentifier: Bundle.main.object(
+                forInfoDictionaryKey: "SakamotoProviderBundleIdentifier"
+            ) as? String ?? "com.pidal.sakamoto.PacketTunnel"
+        )
+        let commanding = LibboxCoreCommanding()
+        let store = ConfigStore(keyStore: TailscaleKeychainStore())
+        self.tunnel = tunnel
+        self.commanding = commanding
+        _store = StateObject(wrappedValue: store)
+        _homeModel = StateObject(wrappedValue: HomeModel(
+            tunnel: tunnel,
+            commanding: commanding,
+            store: store
+        ))
+        _configModel = StateObject(wrappedValue: ConfigModel(
+            tunnel: tunnel,
+            store: store
+        ))
+        _settingsModel = StateObject(wrappedValue: SettingsModel(
+            store: store,
+            tunnel: tunnel,
+            commanding: commanding
+        ))
+    }
+
+    var body: some Scene {
+        WindowGroup {
+            TabView {
+                NavigationStack {
+                    HomeView(model: homeModel)
+                }
+                .tabItem { Label("Home", systemImage: "house") }
+                NavigationStack {
+                    ConfigView(model: configModel)
+                }
+                .tabItem { Label("Config", systemImage: "slider.horizontal.3") }
+                NavigationStack {
+                    DataView(commanding: commanding)
+                }
+                .tabItem { Label("Data", systemImage: "chart.bar") }
+                NavigationStack {
+                    SettingsView(model: settingsModel, commanding: commanding)
+                }
+                .tabItem { Label("Settings", systemImage: "gearshape") }
+                NavigationStack {
+                    AboutView()
+                }
+                .tabItem { Label("About", systemImage: "info.circle") }
+            }
+        }
+    }
+}

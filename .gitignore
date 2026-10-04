@@ -19,3 +19,9 @@ watch.lock
 .DS_Store
 .idea/
 .vscode/
+
+# iOS integration: SwiftPM build dir and built frameworks (never committed)
+/ios/.build/
+/ios/Frameworks/
+# Xcode project is generated from ios/project.yml (`xcodegen generate`)
+/ios/*.xcodeproj

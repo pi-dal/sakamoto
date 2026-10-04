@@ -1,0 +1,271 @@
+import SwiftUI
+import SakamotoKit
+
+// Data tab: live traffic, connections and core logs — the iOS counterpart
+// of the macOS TUI's Data page (internal/tui renderData). Every number on
+// this page comes from a real Libbox command stream (CommandStatus /
+// CommandConnections / CommandLog) through the shared command channel:
+//
+//   - channel down  → an explicit "unavailable" row (the reason included),
+//     never zeros, never mock rows;
+//   - trafficAvailable=false (core cannot measure yet) → same rule;
+//   - connection rows fold from the stream exactly like the TUI's m.conns
+//     map: NEW inserts, UPDATE adds deltas, CLOSED marks without deleting;
+//   - Close connection is a real RPC; failure lands in the notice line.
+
+@MainActor
+final class DataModel: ObservableObject {
+    @Published private(set) var traffic: TrafficSnapshot?
+    @Published private(set) var connections: [ConnectionRecord] = []
+    @Published private(set) var logs: [String] = []
+    @Published private(set) var channelActive = false
+    @Published private(set) var channelError: String?
+    @Published var selectedConnID: String?
+    @Published private(set) var notice: Notice?
+    @Published private(set) var closeInFlight = false
+
+    private let commanding: CoreCommanding?
+    private var tasks: [Task<Void, Never>] = []
+    private var activated = false
+
+    /// Number of rows shown before "… N more" (TUI caps the same way).
+    static let visibleConnectionRows = 8
+    static let visibleLogLines = 6
+
+    init(commanding: CoreCommanding?) {
+        self.commanding = commanding
+    }
+
+    var selectedConnection: ConnectionRecord? {
+        guard let selectedConnID else { return nil }
+        return connections.first { $0.id == selectedConnID }
+    }
+
+    var unavailableReason: String? {
+        if commanding == nil {
+            return "command channel unavailable — this build has no command bridge"
+        }
+        if !channelActive {
+            return channelError ?? "command channel unavailable — connect the tunnel first"
+        }
+        if let traffic, !traffic.trafficAvailable {
+            return "traffic measurement unavailable (the core has not reported traffic yet)"
+        }
+        return nil
+    }
+
+    /// One-time activation from the view. Idempotent; resubscribes the
+    /// availability consumer so tunnel restarts re-arm the page.
+    func activate() {
+        guard !activated else { return }
+        activated = true
+        guard let commanding else { return }
+        tasks.append(Task { [weak self] in
+            let availability = commanding.availability()
+            for await active in availability {
+                guard let self else { return }
+                self.channelActive = active
+                self.channelError = active ? nil : commanding.lastChannelError
+            }
+        })
+        tasks.append(Task { [weak self] in
+            let stream = commanding.traffic()
+            for await snapshot in stream {
+                self?.traffic = snapshot
+            }
+        })
+        tasks.append(Task { [weak self] in
+            let stream = commanding.connections()
+            for await records in stream {
+                self?.connections = records
+            }
+        })
+        tasks.append(Task { [weak self] in
+            let stream = commanding.logs()
+            for await lines in stream {
+                self?.logs = lines
+            }
+        })
+    }
+
+    func deactivate() {
+        // Keep consuming while the tab exists; streams are cheap and the
+        // TUI keeps its counters across page switches too. Nothing to do.
+    }
+
+    func closeSelectedConnection() async {
+        guard let commanding, let id = selectedConnID else { return }
+        closeInFlight = true
+        defer { closeInFlight = false }
+        do {
+            try await commanding.closeConnection(id: id)
+            notice = Notice(kind: .success, text: "connection closed")
+            selectedConnID = nil
+        } catch {
+            notice = Notice(kind: .error, text: "close: \(error.localizedDescription)")
+        }
+    }
+}
+
+struct DataView: View {
+    @StateObject private var model: DataModel
+
+    init(commanding: CoreCommanding?) {
+        _model = StateObject(wrappedValue: DataModel(commanding: commanding))
+    }
+
+    var body: some View {
+        List {
+            trafficSection
+            if model.selectedConnection != nil {
+                detailSection
+            } else {
+                connectionsSection
+            }
+            logsSection
+        }
+        .navigationTitle("Data")
+        .task { model.activate() }
+    }
+
+    private var trafficSection: some View {
+        Section {
+            if let reason = model.unavailableReason {
+                Text(reason)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } else if let traffic = model.traffic {
+                HStack {
+                    Text("Traffic")
+                    Spacer()
+                    Text("↑ \(formatBytes(traffic.uplink)) (\(formatBytes(traffic.uplinkTotal)))  ↓ \(formatBytes(traffic.downlink)) (\(formatBytes(traffic.downlinkTotal)))")
+                        .font(.footnote.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                HStack {
+                    Text("Connections")
+                    Spacer()
+                    Text("\(traffic.connectionsIn) in / \(traffic.connectionsOut) out")
+                        .font(.footnote.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if let notice = model.notice {
+                Text(notice.text)
+                    .font(.footnote)
+                    .foregroundStyle(notice.kind == .error ? Color.red : Color.secondary)
+            }
+        } header: {
+            Text("Live")
+        } footer: {
+            Text("Rate (total) per interval, as reported by the core over the command channel.")
+        }
+    }
+
+    @ViewBuilder
+    private var connectionsSection: some View {
+        Section {
+            if model.channelActive && model.connections.isEmpty {
+                Text("No connections reported yet.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(visibleConnections) { record in
+                Button {
+                    model.selectedConnID = record.id
+                } label: {
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text(record.displayName)
+                                .lineLimit(1)
+                            Text(record.closed
+                                 ? "closed · \(record.outbound)"
+                                 : "\(record.outbound) · ↑\(formatBytes(record.uplinkTotal)) ↓\(formatBytes(record.downlinkTotal))")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if record.closed {
+                            Text("closed")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+            if model.connections.count > DataModel.visibleConnectionRows {
+                Text("… \(model.connections.count - DataModel.visibleConnectionRows) more")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Recent connections (select for details)")
+        }
+    }
+
+    private var visibleConnections: [ConnectionRecord] {
+        Array(model.connections.prefix(DataModel.visibleConnectionRows))
+    }
+
+    @ViewBuilder
+    private var detailSection: some View {
+        Section {
+            if let conn = model.selectedConnection {
+                detailRow("Target", conn.destination)
+                detailRow("Source", conn.source)
+                detailRow("Outbound", conn.outbound)
+                if !conn.chain.isEmpty {
+                    detailRow("Chain", conn.chain.joined(separator: " → "))
+                }
+                if !conn.rule.isEmpty {
+                    detailRow("Rule", conn.rule)
+                }
+                detailRow("Traffic", "↑\(formatBytes(conn.uplinkTotal)) ↓\(formatBytes(conn.downlinkTotal))")
+                HStack {
+                    Button("Back") { model.selectedConnID = nil }
+                    Button("Close connection", role: .destructive) {
+                        Task { await model.closeSelectedConnection() }
+                    }
+                    .disabled(model.closeInFlight)
+                }
+            }
+        } header: {
+            Text("Connection details")
+        }
+    }
+
+    private func detailRow(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .top) {
+            Text(label)
+            Spacer()
+            Text(value)
+                .font(.footnote.monospaced())
+                .multilineTextAlignment(.trailing)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
+    }
+
+    private var logsSection: some View {
+        Section {
+            if model.channelActive && model.logs.isEmpty {
+                Text("No core logs yet.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(Array(visibleLogs.enumerated()), id: \.offset) { _, line in
+                Text(line)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+        } header: {
+            Text("Core logs")
+        }
+    }
+
+    private var visibleLogs: [String] {
+        Array(model.logs.suffix(DataModel.visibleLogLines))
+    }
+}

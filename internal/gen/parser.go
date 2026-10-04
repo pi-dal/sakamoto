@@ -5,7 +5,6 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -13,62 +12,19 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"github.com/pi-dal/sakamoto/pkg/mobileconf"
 )
 
-// ---------------- Shadowrocket conf parser ----------------
-
-type buckets map[string]map[string]map[string]bool // target → ruletype → items
-
-var ruleTypes = map[string]string{
-	"DOMAIN": "domain", "DOMAIN-SUFFIX": "domain_suffix",
-	"DOMAIN-KEYWORD": "domain_keyword", "IP-CIDR": "ip_cidr", "IP-CIDR6": "ip_cidr",
-	"IP-ASN": "", // No equivalent rule; skip.
-}
-
-var commentRe = regexp.MustCompile(`\s//`) // Strip only whitespace-prefixed comments; preserve https:// URLs.
+// buckets is the shared parsed-rule store; the parse implementation lives in
+// pkg/mobileconf so the iOS app validates with the exact same semantics.
+type buckets = mobileconf.Buckets
 
 const maxConfBytes = 16 << 20 // Allow large ad lists, but reject unbounded responses.
 var reportMu sync.Mutex
 var reportOutput io.Writer = os.Stdout
 
 func reportf(format string, args ...any) { _, _ = fmt.Fprintf(reportOutput, format, args...) }
-
-// ValidSource accepts a local .conf path or an HTTP(S) URL. Other schemes are rejected.
-func ValidSource(source string) error {
-	source = strings.TrimSpace(source)
-	if source == "" {
-		return fmt.Errorf("provide a Shadowrocket .conf URL or local path")
-	}
-	u, err := url.Parse(source)
-	if err != nil {
-		return err
-	}
-	if strings.Contains(source, "://") && u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("only HTTP(S) URLs or local paths are supported")
-	}
-	if (u.Scheme == "http" || u.Scheme == "https") && u.Host == "" {
-		return fmt.Errorf("URL is missing a host")
-	}
-	return nil
-}
-func isRemote(source string) bool {
-	u, err := url.Parse(source)
-	return err == nil && (u.Scheme == "http" || u.Scheme == "https")
-}
-func displaySource(source string) string {
-	if !isRemote(source) {
-		return source
-	}
-	u, _ := url.Parse(source)
-	u.User = nil
-	u.RawQuery = ""
-	u.Fragment = ""
-	if u.Path != "" && u.Path != "/" {
-		u.Path = "/…"
-		u.RawPath = ""
-	}
-	return u.String()
-}
 
 var errorURL = regexp.MustCompile(`https?://[^\s"']+`)
 
@@ -78,6 +34,15 @@ func errString(err error) string {
 	}
 	return errorURL.ReplaceAllStringFunc(err.Error(), displaySource)
 }
+
+// isRemote and displaySource are thin delegates: the implementation is
+// shared with the iOS importer via pkg/mobileconf.
+func isRemote(source string) bool        { return mobileconf.IsRemote(source) }
+func displaySource(source string) string { return mobileconf.DisplaySource(source) }
+
+// ValidSource accepts a local .conf path or an HTTP(S) URL. Other schemes are rejected.
+func ValidSource(source string) error { return mobileconf.ValidSource(source) }
+
 func resolveInclude(parent, inc string) (string, error) {
 	if err := ValidSource(inc); err != nil {
 		return "", err
@@ -132,23 +97,14 @@ func readConfSource(source string, hc *http.Client) ([]byte, error) {
 	return body, nil
 }
 
-func normTarget(t string) string {
-	switch strings.ToUpper(strings.TrimSpace(t)) {
-	case "REJECT", "REJECT-DROP", "REJECT-NO-DROP":
-		return "reject"
-	case "DIRECT", "TAILSCALE":
-		return "direct" // Let the desktop Tailscale client handle its own traffic.
-	default:
-		return "proxy"
-	}
-}
-
+// parsedConf is one parsed conf document plus the host-side raw copy for the
+// imports cache. Parsing itself lives in pkg/mobileconf (shared with the iOS
+// app); this struct keeps the field names the rest of the generator consumes.
 type parsedConf struct {
 	bk      buckets
 	general map[string]string
 	hosts   map[string]string
 	rawRoot string
-	errors  []error
 	geoip   [][2]string // (cc, target)
 	final   string
 	// Unsupported sections retained only for the migration report.
@@ -159,84 +115,32 @@ type parsedConf struct {
 	scripts  []string // [Script]/[Host]
 }
 
-func (p *parsedConf) add(line, defaultTarget string, hc *http.Client) {
-	line = commentRe.Split(line, 2)[0]
-	line = strings.TrimSpace(line)
-	if line == "" || strings.HasPrefix(line, "#") {
-		return
-	}
-	parts := strings.Split(line, ",")
-	for i := range parts {
-		parts[i] = strings.TrimSpace(parts[i])
-	}
-	rt := strings.ToUpper(parts[0])
-	if key, ok := ruleTypes[rt]; ok && len(parts) >= 2 {
-		if key == "" {
-			return
+// ruleSetFetcher supplies pkg/mobileconf with the host-only RULE-SET fetch:
+// HTTP(S) lists are downloaded with the shared size limit and fed back line
+// by line. Error wording matches the historical importer messages.
+func ruleSetFetcher(hc *http.Client) func(source, target string, add func(line string)) error {
+	return func(source, target string, add func(line string)) error {
+		resp, err := hc.Get(source)
+		if err != nil {
+			return fmt.Errorf("fetch RULE-SET %s: %v", displaySource(source), errString(err))
 		}
-		tgt := defaultTarget
-		if len(parts) >= 3 {
-			tgt = parts[2]
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("RULE-SET %s: HTTP %d", displaySource(source), resp.StatusCode)
 		}
-		if tgt == "" {
-			return
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxConfBytes+1))
+		if err != nil || len(body) > maxConfBytes {
+			return fmt.Errorf("RULE-SET %s could not be read or exceeded the size limit: %v", displaySource(source), errString(err))
 		}
-		if p.bk[normTarget(tgt)] == nil {
-			p.bk[normTarget(tgt)] = map[string]map[string]bool{}
+		sc := bufio.NewScanner(strings.NewReader(string(body)))
+		for sc.Scan() {
+			add(sc.Text())
 		}
-		if p.bk[normTarget(tgt)][key] == nil {
-			p.bk[normTarget(tgt)][key] = map[string]bool{}
+		if err := sc.Err(); err != nil {
+			return fmt.Errorf("RULE-SET %s: %v", displaySource(source), errString(err))
 		}
-		p.bk[normTarget(tgt)][key][parts[1]] = true
-	} else if rt == "RULE-SET" && len(parts) >= 3 {
-		p.fetchList(parts[1], parts[2], hc)
-	} else if rt == "GEOIP" && len(parts) >= 3 {
-		p.geoip = append(p.geoip, [2]string{strings.ToUpper(parts[1]), normTarget(parts[2])})
-	} else if rt == "FINAL" && len(parts) >= 2 {
-		p.final = parts[1]
+		return nil
 	}
-}
-
-func (p *parsedConf) fetchList(source, target string, hc *http.Client) {
-	if !isRemote(source) {
-		p.errors = append(p.errors, fmt.Errorf("RULE-SET requires an HTTP(S) URL: %s", displaySource(source)))
-		return
-	}
-	resp, err := hc.Get(source)
-	if err != nil {
-		p.errors = append(p.errors, fmt.Errorf("fetch RULE-SET %s: %v", displaySource(source), errString(err)))
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		p.errors = append(p.errors, fmt.Errorf("RULE-SET %s: HTTP %d", displaySource(source), resp.StatusCode))
-		return
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxConfBytes+1))
-	if err != nil || len(body) > maxConfBytes {
-		p.errors = append(p.errors, fmt.Errorf("RULE-SET %s could not be read or exceeded the size limit: %v", displaySource(source), errString(err)))
-		return
-	}
-	n0 := p.count()
-	sc := bufio.NewScanner(strings.NewReader(string(body)))
-	for sc.Scan() {
-		p.add(sc.Text(), target, hc)
-	}
-	if err := sc.Err(); err != nil {
-		p.errors = append(p.errors, fmt.Errorf("RULE-SET %s: %v", displaySource(source), errString(err)))
-		return
-	}
-	reportf("  + RULE-SET %s: %d entries\n", filepath.Base(source), p.count()-n0)
-}
-
-func (p *parsedConf) count() int {
-	n := 0
-	for _, m := range p.bk {
-		for _, s := range m {
-			n += len(s)
-		}
-	}
-	return n
 }
 
 func parseConf(path string, hc *http.Client) (*parsedConf, error) {
@@ -281,68 +185,22 @@ func parseConfRec(path string, hc *http.Client, seen map[string]bool) (*parsedCo
 	if err != nil {
 		return nil, err
 	}
-	p := &parsedConf{bk: buckets{}, general: map[string]string{}, hosts: map[string]string{}, rawRoot: string(body)}
-	section := ""
-	var includes []string
-	sc := bufio.NewScanner(strings.NewReader(string(body)))
-	sc.Buffer(make([]byte, 1<<20), 1<<20)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			section = strings.ToLower(line[1 : len(line)-1])
-			continue
-		}
-		switch section {
-		case "general":
-			if k, v, ok := strings.Cut(line, "="); ok && !strings.HasPrefix(line, "#") {
-				k, v = strings.TrimSpace(k), strings.TrimSpace(v)
-				if k == "include" && v != "" {
-					includes = append(includes, splitCSV(v)...)
-					continue
-				}
-				p.general[k] = v
-			}
-		case "rule":
-			p.add(line, "", hc)
-		case "url rewrite":
-			if line != "" && !strings.HasPrefix(line, "#") {
-				p.rewrites = append(p.rewrites, line)
-			}
-		case "mitm":
-			if line != "" && !strings.HasPrefix(line, "#") {
-				p.mitm = append(p.mitm, line)
-			}
-		case "proxy":
-			if line != "" && !strings.HasPrefix(line, "#") {
-				p.proxies = append(p.proxies, line)
-			}
-		case "proxy group":
-			if line != "" && !strings.HasPrefix(line, "#") {
-				p.pgroups = append(p.pgroups, line)
-			}
-		case "host":
-			if name, ip, ok := strings.Cut(line, "="); ok {
-				name, ip = strings.ToLower(strings.TrimSpace(name)), strings.TrimSpace(ip)
-				if name != "" && net.ParseIP(ip) != nil {
-					p.hosts[name] = ip
-				} else if line != "" {
-					p.scripts = append(p.scripts, "Host: "+line)
-				}
-			}
-		case "script", "script-url":
-			if line != "" && !strings.HasPrefix(line, "#") {
-				p.scripts = append(p.scripts, line)
-			}
-		}
-	}
-	if err := sc.Err(); err != nil {
+	doc, err := mobileconf.ParseDocument(string(body), mobileconf.Hooks{
+		FetchRuleSet: ruleSetFetcher(hc),
+		Report:       reportf,
+	})
+	if err != nil {
 		return nil, err
 	}
-	if len(p.errors) > 0 {
-		return nil, p.errors[0]
+	p := &parsedConf{
+		bk: doc.Buckets, general: doc.General, hosts: doc.Hosts,
+		geoip: doc.GeoIP, final: doc.Final,
+		rewrites: doc.Rewrites, mitm: doc.Mitm, proxies: doc.Proxies,
+		pgroups: doc.PGroups, scripts: doc.Scripts,
+		rawRoot: string(body),
 	}
 	// Resolve relative includes against their URL or local parent directory.
-	for _, inc := range includes {
+	for _, inc := range doc.Includes {
 		includePath, err := resolveInclude(path, inc)
 		if err != nil {
 			return nil, fmt.Errorf("invalid include %q: %w", inc, err)

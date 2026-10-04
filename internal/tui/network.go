@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/pi-dal/sakamoto/internal/config"
+	"github.com/pi-dal/sakamoto/internal/core"
 )
 
 // These are independent, small HTTPS endpoints. A single service failure must
@@ -46,23 +47,12 @@ func probeHTTP(ctx context.Context, proxy *url.URL, endpoints []string) error {
 	return errors.Join(failures...)
 }
 
+// classifyNetworkProbe adapts the shared core classification to the TUI msg
+// type. Path and error text are product vocabulary owned by core so every
+// front end reports identical probe results.
 func classifyNetworkProbe(routeErr, mixedErr error, mixedEnabled bool) networkMsg {
-	if routeErr == nil {
-		if mixedEnabled {
-			if mixedErr == nil {
-				return networkMsg{path: "system routing and browser proxy"}
-			}
-			return networkMsg{path: "system routing (browser proxy unverified)"}
-		}
-		return networkMsg{path: "system routing"}
-	}
-	if mixedEnabled && mixedErr == nil {
-		return networkMsg{path: "browser proxy (system routing unverified)"}
-	}
-	if mixedEnabled {
-		return networkMsg{err: fmt.Errorf("system routing: %w; browser proxy: %w", routeErr, mixedErr)}
-	}
-	return networkMsg{err: fmt.Errorf("system routing: %w", routeErr)}
+	outcome := core.ClassifyProbe(routeErr, mixedErr, mixedEnabled)
+	return networkMsg{path: outcome.Path, err: outcome.Err}
 }
 
 func diagnoseNetwork(cfg *config.Config) networkMsg {

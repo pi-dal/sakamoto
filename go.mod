@@ -6,6 +6,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/ansi v0.10.1
+	github.com/sagernet/gomobile v0.1.12
 	github.com/sagernet/sing-box v1.14.2
 	golang.org/x/net v0.57.0
 	google.golang.org/grpc v1.79.1
