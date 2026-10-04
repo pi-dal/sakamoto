@@ -648,6 +648,7 @@ func (m *model) renderConfig(b *strings.Builder, startY int) {
 		}
 	}
 	b.WriteString("\n")
+	y++ // account for the blank line before the action row
 	x := 1
 	for _, bt := range []struct{ text, action string }{{"[ Import config ]", "import"}, {"[ Add source ]", "add-sub"}, {"[ Remove source ]", "delete-sub"}, {"[ Regenerate ]", "generate"}, {"[ Edit settings ]", "edit-config"}} {
 		b.WriteString(" " + muted.Render(bt.text))
