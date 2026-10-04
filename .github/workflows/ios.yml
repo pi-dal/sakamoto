@@ -1,0 +1,110 @@
+name: iOS integration
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'ios/**'
+      - 'pkg/**'
+      - 'internal/**'
+      - 'cmd/**'
+      - 'tools/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/ios.yml'
+  pull_request:
+    paths:
+      - 'ios/**'
+      - 'pkg/**'
+      - 'internal/**'
+      - 'cmd/**'
+      - 'tools/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/ios.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: macos-14
+    timeout-minutes: 90
+    env:
+      GO_VERSION: '1.27.1'
+      GOMOBILE_VERSION: 'v0.1.13'
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Select and inspect Xcode
+        run: |
+          xcode-select -p
+          xcodebuild -version
+          swift --version
+
+      - name: Set up mise-managed Go
+        uses: jdx/mise-action@v3
+        with:
+          version: '2026.10.0'
+          install: false
+          cache: false
+
+      - name: Install Go
+        run: |
+          mise use --global "go@${GO_VERSION}"
+          echo "$(mise where go)/bin" >> "$GITHUB_PATH"
+          GOPATH="$(mise exec -- go env GOPATH)"
+          echo "$GOPATH/bin" >> "$GITHUB_PATH"
+          echo "GOBIN=$GOPATH/bin" >> "$GITHUB_ENV"
+
+      - name: Install XcodeGen and pinned gomobile
+        run: |
+          HOMEBREW_NO_AUTO_UPDATE=1 brew install xcodegen
+          go install "github.com/sagernet/gomobile/cmd/gomobile@${GOMOBILE_VERSION}"
+          go install "github.com/sagernet/gomobile/cmd/gobind@${GOMOBILE_VERSION}"
+          go mod download
+
+      - name: Cache Go modules and compilation
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/Library/Caches/go-build
+          key: ios-go-${{ runner.os }}-${{ runner.arch }}-${{ env.GO_VERSION }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            ios-go-${{ runner.os }}-${{ runner.arch }}-${{ env.GO_VERSION }}-
+
+      # The generated frameworks are expensive and are ignored by git. The
+      # key includes all Go inputs and build scripts, so stale native output
+      # cannot silently survive a source/toolchain change.
+      - name: Cache native iOS frameworks
+        id: frameworks
+        uses: actions/cache@v4
+        with:
+          path: ios/Frameworks
+          key: ios-frameworks-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.GO_VERSION }}-${{ env.GOMOBILE_VERSION }}-${{ hashFiles('go.mod', 'go.sum', 'pkg/**', 'internal/**', 'ios/scripts/build-*.sh', 'ios/scripts/flatten-gomobile-framework.sh') }}
+
+      - name: Build Libbox framework
+        if: steps.frameworks.outputs.cache-hit != 'true'
+        run: ios/scripts/build-libbox.sh
+
+      - name: Build Mobilecore framework
+        if: steps.frameworks.outputs.cache-hit != 'true'
+        run: ios/scripts/build-mobilecore.sh
+
+      - name: Verify Go, Swift, frameworks, and unsigned simulator app
+        run: ios/scripts/verify.sh
+
+      - name: Upload generated Xcode project
+        uses: actions/upload-artifact@v4
+        with:
+          name: sakamoto-ios-xcode-project-${{ github.sha }}
+          path: ios/Sakamoto.xcodeproj
+          if-no-files-found: error
+          retention-days: 14

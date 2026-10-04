@@ -225,6 +225,18 @@ xcodebuild -project Sakamoto.xcodeproj -scheme Sakamoto \
   -configuration Debug CODE_SIGNING_ALLOWED=NO build
 ```
 
+## CI
+
+`.github/workflows/ios.yml` runs on iOS-related pushes and pull requests, and
+supports `workflow_dispatch`. It uses a macOS runner with Xcode, installs
+XcodeGen and the pinned gomobile tools, caches Go modules and generated native
+frameworks, then runs `ios/scripts/verify.sh`.
+
+The workflow verifies Go tests, Swift tests, framework bundle layout, and an
+unsigned simulator build. It does not claim a signed device build: that still
+requires a real Apple Team, provisioning, NetworkExtension capability, and
+iCloud entitlements.
+
 ## Signing: what is placeholder, what is real
 
 - Bundle IDs `com.pidal.sakamoto` / `com.pidal.sakamoto.PacketTunnel` and app

@@ -11,17 +11,17 @@ AAR).
 
 | Piece | Status |
 |---|---|
-| Gradle Kotlin project (app + manifest + res + wrapper) | complete, **not compiled on this machine** — no JDK / no Android SDK (see below) |
-| `VpnService` + libbox `CommandServer` wiring (`bg/`) | ported from upstream SFA source, structure-correct, **pending SDK build verification** |
+| Gradle Kotlin project (app + manifest + res + wrapper) | complete, compiled and verified by local Gradle CI-equivalent build |
+| `VpnService` + libbox `CommandServer` wiring (`bg/`) | compiled against the generated libbox AAR; runtime still needs a physical-device smoke test |
 | Home page phase/mode/probe semantics | real — calls `Mobilecore.sessionPhase/nextRoutingMode/probeStateOf/nodeStatus/configStateTransition` (AAR); no state logic copied |
-| Built-in Tailscale: 4 command RPCs + status model | real calls in `CommandClientRuntime` (SubscribeTailscaleStatus / SetTailscaleExitNode / TailscaleLogout / StartTailscalePing, v1.14.2 signatures), pure state model in `TailscaleModels`, **pending SDK build verification** |
+| Built-in Tailscale: 4 command RPCs + status model | compiled against v1.14.2 AAR bindings; runtime still needs a physical-device smoke test |
 | Tailscale auth key security | Android Keystore AES-256-GCM + app-private file (`security/TailscaleAuthKeyStore`), injected at start/reload only (`TailscaleConfigInjection`), masked display, never logged |
 | Five TUI pages (Home/Config/Data/Settings/About) | bottom-nav five pages + Settings→Tailscale entry; About carries GPL-3.0, sing-box attribution, non-affiliation |
 | Config / Data pages | skeletons + state model, boundaries stated in-product |
-| JVM unit tests (pure models) | written: `TailscaleModelsTest` (11 cases) + `TailscaleConfigInjectionTest` (5 cases) — **not executed here** (no JDK; they run with `./gradlew test`) |
+| JVM unit tests (pure models) | `TailscaleModelsTest` (11 cases) + `TailscaleConfigInjectionTest` (5 cases), all passing in `./gradlew test` |
 | `scripts/build-libbox.sh` | delegates to sing-box's own `cmd/internal/build_libbox -target android` (which builds `with_tailscale` by default in v1.14.2) |
 | `scripts/build-mobilecore.sh` | `gomobile bind ./pkg/mobilecore` → `mobilecore.aar` |
-| Compilation / test execution | **BLOCKED: no JDK, no Android SDK on this machine** — nothing is reported as built or passing that did not run |
+| Compilation / test execution | verified locally with `./gradlew test :app:assembleDebug`; GitHub Actions repeats this and uploads the APK |
 
 ## Sources this structure is based on (read for this integration)
 
@@ -68,7 +68,7 @@ still produces `libbox-legacy.aar`; wiring it as a product flavor for API
 |---|---|
 | `settings.gradle.kts` / `build.gradle.kts` / `gradle.properties` | Gradle 8.9 + AGP 8.7.3 + Kotlin 2.0.21 (stable pairing, JDK 17 toolchain) |
 | `gradle/wrapper/*`, `gradlew`, `gradlew.bat` | wrapper pinned to gradle-8.9-bin.zip; `gradle-wrapper.jar` is the official artifact from the gradle v8.9.0 tag |
-| `app/build.gradle.kts` | `fileTree("libs")` picks up `libbox.aar` + `mobilecore.aar` (never committed); viewBinding on |
+| `app/build.gradle.kts` | explicitly links generated `libbox.aar` + `mobilecore.aar` (never committed); excludes legacy AAR from the default API-24 variant |
 | `app/src/main/AndroidManifest.xml` | INTERNET, FOREGROUND_SERVICE(+SYSTEM_EXEMPTED), POST_NOTIFICATIONS; `SakamotoVpnService` with `BIND_VPN_SERVICE` + `android.net.VpnService` intent filter, `systemExempted` FGS type |
 | `SakamotoApplication` | notification channels + context accessors |
 | `runtime/MobilecoreRuntime.kt` | single owner of Home state; every word comes from the Mobilecore AAR |
@@ -141,6 +141,18 @@ NDK 28.2 is intentional: the current v1.14.2 Cronet archive uses AArch64
 relocations rejected by NDK 27's linker. The generated legacy API-21 AAR is
 not linked into the default API-24 variant, and the duplicate gomobile `go.*`
 runtime is retained only in `libbox.aar`.
+
+## CI
+
+`.github/workflows/android.yml` runs on Android-related pushes and pull
+requests, and can also be started with `workflow_dispatch`. It installs the
+mise-managed Go/JDK toolchain, Android API 35 + Build Tools 35.0.0 + NDK
+28.2, builds the upstream libbox AAR and the local mobilecore bridge, runs the
+JVM tests, and assembles the debug APK.
+
+The workflow uploads `app-debug.apk` and its SHA-256 file as a short-lived
+GitHub Actions artifact. It does not require an emulator or a connected
+phone; install the downloaded artifact on a physical Pixel with `adb`.
 
 ## Signing (placeholders, like iOS)
 

@@ -1,0 +1,144 @@
+name: Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - 'pkg/**'
+      - 'internal/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/android.yml'
+  pull_request:
+    paths:
+      - 'android/**'
+      - 'pkg/**'
+      - 'internal/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/android.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  debug-apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      GO_VERSION: '1.27.1'
+      JAVA_VERSION: 'corretto-17.0.20.8.1'
+      GOMOBILE_VERSION: 'v0.1.13'
+      NDK_VERSION: '28.2.13676358'
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v5
+
+      # JDK is a Gradle/Kotlin build dependency, not the app's source language.
+      - name: Set up mise-managed runtimes
+        uses: jdx/mise-action@v3
+        with:
+          version: '2026.10.0'
+          install: false
+          cache: false
+
+      - name: Install Go and JDK
+        run: |
+          mise use --global "go@${GO_VERSION}" "java@${JAVA_VERSION}"
+          echo "$(mise where go)/bin" >> "$GITHUB_PATH"
+          echo "$(mise where java)/bin" >> "$GITHUB_PATH"
+          echo "JAVA_HOME=$(mise where java)" >> "$GITHUB_ENV"
+          echo "$(mise exec -- go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Verify toolchain
+        run: |
+          go version
+          java --version
+          python3 --version
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK packages
+        run: |
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;${NDK_VERSION}"
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Cache Go modules and compilation
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: android-go-${{ runner.os }}-${{ runner.arch }}-${{ env.GO_VERSION }}-${{ env.NDK_VERSION }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            android-go-${{ runner.os }}-${{ runner.arch }}-${{ env.GO_VERSION }}-${{ env.NDK_VERSION }}-
+
+      - name: Set up Gradle caching
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+
+      # No prefix fallback: never restore an AAR built with a different
+      # upstream module, gomobile version, NDK, or build script.
+      - name: Cache upstream libbox AAR
+        id: libbox
+        uses: actions/cache@v4
+        with:
+          path: android/app/libs/libbox.aar
+          key: android-libbox-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.GO_VERSION }}-${{ env.JAVA_VERSION }}-${{ env.GOMOBILE_VERSION }}-${{ env.NDK_VERSION }}-${{ hashFiles('go.mod', 'go.sum', 'android/scripts/build-libbox.sh') }}
+
+      - name: Install pinned gomobile bindings
+        run: |
+          GOBIN="$(go env GOPATH)/bin"
+          export GOBIN
+          go install "github.com/sagernet/gomobile/cmd/gomobile@${GOMOBILE_VERSION}"
+          go install "github.com/sagernet/gomobile/cmd/gobind@${GOMOBILE_VERSION}"
+          go mod download
+
+      - name: Build upstream libbox
+        if: steps.libbox.outputs.cache-hit != 'true'
+        run: android/scripts/build-libbox.sh
+
+      # Always rebuild our bridge: changes under pkg/ or internal/ must be
+      # present in the APK even when the much heavier libbox AAR is cached.
+      - name: Build mobilecore bridge
+        run: android/scripts/build-mobilecore.sh
+
+      - name: Run unit tests and build debug APK
+        working-directory: android
+        run: ./gradlew test :app:assembleDebug --no-daemon --max-workers=2
+
+      - name: Check APK signing and write checksum
+        working-directory: android/app/build/outputs/apk/debug
+        run: |
+          "${ANDROID_HOME}/build-tools/35.0.0/apksigner" verify --verbose app-debug.apk
+          sha256sum app-debug.apk > app-debug.apk.sha256
+
+      - name: Upload installable APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: sakamoto-debug-${{ github.sha }}
+          path: |
+            android/app/build/outputs/apk/debug/app-debug.apk
+            android/app/build/outputs/apk/debug/app-debug.apk.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Upload unit test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-test-reports-${{ github.sha }}
+          path: |
+            android/app/build/reports/tests/
+            android/app/build/test-results/
+          if-no-files-found: warn
+          retention-days: 14

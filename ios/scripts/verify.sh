@@ -74,7 +74,7 @@ for NAME in Libbox Mobilecore; do
 
 NOT VERIFIED (explicit boundary, not a silent pass):
   ios/Frameworks/${NAME}.xcframework is missing.
-  Build it: ios/scripts/build-$(echo "${NAME}" | tr 'A-Z' 'a-z').sh
+  Build it: ios/scripts/build-$(echo "${NAME}" | tr '[:upper:]' '[:lower:]').sh
   (requires gomobile + gobind in \$(go env GOPATH)/bin — see ios/README.md)
 EOF
         FAILED=1
