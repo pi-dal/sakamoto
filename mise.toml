@@ -79,6 +79,7 @@ run = "bash ios/scripts/package.sh export"
 
 [tasks."android:sdk"]
 description = "Install pinned SDK/NDK packages; run with mise -E android"
+shell = "bash -c"
 run = '''
 set -eu
 : "${ANDROID_HOME:?Run with mise -E android}"
