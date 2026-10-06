@@ -41,6 +41,8 @@ import io.nekohasekai.libbox.TailscaleStatusUpdate
 object CommandClientRuntime : CommandClientHandler {
 
     private var client: CommandClient? = null
+    private val _channelConnected = kotlinx.coroutines.flow.MutableStateFlow(false)
+    val channelConnected: kotlinx.coroutines.flow.StateFlow<Boolean> = _channelConnected
 
     /** Latest status message for the Data page (atomic ref, UI reads copy). */
     @Volatile
@@ -56,6 +58,9 @@ object CommandClientRuntime : CommandClientHandler {
         val options = CommandClientOptions()
         options.addCommand(Libbox.CommandStatus)
         options.addCommand(Libbox.CommandGroup)
+        options.addCommand(Libbox.CommandClashMode)
+        options.addCommand(Libbox.CommandConnections)
+        options.addCommand(Libbox.CommandLog)
         // The daemon reads this as a time.Duration (nanoseconds): 1s.
         options.statusInterval = 1_000_000_000L
         client = Libbox.newCommandClient(this, options)
@@ -68,6 +73,7 @@ object CommandClientRuntime : CommandClientHandler {
     }
 
     fun stop() {
+        _channelConnected.value = false
         val current = client
         client = null
         try {
@@ -79,7 +85,7 @@ object CommandClientRuntime : CommandClientHandler {
 
     fun setClashMode(mode: String) {
         try {
-            client?.setClashMode(mode)
+            (client ?: error("Command channel unavailable")).setClashMode(mode.lowercase())
         } catch (e: Exception) {
             MobilecoreRuntime.setNotice("mode change: ${e.message}")
         }
@@ -92,27 +98,31 @@ object CommandClientRuntime : CommandClientHandler {
         }
         MobilecoreRuntime.setNodeTesting(true)
         try {
-            client?.urlTest(outboundTag)
+            (client ?: error("Command channel unavailable")).urlTest(outboundTag)
         } catch (e: Exception) {
             MobilecoreRuntime.setNodeTesting(false)
             MobilecoreRuntime.setNotice("url test: ${e.message}")
         }
     }
 
-    fun selectOutbound(groupTag: String, outboundTag: String) {
-        try {
-            client?.selectOutbound(groupTag, outboundTag)
+    fun selectOutbound(groupTag: String, outboundTag: String): Boolean {
+        return try {
+            (client ?: error("Connect the tunnel before selecting a node")).selectOutbound(groupTag, outboundTag)
+            true
         } catch (e: Exception) {
             MobilecoreRuntime.setNotice("select: ${e.message}")
+            false
         }
     }
 
     /** Ask the running core to reload with the current staged config. */
-    fun reloadService() {
-        try {
-            client?.serviceReload()
+    fun reloadService(): Boolean {
+        return try {
+            (client ?: error("Connect the tunnel before applying configuration")).serviceReload()
+            true
         } catch (e: Exception) {
             MobilecoreRuntime.setNotice("reload: ${e.message}")
+            false
         }
     }
 
@@ -150,8 +160,7 @@ object CommandClientRuntime : CommandClientHandler {
     /** Pick a peer as exit node. Empty stableID clears the selection. */
     fun setTailscaleExitNode(endpointTag: String, stableID: String) {
         try {
-            client?.setTailscaleExitNode(endpointTag, stableID)
-                ?: run { TailscaleRuntime.setNotice("command channel not connected") }
+            (client ?: error("Command channel unavailable")).setTailscaleExitNode(endpointTag, stableID)
         } catch (e: Exception) {
             TailscaleRuntime.setNotice("exit node: ${e.message}")
         }
@@ -159,8 +168,7 @@ object CommandClientRuntime : CommandClientHandler {
 
     fun tailscaleLogout(endpointTag: String) {
         try {
-            client?.tailscaleLogout(endpointTag)
-                ?: run { TailscaleRuntime.setNotice("command channel not connected") }
+            (client ?: error("Command channel unavailable")).tailscaleLogout(endpointTag)
         } catch (e: Exception) {
             TailscaleRuntime.setNotice("logout: ${e.message}")
         }
@@ -214,14 +222,16 @@ object CommandClientRuntime : CommandClientHandler {
     // --- CommandClientHandler (libbox v1.14.2 surface) ----------------------
 
     override fun connected() {
-        // The command channel is up; the service state itself is owned by the
-        // tunnel service (Starting → Running), not by this client.
+        _channelConnected.value = true
     }
 
     override fun disconnected(message: String?) {
+        _channelConnected.value = false
         // Service gone: the tunnel service owns the service-state vocabulary;
         // nothing to fold here beyond clearing group-derived UI state.
         lastGroupsSummary = ""
+        _groups.value = emptyList()
+        synchronized(this) { connectionList = null; connections = emptyList() }
         stopTailscaleSubscription()
     }
 
@@ -232,36 +242,40 @@ object CommandClientRuntime : CommandClientHandler {
     }
 
     override fun writeLogs(messageList: LogIterator?) {
-        // Log streaming is not surfaced yet (Data page boundary).
+        if (messageList == null) return
+        while (messageList.hasNext()) com.pidal.sakamoto.runtime.ExperimentRuntime.log(messageList.next().message)
     }
 
     override fun writeStatus(message: StatusMessage?) {
         lastStatus = message
     }
 
+    private val _groups = kotlinx.coroutines.flow.MutableStateFlow<List<com.pidal.sakamoto.runtime.ConfigRepository.Group>>(emptyList())
+    val groups: kotlinx.coroutines.flow.StateFlow<List<com.pidal.sakamoto.runtime.ConfigRepository.Group>> = _groups
+
     override fun writeGroups(message: OutboundGroupIterator?) {
         if (message == null) return
-        val groups = mutableListOf<io.nekohasekai.libbox.OutboundGroup>()
+        val snapshots = mutableListOf<com.pidal.sakamoto.runtime.ConfigRepository.Group>()
         while (message.hasNext()) {
-            groups.add(message.next())
-        }
-        var summary = ""
-        for (group in groups) {
-            if (summary.isEmpty()) summary = group.tag
-            if (!group.selectable) continue
-            val items = group.items
-            while (items.hasNext()) {
-                val item = items.next()
-                if (item.tag == group.selected) {
-                    // Selection (the dot) and reachability (the latency word)
-                    // are separate facts; the bridge words them.
-                    MobilecoreRuntime.setSelectedNode(item.tag, item.urlTestDelay)
-                    // A fresh group update resolves a pending URL test.
-                    MobilecoreRuntime.setNodeTesting(false)
-                }
+            val group = message.next()
+            val items = mutableListOf<com.pidal.sakamoto.runtime.ConfigRepository.GroupItem>()
+            val iterator = group.items
+            while (iterator.hasNext()) {
+                val item = iterator.next()
+                items.add(com.pidal.sakamoto.runtime.ConfigRepository.GroupItem(item.tag, item.type, item.urlTestDelay, item.urlTestTime))
             }
+            snapshots.add(com.pidal.sakamoto.runtime.ConfigRepository.Group(group.tag, group.type, group.selectable, group.selected, items))
         }
-        lastGroupsSummary = summary
+        _groups.value = snapshots
+        lastGroupsSummary = snapshots.joinToString(" · ") { it.tag }
+        // The primary group is stable; later selectors must not overwrite
+        // the Home selected value merely because they arrived last.
+        val primary = snapshots.firstOrNull { it.selectable }
+        val selected = primary?.items?.firstOrNull { it.tag == primary.selected }
+        if (selected != null) {
+            MobilecoreRuntime.setSelectedNode(selected.tag, selected.delay)
+            MobilecoreRuntime.setNodeTesting(false)
+        }
     }
 
     override fun writeOutbounds(message: OutboundGroupItemIterator?) {
@@ -278,7 +292,35 @@ object CommandClientRuntime : CommandClientHandler {
         if (newMode != null) MobilecoreRuntime.setRoutingMode(newMode)
     }
 
-    override fun writeConnectionEvents(events: ConnectionEvents?) {
-        // Connection-event streaming is a Data-page follow-up.
+    data class ConnectionRow(val id: String, val name: String, val source: String, val destination: String, val outbound: String, val rule: String, val closed: Boolean)
+
+    @Volatile var connections: List<ConnectionRow> = emptyList()
+        private set
+    private var connectionList: io.nekohasekai.libbox.Connections? = null
+
+    @Synchronized override fun writeConnectionEvents(events: ConnectionEvents?) {
+        if (events == null) return
+        com.pidal.sakamoto.runtime.ExperimentRuntime.connection(events)
+        val list = connectionList ?: Libbox.newConnections().also { connectionList = it }
+        list.applyEvents(events)
+        list.sortByDate()
+        val iterator = list.iterator()
+        val rows = mutableListOf<ConnectionRow>()
+        while (iterator.hasNext() && rows.size < 100) {
+            val connection = iterator.next()
+            rows.add(ConnectionRow(connection.id, connection.domain.ifEmpty { connection.destination }, connection.source, connection.destination, connection.outbound, connection.rule, connection.closedAt != 0L))
+        }
+        connections = rows
+    }
+
+    fun closeConnection(id: String): Boolean {
+        return try {
+            val current = client ?: error("Connect the tunnel first")
+            current.closeConnection(id)
+            true
+        } catch (error: Exception) {
+            MobilecoreRuntime.setNotice("close connection: ${error.message}")
+            false
+        }
     }
 }

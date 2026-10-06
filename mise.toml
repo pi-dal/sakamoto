@@ -1,0 +1,139 @@
+# Shared local/CI toolchain. Android-specific SDK/JDK live in mise.android.toml.
+[tools]
+go = "1.27.1"
+python = "3.14.0"
+"go:github.com/sagernet/gomobile/cmd/gomobile" = "v0.1.13"
+"go:github.com/sagernet/gomobile/cmd/gobind" = "v0.1.13"
+
+[env]
+GOTOOLCHAIN = "local"
+
+[tasks."mobile:tools"]
+description = "Expose mise-managed gomobile tools at upstream's required GOPATH/bin paths"
+run = '''
+set -eu
+mobile_bin="$(go env GOPATH)/bin"
+mkdir -p "$mobile_bin"
+for name in gomobile gobind; do
+  managed_bin="$(mise where "go:github.com/sagernet/gomobile/cmd/$name")/bin/$name"
+  if [ "$managed_bin" != "$mobile_bin/$name" ]; then
+    ln -sf "$managed_bin" "$mobile_bin/$name"
+  fi
+done
+go mod download
+'''
+
+[tasks.icons]
+description = "Resize owner-provided artwork into iOS and Android launcher icons"
+run = "go run ./tools/appicongen"
+
+[tasks."go:test"]
+description = "Run shared Go tests"
+tools.sing-box = "1.14.2"
+run = "go test ./..."
+
+[tasks."go:check"]
+description = "Run Go tests, vet, lint and executable build"
+tools.sing-box = "1.14.2"
+run = ["python3 scripts/check-english.py", "go test ./...", "go vet ./...", "go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run ./...", "go build ./cmd/sakamoto"]
+
+[tasks."ci:check"]
+description = "Validate Actions, shell scripts and repository text"
+tools.actionlint = "1.7.12"
+tools.shellcheck = "0.11.0"
+run = ["actionlint", "shellcheck android/scripts/*.sh ios/scripts/*.sh", "python3 scripts/check-english.py", "git diff --check"]
+
+[tasks."ios:libbox"]
+description = "Build upstream iOS/simulator Libbox framework"
+depends = ["mobile:tools"]
+run = "ios/scripts/build-libbox.sh"
+
+[tasks."ios:mobilecore"]
+description = "Build shared Go bridge for iOS/simulator"
+depends = ["mobile:tools"]
+run = "ios/scripts/build-mobilecore.sh"
+
+[tasks."ios:verify"]
+description = "Verify Go, Swift and unsigned simulator app (frameworks must already exist)"
+tools.xcodegen = "2.46.0"
+tools.sing-box = "1.14.2"
+run = "ios/scripts/verify.sh"
+
+[tasks."ios:build"]
+description = "Build native frameworks and verify the iOS app"
+run = ["mise run ios:libbox", "mise run ios:mobilecore", "mise run ios:verify"]
+
+[tasks."ios:package"]
+description = "Package an unsigned simulator .app zip (frameworks must already exist)"
+tools.xcodegen = "2.46.0"
+run = "bash ios/scripts/package.sh simulator"
+
+[tasks."ios:archive"]
+description = "Archive a signed device app using IOS_DEVELOPMENT_TEAM"
+tools.xcodegen = "2.46.0"
+run = "bash ios/scripts/package.sh archive"
+
+[tasks."ios:ipa"]
+description = "Export a signed archive using IOS_EXPORT_OPTIONS_PLIST"
+run = "bash ios/scripts/package.sh export"
+
+[tasks."android:sdk"]
+description = "Install pinned SDK/NDK packages; run with mise -E android"
+run = '''
+set -eu
+: "${ANDROID_HOME:?Run with mise -E android}"
+# sdkmanager exits early after reading license answers, so avoid SIGPIPE
+# from an unbounded yes pipeline under mise's shell.
+answers="$(mktemp)"
+trap 'rm -f "$answers"' EXIT
+python3 -c 'print("y\n" * 100)' > "$answers"
+sdkmanager --sdk_root="$ANDROID_HOME" --licenses < "$answers"
+# Reuse valid packages imported from another SDK instead of redownloading
+# gigabyte-sized archives just because their package.xml is missing.
+packages=()
+[ -x "$ANDROID_HOME/platform-tools/adb" ] || packages+=("platform-tools")
+[ -f "$ANDROID_HOME/platforms/android-35/android.jar" ] || packages+=("platforms;android-35")
+[ -x "$ANDROID_HOME/build-tools/35.0.0/aapt2" ] || packages+=("build-tools;35.0.0")
+if ! grep -q 'Pkg.Revision = 28.2.13676358' "$ANDROID_HOME/ndk/28.2.13676358/source.properties" 2>/dev/null; then
+  packages+=("ndk;28.2.13676358")
+fi
+if [ -n "${packages[*]}" ]; then
+  sdkmanager --sdk_root="$ANDROID_HOME" "${packages[@]}"
+fi
+'''
+
+[tasks."android:libbox"]
+description = "Build upstream Android libbox (requires android:sdk)"
+depends = ["mobile:tools"]
+run = 'ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358" android/scripts/build-libbox.sh'
+
+[tasks."android:mobilecore"]
+description = "Build combined Android libbox and Go bridge (compatibility alias)"
+depends = ["mobile:tools"]
+run = 'PATH="$(go env GOPATH)/bin:$PATH" ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358" android/scripts/build-mobilecore.sh'
+
+[tasks."android:verify"]
+description = "Run JVM tests and assemble APK (AARs must already exist)"
+dir = "android"
+run = "./gradlew test :app:assembleDebug --no-daemon --max-workers=2"
+
+[tasks."android:build"]
+description = "Install SDK packages, build AARs, test and assemble APK"
+run = ["mise run android:sdk", "mise run android:libbox", "mise run android:verify"]
+
+[tasks."android:checksum"]
+description = "Verify debug APK signing and emit portable SHA-256 file"
+run = '''
+set -eu
+apk="android/app/build/outputs/apk/debug/app-debug.apk"
+"$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$apk"
+python3 -c 'import hashlib,pathlib; p=pathlib.Path("android/app/build/outputs/apk/debug/app-debug.apk"); p.with_suffix(".apk.sha256").write_text(hashlib.file_digest(p.open("rb"), "sha256").hexdigest() + "  " + p.name + "\n")'
+'''
+
+[tasks."android:release"]
+description = "Build and verify the officially signed release APK (private signing credentials required)"
+run = "python3 android/scripts/release.py"
+
+[tasks."android:install"]
+description = "Install the built debug APK on an attached device"
+run = '"$ANDROID_HOME/platform-tools/adb" install -r android/app/build/outputs/apk/debug/app-debug.apk'

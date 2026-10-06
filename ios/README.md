@@ -22,6 +22,14 @@ tunnel process; this is not a CLI probe and not an external-daemon count).
 | Unsigned simulator build | `xcodebuild … CODE_SIGNING_ALLOWED=NO build` (verified) |
 | Device build / VPN entitlement grant | **blocked on a real signing Team** (see below) — not faked |
 
+## App icon
+
+`App/Assets.xcassets/AppIcon.appiconset` contains opaque icons derived from owner-provided artwork for
+all supported iPhone/iPad sizes. Xcode applies the native corner mask.
+Regenerate both mobile platforms with `mise run icons` from the
+repository root. Attribution and licensing are in `docs/portrait-license.md`
+and the app's About page.
+
 ## Architecture
 
 ```
@@ -199,43 +207,60 @@ deliberately has NO iCloud entitlements: sync is an app-process feature.
 ## Build from clean (verified sequence)
 
 ```sh
-# 1. Toolchain (once; GOPATH/bin, not Homebrew, not global site-packages)
-GOBIN="$(go env GOPATH)/bin" go install github.com/sagernet/gomobile/cmd/gomobile@latest
-GOBIN="$(go env GOPATH)/bin" go install github.com/sagernet/gomobile/cmd/gobind@latest
-export PATH="$PATH:$(go env GOPATH)/bin"
-# (mise users: the explicit GOBIN matters — `go install` follows GOBIN when
-# mise sets it, and the upstream FindMobile check looks in GOPATH/bin.)
+# From the repository root (Xcode must already be installed).
+mise trust
+mise install
+mise run ios:build
 
-# 2. gomobile's bind runtime must resolve from this module (pinned via tools tag)
-go get github.com/sagernet/gomobile@v0.1.12   # recorded in go.mod via tools/tools.go
+# Fast verification when frameworks already exist:
+mise run ios:verify
 
-# 3. Frameworks (libbox ~10 min; tailscale+gvisor dominate)
-ios/scripts/build-libbox.sh       # reads sing-box v1.14.2 from the go module cache,
-                                  # copies it to a writable dir (gomobile must write
-                                  # build/ inside the tree), builds ios+simulator,
-                                  # flattens deep bundles, moves to ios/Frameworks/
-ios/scripts/build-mobilecore.sh   # binds ./pkg/mobilecore the same way
-
-# 4. Xcode project + verification
-cd ios
-xcodegen generate
-swift test
-xcodebuild -project Sakamoto.xcodeproj -scheme Sakamoto \
-  -destination 'generic/platform=iOS Simulator' \
-  -configuration Debug CODE_SIGNING_ALLOWED=NO build
+# Regenerate both platforms' icons:
+mise run icons
 ```
 
 ## CI
 
 `.github/workflows/ios.yml` runs on iOS-related pushes and pull requests, and
-supports `workflow_dispatch`. It uses a macOS runner with Xcode, installs
-XcodeGen and the pinned gomobile tools, caches Go modules and generated native
-frameworks, then runs `ios/scripts/verify.sh`.
+supports `workflow_dispatch`. It uses a macOS runner with Apple-provided
+Xcode; mise owns Go, Python, pinned gomobile, and task-scoped XcodeGen.
+CI caches Go modules and generated native frameworks (keyed by Xcode build
+and project inputs), then runs the same `mise run ios:verify` task as local
+development. There is no separate Homebrew XcodeGen installation.
 
 The workflow verifies Go tests, Swift tests, framework bundle layout, and an
 unsigned simulator build. It does not claim a signed device build: that still
 requires a real Apple Team, provisioning, NetworkExtension capability, and
 iCloud entitlements.
+
+## Packaging through mise
+
+After `mise run ios:build`, package the simulator app:
+
+```bash
+mise run ios:package
+```
+
+Output: `ios/build/Sakamoto-simulator.zip` plus SHA-256. CI uploads both as
+`sakamoto-ios-simulator-<commit>`. Unzip and install the `.app` into a booted
+iOS simulator with `xcrun simctl install booted Sakamoto.app`. This bundle
+cannot be installed on an iPhone and cannot run a real VPN tunnel.
+
+Device packaging uses a real signing Team and provisioned App IDs, app
+group, NetworkExtension and app-only iCloud capabilities:
+
+```bash
+IOS_DEVELOPMENT_TEAM=YOUR_TEAM_ID mise run ios:archive
+IOS_EXPORT_OPTIONS_PLIST=/absolute/path/ExportOptions.plist mise run ios:ipa
+```
+
+Outputs: `ios/build/Sakamoto.xcarchive` and `ios/build/ipa/*.ipa`.
+Use an export-options plist matching your distribution method and profiles
+(App Store Connect, development, or ad hoc). Certificates and provisioning
+profiles must already be installed. The packaging commands do not create
+Apple capabilities or upload to App Store Connect. Build output and the
+optional `ios/ExportOptions.local.plist` are ignored by git. No signed IPA
+is uploaded by CI until signing credentials are configured separately.
 
 ## Signing: what is placeholder, what is real
 

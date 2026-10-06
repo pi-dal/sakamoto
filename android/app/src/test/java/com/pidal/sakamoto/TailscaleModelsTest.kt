@@ -147,14 +147,16 @@ class TailscaleModelsTest {
 
     @Test
     fun authKeyMaskingNeverShowsTheFullKey() {
-        val masked = TailscaleAuthKeyMasking.mask("tskey-auth-k1234567890abcdef-Klub")
+        // Deliberately invalid fixture: realistic key-shaped values trigger
+        // GitHub secret scanning even when they were never issued by Tailscale.
+        val masked = TailscaleAuthKeyMasking.mask("tskey-auth-TEST_ONLY")
         assertTrue(masked.startsWith("tskey-auth-"))
         assertTrue(masked.endsWith("••••••"))
-        assertFalse(masked.contains("Klub"))
+        assertFalse(masked.contains("ONLY"))
         assertEquals("••••••", TailscaleAuthKeyMasking.mask("short"))
         assertEquals("", TailscaleAuthKeyMasking.mask(""))
         // Masking is not reversible: no suffix of the input beyond the prefix survives.
-        val input = "tskey-auth-abcdefghijklmnop"
+        val input = "masking-fixture-abcdefghijklmnop"
         val out = TailscaleAuthKeyMasking.mask(input)
         assertTrue(!out.contains("lmnop"))
         assertEquals(input.take(12) + "••••••", out)

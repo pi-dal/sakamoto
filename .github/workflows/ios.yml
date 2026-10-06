@@ -12,6 +12,7 @@ on:
       - 'tools/**'
       - 'go.mod'
       - 'go.sum'
+      - 'mise*.toml'
       - '.github/workflows/ios.yml'
   pull_request:
     paths:
@@ -22,6 +23,7 @@ on:
       - 'tools/**'
       - 'go.mod'
       - 'go.sum'
+      - 'mise*.toml'
       - '.github/workflows/ios.yml'
 
 permissions:
@@ -33,42 +35,26 @@ concurrency:
 
 jobs:
   verify:
-    runs-on: macos-14
+    # Apple supplies Xcode; all other project tools come from mise.
+    runs-on: macos-15
     timeout-minutes: 90
-    env:
-      GO_VERSION: '1.27.1'
-      GOMOBILE_VERSION: 'v0.1.13'
-      GOTOOLCHAIN: local
     steps:
       - uses: actions/checkout@v5
 
-      - name: Select and inspect Xcode
+      - name: Inspect Apple toolchain
+        id: xcode
         run: |
           xcode-select -p
           xcodebuild -version
           swift --version
+          echo "build=$(xcodebuild -version | tail -1 | tr ' ' '-')" >> "$GITHUB_OUTPUT"
 
-      - name: Set up mise-managed Go
+      - name: Set up mise toolchain
         uses: jdx/mise-action@v3
         with:
           version: '2026.10.0'
-          install: false
-          cache: false
-
-      - name: Install Go
-        run: |
-          mise use --global "go@${GO_VERSION}"
-          echo "$(mise where go)/bin" >> "$GITHUB_PATH"
-          GOPATH="$(mise exec -- go env GOPATH)"
-          echo "$GOPATH/bin" >> "$GITHUB_PATH"
-          echo "GOBIN=$GOPATH/bin" >> "$GITHUB_ENV"
-
-      - name: Install XcodeGen and pinned gomobile
-        run: |
-          HOMEBREW_NO_AUTO_UPDATE=1 brew install xcodegen
-          go install "github.com/sagernet/gomobile/cmd/gomobile@${GOMOBILE_VERSION}"
-          go install "github.com/sagernet/gomobile/cmd/gobind@${GOMOBILE_VERSION}"
-          go mod download
+          cache: true
+          cache_save: ${{ github.event_name != 'pull_request' }}
 
       - name: Cache Go modules and compilation
         uses: actions/cache@v4
@@ -76,30 +62,44 @@ jobs:
           path: |
             ~/go/pkg/mod
             ~/Library/Caches/go-build
-          key: ios-go-${{ runner.os }}-${{ runner.arch }}-${{ env.GO_VERSION }}-${{ hashFiles('go.sum') }}
+          key: ios-go-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.build }}-${{ hashFiles('mise.toml', 'go.sum') }}
           restore-keys: |
-            ios-go-${{ runner.os }}-${{ runner.arch }}-${{ env.GO_VERSION }}-
+            ios-go-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.build }}-
 
-      # The generated frameworks are expensive and are ignored by git. The
-      # key includes all Go inputs and build scripts, so stale native output
-      # cannot silently survive a source/toolchain change.
+      - name: Prepare mobile tool paths
+        run: mise run mobile:tools
+
       - name: Cache native iOS frameworks
         id: frameworks
         uses: actions/cache@v4
         with:
           path: ios/Frameworks
-          key: ios-frameworks-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.GO_VERSION }}-${{ env.GOMOBILE_VERSION }}-${{ hashFiles('go.mod', 'go.sum', 'pkg/**', 'internal/**', 'ios/scripts/build-*.sh', 'ios/scripts/flatten-gomobile-framework.sh') }}
+          key: ios-frameworks-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.build }}-${{ hashFiles('mise.toml', 'go.mod', 'go.sum', 'pkg/**', 'internal/**', 'ios/scripts/build-*.sh', 'ios/scripts/flatten-gomobile-framework.sh') }}
 
       - name: Build Libbox framework
         if: steps.frameworks.outputs.cache-hit != 'true'
-        run: ios/scripts/build-libbox.sh
+        run: mise run ios:libbox
 
       - name: Build Mobilecore framework
         if: steps.frameworks.outputs.cache-hit != 'true'
-        run: ios/scripts/build-mobilecore.sh
+        run: mise run ios:mobilecore
 
-      - name: Verify Go, Swift, frameworks, and unsigned simulator app
-        run: ios/scripts/verify.sh
+      - name: Verify Go, Swift and unsigned simulator app
+        run: mise run ios:verify
+
+      - name: Package simulator app
+        run: mise run ios:package
+
+      - name: Upload simulator app
+        uses: actions/upload-artifact@v4
+        with:
+          name: sakamoto-ios-simulator-${{ github.sha }}
+          path: |
+            ios/build/Sakamoto-simulator.zip
+            ios/build/Sakamoto-simulator.zip.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
 
       - name: Upload generated Xcode project
         uses: actions/upload-artifact@v4

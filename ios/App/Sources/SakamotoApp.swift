@@ -23,6 +23,7 @@ struct SakamotoApp: App {
     @StateObject private var configModel: ConfigModel
     @StateObject private var settingsModel: SettingsModel
     @StateObject private var iCloudSyncModel: ICloudSyncModel
+    @StateObject private var s3SyncModel: S3SyncModel
 
     private let tunnel: NETunnelController
     private let commanding: LibboxCoreCommanding
@@ -54,6 +55,7 @@ struct SakamotoApp: App {
             commanding: commanding
         ))
         _iCloudSyncModel = StateObject(wrappedValue: ICloudSyncModel(store: store))
+        _s3SyncModel = StateObject(wrappedValue: S3SyncModel(store: store))
     }
 
     var body: some Scene {
@@ -72,13 +74,9 @@ struct SakamotoApp: App {
                 }
                 .tabItem { Label("Data", systemImage: "chart.bar") }
                 NavigationStack {
-                    SettingsView(model: settingsModel, sync: iCloudSyncModel, commanding: commanding)
+                    SettingsView(model: settingsModel, sync: iCloudSyncModel, s3: s3SyncModel, commanding: commanding)
                 }
                 .tabItem { Label("Settings", systemImage: "gearshape") }
-                NavigationStack {
-                    AboutView()
-                }
-                .tabItem { Label("About", systemImage: "info.circle") }
             }
             .tint(.primary)
         }

@@ -18,6 +18,7 @@ import com.pidal.sakamoto.MainActivity
 import com.pidal.sakamoto.R
 import com.pidal.sakamoto.SakamotoApplication
 import com.pidal.sakamoto.runtime.ConfigRepository
+import com.pidal.sakamoto.command.CommandClientRuntime
 import com.pidal.sakamoto.runtime.MobilecoreRuntime
 import com.pidal.sakamoto.security.TailscaleAuthKeyStore
 import com.pidal.sakamoto.security.TailscaleConfigInjection
@@ -72,6 +73,7 @@ class TunnelBoxService(
     var fileDescriptor: ParcelFileDescriptor? = null
 
     private var commandServer: CommandServer? = null
+    @Volatile private var reloading = false
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -113,6 +115,7 @@ class TunnelBoxService(
 
     private fun startServer(server: CommandServer) {
         try {
+            com.pidal.sakamoto.runtime.ExperimentRuntime.restorePending(service)
             val staged = ConfigRepository.readGeneratedContent(service)
             if (staged == null) {
                 stopAndAlert("empty configuration — import a config in the Config tab first")
@@ -144,7 +147,11 @@ class TunnelBoxService(
                 return
             }
             MobilecoreRuntime.setServiceState("Running")
+            if (!ConfigRepository.load(service).sourceNeedsGenerate) MobilecoreRuntime.completeConfigApply()
+            com.pidal.sakamoto.runtime.ExperimentRuntime.start(service)
+            CommandClientRuntime.start()
             showForegroundNotification(starting = false)
+            com.pidal.sakamoto.runtime.SystemStatusSurface.start(service)
         } catch (e: Exception) {
             stopAndAlert("create service: ${e.message}")
         }
@@ -158,8 +165,11 @@ class TunnelBoxService(
         MobilecoreRuntime.setServiceState("Stopping")
         fileDescriptor?.close()
         fileDescriptor = null
-        cleanup()
-        MobilecoreRuntime.setServiceState("Stopped")
+        if (!reloading) {
+            cleanup()
+            MobilecoreRuntime.setServiceState("Stopped")
+            com.pidal.sakamoto.runtime.SystemStatusSurface.stop(service)
+        }
     }
 
     /** CommandServerHandler: the core asked for a reload with current staged config. */
@@ -179,10 +189,16 @@ class TunnelBoxService(
                 stopAndAlert("reload: auth key injection failed: ${e.message}")
                 return
             }
+            MobilecoreRuntime.beginConfigApply()
+            reloading = true
             server.startOrReloadService(content, OverrideOptions())
+            MobilecoreRuntime.setServiceState("Running")
+            MobilecoreRuntime.completeConfigApply()
+            showForegroundNotification(starting = false)
         } catch (e: Exception) {
+            MobilecoreRuntime.configEvent("regenerate_failed")
             stopAndAlert("reload service: ${e.message}")
-        }
+        } finally { reloading = false }
     }
 
     override fun getSystemProxyStatus(): SystemProxyStatus? {
@@ -218,12 +234,17 @@ class TunnelBoxService(
             commandServer = null
         }
         MobilecoreRuntime.setServiceState("Stopping")
+        fileDescriptor?.close()
+        fileDescriptor = null
         cleanup()
         MobilecoreRuntime.setServiceState("Stopped")
+        com.pidal.sakamoto.runtime.SystemStatusSurface.stop(service)
     }
 
     /** Map a startup/runtime failure onto the core's Unavailable state. */
     private fun stopAndAlert(message: String) {
+        com.pidal.sakamoto.runtime.ExperimentRuntime.stop()
+        CommandClientRuntime.stop()
         fileDescriptor?.close()
         fileDescriptor = null
         DefaultNetworkMonitor.stop()
@@ -239,10 +260,13 @@ class TunnelBoxService(
             runCatching { service.unregisterReceiver(receiver) }
             receiverRegistered = false
         }
+        com.pidal.sakamoto.runtime.SystemStatusSurface.stop(service)
         service.stopSelf()
     }
 
     private fun cleanup() {
+        com.pidal.sakamoto.runtime.ExperimentRuntime.stop()
+        CommandClientRuntime.stop()
         DefaultNetworkMonitor.stop()
         if (receiverRegistered) {
             runCatching { service.unregisterReceiver(receiver) }
@@ -252,10 +276,9 @@ class TunnelBoxService(
     }
 
     private fun showForegroundNotification(starting: Boolean) {
-        val notification = buildNotification(
-            title = service.getString(R.string.app_name),
-            body = service.getString(if (starting) R.string.status_starting else R.string.status_running),
-        )
+        val notification = if (starting) buildNotification(
+            title = service.getString(R.string.app_name), body = service.getString(R.string.status_starting),
+        ) else com.pidal.sakamoto.runtime.SystemStatusSurface.notification(service)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             ServiceCompat.startForeground(
                 service,
@@ -308,6 +331,12 @@ class TunnelBoxService(
             .setSmallIcon(R.drawable.ic_service)
             .setContentTitle(title)
             .setContentText(body)
+            .setContentIntent(PendingIntent.getActivity(
+                service, 0, Intent(service, MainActivity::class.java),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            ))
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setOnlyAlertOnce(true)
             .setOngoing(true)
             .build()
 }

@@ -3,6 +3,7 @@
 
      Permission set follows the upstream SagerNet/sing-box-for-android
      manifest for the pieces this client actually implements: INTERNET,
+     ACCESS_NETWORK_STATE for libbox's interface monitoring,
      the foreground-service pair for the VPN service, POST_NOTIFICATIONS
      for the libbox service notification, and the BIND_VPN_SERVICE-
      protected service declaration with the android.net.VpnService intent
@@ -13,6 +14,7 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <!-- API 34+ requires a declared foreground service type; the VPN service
          uses systemExempted like upstream's VPNService. -->
@@ -23,6 +25,8 @@
         android:name=".SakamotoApplication"
         android:allowBackup="false"
         android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.Sakamoto"
         tools:targetApi="31">
@@ -36,6 +40,20 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <receiver android:name=".widget.WidgetToggleReceiver" android:exported="false" />
+        <receiver android:name=".widget.VpnToggleWidgetProvider" android:exported="true" android:label="@string/widget_toggle_label">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_vpn_toggle_info" />
+        </receiver>
+        <receiver android:name=".widget.VpnCompactWidgetProvider" android:exported="true" android:label="@string/widget_compact_label">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_vpn_compact_info" />
+        </receiver>
+        <receiver android:name=".widget.VpnWidgetProvider" android:exported="true" android:label="@string/widget_full_label">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_vpn_info" />
+        </receiver>
 
         <service
             android:name=".bg.SakamotoVpnService"

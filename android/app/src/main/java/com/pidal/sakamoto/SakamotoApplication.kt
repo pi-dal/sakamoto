@@ -6,6 +6,10 @@ import android.app.NotificationManager
 import android.content.Context
 import android.net.ConnectivityManager
 import android.os.Build
+import io.nekohasekai.libbox.Libbox
+import io.nekohasekai.libbox.SetupOptions
+import io.nekohasekai.mobilecore.Mobilecore
+import go.Seq
 
 /**
  * Application entry point.
@@ -20,6 +24,21 @@ class SakamotoApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        // One combined AAR loads both bound packages and the shared JNI
+        // runtime. Fail at startup rather than the first Connect click.
+        Seq.setContext(this)
+        Mobilecore.touch()
+        val options = SetupOptions().apply {
+            basePath = filesDir.absolutePath
+            workingPath = filesDir.absolutePath
+            tempPath = cacheDir.absolutePath
+            logMaxLines = 3000
+            crashReportSource = "Application"
+            appVersion = BuildConfig.VERSION_CODE.toString()
+            appMarketingVersion = BuildConfig.VERSION_NAME
+            fixAndroidStack = true
+        }
+        Libbox.setup(options)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(

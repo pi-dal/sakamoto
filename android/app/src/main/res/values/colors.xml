@@ -1,4 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="sakamoto_scrim">#66000000</color>
+    <color name="ic_launcher_background">#000000</color>
+    <color name="widget_success">#286B43</color>
+    <color name="widget_warning">#8D5100</color>
+    <color name="primary">#176787</color>
+    <color name="on_primary">#FFFFFF</color>
+    <color name="primary_container">#D4EAF5</color>
+    <color name="on_primary_container">#143C50</color>
+    <color name="surface">#FFFFFF</color>
+    <color name="surface_variant">#EFF3F6</color>
+    <color name="on_surface">#17212B</color>
+    <color name="on_surface_variant">#4B5C6B</color>
+    <color name="outline">#8A99A6</color>
+    <color name="divider">#E4E9ED</color>
 </resources>

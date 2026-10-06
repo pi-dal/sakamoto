@@ -30,6 +30,11 @@ struct TailscaleView: View {
     @State private var allowLANDraft = false
     @State private var provisionNotice: Notice?
     @State private var draftsLoaded = false
+    @State private var pendingLogout: TailscaleEndpointSummary?
+    @State private var pendingClearExit: TailscaleEndpointSummary?
+    @State private var confirmDisable = false
+    @State private var showAuthKey = false
+    @State private var confirmDeleteKey = false
 
     init(store: ConfigStore, tunnel: TunnelControlling, commanding: LibboxCoreCommanding?) {
         self.store = store
@@ -53,6 +58,56 @@ struct TailscaleView: View {
             loadDrafts()
         }
         .onDisappear { controller.cancel() }
+        .confirmationDialog("Log out of tailnet?", isPresented: Binding(
+            get: { pendingLogout != nil }, set: { if !$0 { pendingLogout = nil } }
+        ), titleVisibility: .visible) {
+            Button("Log out", role: .destructive) {
+                if let endpoint = pendingLogout { Task { await controller.logout(endpointTag: endpoint.endpointTag) } }
+                pendingLogout = nil
+            }
+            Button("Cancel", role: .cancel) { pendingLogout = nil }
+        } message: { Text("This device will need to authenticate again to access the tailnet.") }
+        .confirmationDialog("Clear exit node?", isPresented: Binding(
+            get: { pendingClearExit != nil }, set: { if !$0 { pendingClearExit = nil } }
+        ), titleVisibility: .visible) {
+            Button("Clear exit node") {
+                if let endpoint = pendingClearExit { Task { await controller.setExitNode(endpointTag: endpoint.endpointTag, peer: nil) } }
+                pendingClearExit = nil
+            }
+            Button("Cancel", role: .cancel) { pendingClearExit = nil }
+        } message: { Text("Traffic will stop using this exit node.") }
+        .confirmationDialog("Remove Tailscale endpoint?", isPresented: $confirmDisable, titleVisibility: .visible) {
+            Button("Remove endpoint", role: .destructive) { setEnabled(false) }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("The saved config will no longer include Tailscale. Apply & Reconnect is required; the stored key is not deleted.") }
+        .confirmationDialog("Delete stored auth key?", isPresented: $confirmDeleteKey, titleVisibility: .visible) {
+            Button("Delete key", role: .destructive) {
+                do { try TailscaleKeychainStore().deleteAuthKey(); keyStoredTick = 0 }
+                catch { provisionNotice = Notice(kind: .error, text: "Keychain deletion failed") }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .sheet(isPresented: $showAuthKey, onDismiss: { authKeyDraft = "" }) {
+            NavigationStack {
+                Form {
+                    SecureField("tskey-auth-…", text: $authKeyDraft)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    if let notice = provisionNotice, notice.kind == .error { Text(notice.text).foregroundStyle(.red) }
+                }
+                .navigationTitle("Auth key")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { showAuthKey = false } }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Store") {
+                            do {
+                                try TailscaleKeychainStore().storeAuthKey(authKeyDraft)
+                                keyStoredTick += 1; showAuthKey = false
+                            } catch { provisionNotice = Notice(kind: .error, text: "Keychain save failed") }
+                        }.disabled(authKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+            }.presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
+        }
     }
 
     // MARK: Endpoint provisioning (safe, validated, saved-config merge)
@@ -63,7 +118,7 @@ struct TailscaleView: View {
             let enabled = TailscaleEndpointProvisioning.isEnabled(in: store.content)
             Toggle("Built-in Tailscale endpoint", isOn: Binding(
                 get: { enabled },
-                set: { setEnabled($0) }
+                set: { value in if value { setEnabled(true) } else { confirmDisable = true } }
             ))
             if enabled {
                 TextField("Hostname (optional; device name by default)", text: $hostnameDraft)
@@ -222,7 +277,7 @@ struct TailscaleView: View {
                 Text(exitNode.displayName)
                     .foregroundStyle(.secondary)
                 Button("Clear") {
-                    Task { await controller.setExitNode(endpointTag: endpoint.endpointTag, peer: nil) }
+                    pendingClearExit = endpoint
                 }
                 .font(.footnote)
                 .sakamotoGlassButton()
@@ -242,7 +297,7 @@ struct TailscaleView: View {
 
     private func logoutButton(_ endpoint: TailscaleEndpointSummary) -> some View {
         Button("Log out of tailnet", role: .destructive) {
-            Task { await controller.logout(endpointTag: endpoint.endpointTag) }
+            pendingLogout = endpoint
         }
     }
 
@@ -304,18 +359,8 @@ struct TailscaleView: View {
 
     private var authKeySection: some View {
         Section {
-            SecureField("tsauth-… auth key", text: $authKeyDraft)
-            Button("Store auth key in Keychain") {
-                let keyStore = TailscaleKeychainStore()
-                do {
-                    try keyStore.storeAuthKey(authKeyDraft)
-                    authKeyDraft = ""
-                    keyStoredTick += 1
-                } catch {
-                    provisionNotice = Notice(kind: .error, text: "keychain: \(error.localizedDescription)")
-                }
-            }
-            .disabled(authKeyDraft.isEmpty)
+            Button("Edit auth key…") { showAuthKey = true }
+            Button("Delete stored key…", role: .destructive) { confirmDeleteKey = true }
             if keyStoredTick > 0 {
                 Text("Stored. It is injected into the endpoint config at start time; it never enters the repository, logs, or UserDefaults.")
                     .font(.footnote)

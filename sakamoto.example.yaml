@@ -45,6 +45,13 @@ allow_hosts: []
 subscriptions: []
 # Optional user-owned overrides. Match hostnames, not URL paths.
 policy: []
+# S3-compatible source sync; credentials stay in private s3-credentials.json.
+s3:
+  enabled: false
+  endpoint: https://s3.us-east-1.amazonaws.com
+  region: us-east-1
+  bucket: ""
+  prefix: sakamoto
 icloud:
   enabled: false
   include_conf: true  # includes the actual local .conf and its relative .conf dependencies

@@ -17,6 +17,7 @@ import (
 	"github.com/pi-dal/sakamoto/internal/config"
 	"github.com/pi-dal/sakamoto/internal/gen"
 	"github.com/pi-dal/sakamoto/internal/icloud"
+	"github.com/pi-dal/sakamoto/internal/s3sync"
 	"github.com/pi-dal/sakamoto/internal/sbclient"
 	"github.com/pi-dal/sakamoto/internal/svc"
 	"github.com/sagernet/sing-box/daemon"
@@ -81,6 +82,8 @@ type cfgRow struct {
 	toggle  func()
 	edit    func(string) error
 	choices []string // Click/Enter cycles these states instead of opening an editor.
+	secret  bool
+	action  func() tea.Cmd
 }
 type row struct {
 	group *daemon.Group
@@ -265,6 +268,25 @@ func (m *model) Init() tea.Cmd { return tea.Batch(tick(), queryService) }
 
 func (m *model) buildSettings() {
 	m.cfgRows = m.settingsRows(m.cfg)
+	credentials, _ := s3sync.LoadCredentials(filepath.Dir(m.cfgPath))
+	credential := func(label string, value *string) cfgRow {
+		return cfgRow{label: label, secret: true, value: func() string { return *value }, edit: func(s string) error {
+			old := *value
+			*value = s
+			if err := s3sync.SaveCredentials(filepath.Dir(m.cfgPath), credentials); err != nil {
+				*value = old
+				return err
+			}
+			return nil
+		}}
+	}
+	extra := []cfgRow{credential("S3 access key", &credentials.AccessKey), credential("S3 secret key", &credentials.SecretKey), credential("S3 session token", &credentials.SessionToken), {label: "Sync S3 now", value: func() string { return "[ Sync ]" }, action: m.syncS3Now}}
+	for i, r := range m.cfgRows {
+		if r.label == "S3 prefix" {
+			m.cfgRows = append(append(append([]cfgRow{}, m.cfgRows[:i+1]...), extra...), m.cfgRows[i+1:]...)
+			break
+		}
+	}
 }
 
 func (m *model) settingsRows(c *config.Config) []cfgRow {
@@ -422,6 +444,12 @@ func (m *model) settingsRows(c *config.Config) []cfgRow {
 			c.RecoverAfter = v
 			return nil
 		}},
+		{label: "S3 source sync"},
+		toggle("Sync sources to S3", &c.S3.Enabled),
+		{label: "S3 endpoint", value: func() string { return c.S3.Endpoint }, edit: func(s string) error { c.S3.Endpoint = s; return nil }},
+		{label: "S3 region", value: func() string { return c.S3.Region }, edit: func(s string) error { c.S3.Region = s; return nil }},
+		{label: "S3 bucket", value: func() string { return c.S3.Bucket }, edit: func(s string) error { c.S3.Bucket = s; return nil }},
+		{label: "S3 prefix", value: func() string { return c.S3.Prefix }, edit: func(s string) error { c.S3.Prefix = s; return nil }},
 		{label: "Subscriptions", value: func() string { return fmt.Sprint(len(c.Subscriptions)) }},
 		toggle("Automatic fallback", &c.FallbackEnabled),
 		{label: "Fallback chain", value: func() string { return strings.Join(c.Fallbacks["MainProxy"], " → ") }, edit: func(s string) error {

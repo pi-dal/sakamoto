@@ -32,7 +32,7 @@ func ValidSourceName(name string) bool {
 		}
 		lower := strings.ToLower(part)
 		switch lower {
-		case "config.json", "sakamoto.yaml", "proxy-restore.json", "auto-proxy.json", "api-rotation.pending.json", "watch.sock", "watch.lock", "svc.sock", "dns-restore.json", "icloud-state.json", "auth.json", "secrets.zsh":
+		case "s3-credentials.json", "s3-state.json", "config.json", "sakamoto.yaml", "proxy-restore.json", "auto-proxy.json", "api-rotation.pending.json", "watch.sock", "watch.lock", "svc.sock", "dns-restore.json", "icloud-state.json", "auth.json", "secrets.zsh":
 			return false
 		}
 		for _, suffix := range []string{".srs", ".log", ".sock", ".lock", ".db", ".db.rule", ".pem", ".key"} {

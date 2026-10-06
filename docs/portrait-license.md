@@ -20,7 +20,14 @@ for spec in wide:56:21 compact:46:16 mini:28:10 tiny:18:7; do
 done
 ```
 
-The About page repeats the attribution and license. This tribute does not imply endorsement by Ryuichi Sakamoto, his family, estate or representatives. The portrait is **not** a product logo or a claim of affiliation.
+The About page repeats the attribution and license. This tribute does not imply endorsement by Ryuichi Sakamoto, his family, estate or representatives. The mobile app icons use separate owner-provided artwork and do not use the portrait.
+
+## Mobile app icons
+
+The launcher artwork is owner-provided in `assets/app-icon.png`, selected
+from the supplied ChatGPT image on 2026-10-05. `mise run icons` resizes that
+PNG into opaque iOS icons and Android adaptive/legacy icons; the themed
+variant uses the artwork's luminance. No portrait samples are used.
 
 ## Terminal technique reference
 

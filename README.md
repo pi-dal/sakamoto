@@ -34,6 +34,43 @@ For a source build in this repository, use `./sakamoto setup` instead. `setup` l
 
 **After a reboot, reconnect manually.** Launchd restarts the supervisor and starts the watcher at login, but neither starts sing-box's TUN. With protected DNS enabled, the supervisor attempts to restore the prior DHCP/static DNS from its private snapshot when no loopback DNS listener survives; it does **not** re-enable protection automatically. Do not assume proxy or DNS protection persists across a reboot. See [startup, failure and verification boundaries](docs/dns-protection.md#startup-and-reboot-behavior).
 
+## Android
+
+The first official Android client is available from
+[Android v0.1.0](https://github.com/pi-dal/sakamoto/releases/tag/android-v0.1.0).
+Download the signed APK and verify `SHA256SUMS`. Android 7.0+ is supported;
+configuration and servers are supplied by the user. Native VPN diagnostics,
+node/group editing, widgets, notification controls and optional experiments
+share the project's Go logic. See [Android installation and limitations](android/README.md).
+Debug APKs have a different signature; switching from a development install
+requires preserving data before a manual migration. The release does not
+publish an iOS app or change your running macOS tunnel.
+
+## Development toolchain (mise)
+
+Project runtime versions and local/CI build commands are in `mise.toml`.
+Android SDK/JDK are opt-in through `mise.android.toml`; Xcode remains an
+Apple-provided prerequisite on macOS. No project task installs global tools
+through Homebrew or changes your global mise runtime choices.
+
+```bash
+mise trust
+mise install
+mise run ci:check
+mise run icons
+mise run ios:build                       # macOS + Xcode
+mise run ios:package                     # simulator .app zip
+mise -E android install
+mise -E android run android:build       # SDK, AARs, tests, APK
+mise -E android run android:install     # attached Pixel, USB debugging
+```
+
+`mise run mobile:tools` exposes the mise-managed gomobile binaries at
+`GOPATH/bin`, as required by sing-box's upstream builder. Gradle remains
+pinned by the checked-in wrapper; SDK packages are installed by the
+mise-managed Android SDK. Language dependency management is unchanged.
+The Homebrew tap above remains an end-user distribution option.
+
 ## Interface
 
 - **Home:** connected/verified state, live proxy chain and SOCKS exit, node groups with latency; left-click any node to select it, right-click for test/details, mouse wheel to scroll. Click **Mode** or press `m` to switch Rule/Global/Direct through the native API; [mode rules and exclusions](docs/configuration.md#rule-global-and-direct-routing-modes) are explicit.
@@ -49,6 +86,7 @@ For a source build in this repository, use `./sakamoto setup` instead. `setup` l
 ## Configuration and migration
 
 - [TUI: mouse and keyboard workflows](docs/tui.md)
+- [S3 source sync across TUI, iOS and Android](docs/s3-sync.md)
 - [Configuration, fallback and privacy](docs/configuration.md)
 - [Native protected system DNS and administrative activation](docs/dns-protection.md)
 - [Shadowrocket import and unsupported features](docs/import.md)

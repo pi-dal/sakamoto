@@ -316,6 +316,10 @@ final class ConfigModel: ObservableObject {
 
 struct ConfigView: View {
     @ObservedObject var model: ConfigModel
+    @State private var showImportOptions = false
+    @State private var showURLImport = false
+    @State private var showEditor = false
+    @State private var confirmApply = false
 
     var body: some View {
         List {
@@ -337,6 +341,49 @@ struct ConfigView: View {
                 model.importFromFile(at: url)
             }
         }
+        .sheet(isPresented: $showURLImport) {
+            NavigationStack {
+                Form {
+                    TextField("Shadowrocket .conf URL", text: $model.importURLText)
+                        .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    if let error = model.importError { Text(error).font(.footnote).foregroundStyle(.red) }
+                }
+                .navigationTitle("Import from URL")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { showURLImport = false } }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(model.importing ? "Importing…" : "Import") {
+                            Task { await model.importFromURL(); if model.importError == nil { showURLImport = false } }
+                        }.disabled(model.importing || model.importURLText.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                }
+            }.presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showEditor) {
+            NavigationStack {
+                Form {
+                    TextEditor(text: $model.draft).font(.footnote.monospaced()).frame(minHeight: 300)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    if let error = model.editorError { Text(error).foregroundStyle(.red) }
+                }
+                .navigationTitle("Generated config")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { showEditor = false } }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") { model.saveDraft(); if model.editorError == nil { showEditor = false } }
+                    }
+                }
+            }
+        }
+        .confirmationDialog("Import configuration", isPresented: $showImportOptions, titleVisibility: .visible) {
+            Button("From URL…") { showURLImport = true }
+            Button("From Files…") { model.showFileImporter = true }
+            Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog("Apply saved configuration?", isPresented: $confirmApply, titleVisibility: .visible) {
+            Button("Apply & Reconnect") { Task { await model.regenerateAndApply() } }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("The tunnel will reload and active connections may be interrupted. Source generation must be completed on the host first.") }
         .sheet(isPresented: $model.showAddPolicy) { addPolicySheet }
         .sheet(isPresented: $model.showAddNode) { addNodeSheet }
         .sheet(isPresented: $model.showAddSubscription) { addSubscriptionSheet }
@@ -427,20 +474,7 @@ struct ConfigView: View {
             if let report = model.importReport {
                 importReportRows(report)
             }
-            HStack {
-                TextField("Shadowrocket .conf URL", text: $model.importURLText)
-                    .keyboardType(.URL)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .textFieldStyle(.roundedBorder)
-                Button(model.importing ? "Importing…" : "Import") {
-                    Task { await model.importFromURL() }
-                }
-                .disabled(model.importing || model.importURLText.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
-            Button("Import from Files…") {
-                model.showFileImporter = true
-            }
+            Button("Import configuration…") { showImportOptions = true }.disabled(model.importing)
         } header: {
             Text("Import config")
         } footer: {
@@ -673,7 +707,7 @@ struct ConfigView: View {
     private var generateSection: some View {
         Section {
             Button("Regenerate + Reconnect") {
-                Task { await model.regenerateAndApply() }
+                confirmApply = true
             }
             .disabled(model.store.configState == .clean)
         } header: {
@@ -690,13 +724,7 @@ struct ConfigView: View {
             if let error = model.editorError {
                 Text(error).font(.footnote).foregroundStyle(.red)
             }
-            TextEditor(text: $model.draft)
-                .font(.footnote.monospaced())
-                .frame(minHeight: 220)
-                .textInputAutocapitalization(.never)
-            Button("Save (marks modified)") {
-                model.saveDraft()
-            }
+            Button("Edit generated configuration…") { showEditor = true }
         } header: {
             Text("sing-box config (advanced)")
         } footer: {

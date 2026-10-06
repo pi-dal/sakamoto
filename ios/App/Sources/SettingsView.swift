@@ -106,6 +106,20 @@ final class SettingsModel: ObservableObject {
 
     // MARK: Runtime mode (same action as the Home [ Mode ] button)
 
+    func setRoutingMode(_ mode: RoutingMode) async {
+        guard let commanding, channelActive else {
+            notice = Notice(kind: .warning, text: "Connect the tunnel before changing mode")
+            return
+        }
+        do {
+            try await commanding.setClashMode(mode)
+            routingMode = mode
+            notice = Notice(kind: .info, text: "Mode: \(mode.rawValue)")
+        } catch {
+            notice = Notice(kind: .error, text: "Mode change failed — reconnect and retry")
+        }
+    }
+
     func cycleRoutingMode() async {
         guard let commanding else {
             notice = Notice(kind: .warning, text: "mode: command channel unavailable")
@@ -145,18 +159,56 @@ final class SettingsModel: ObservableObject {
 struct SettingsView: View {
     @ObservedObject var model: SettingsModel
     @ObservedObject var sync: ICloudSyncModel
+    @ObservedObject var s3: S3SyncModel
     let commanding: LibboxCoreCommanding?
 
     @State private var confirmSyncEnable = false
+    @State private var confirmApply = false
+    @State private var showModes = false
 
     var body: some View {
         List {
-            runtimeSection
-            editableSection
-            hostOwnedSection
-            applySection
-            iCloudSyncSection
-            tailscaleSection
+            Section("Connections") {
+                NavigationLink("Routing & tunnel settings") {
+                    List { runtimeSection; editableSection; applySection }
+                        .listStyle(.insetGrouped)
+                        .navigationTitle("Tunnel settings")
+                        .confirmationDialog("Routing mode", isPresented: $showModes, titleVisibility: .visible) {
+                            ForEach(RoutingMode.allCases, id: \.rawValue) { mode in
+                                Button(mode.rawValue) { Task { await model.setRoutingMode(mode) } }
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        }
+                        .confirmationDialog("Apply saved configuration?", isPresented: $confirmApply, titleVisibility: .visible) {
+                            Button("Apply & Reconnect") { Task { await model.regenerateAndApply() } }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("Reloading the tunnel can interrupt active connections. Host-side generation is not performed on this device.")
+                        }
+                }
+                NavigationLink("Built-in Tailscale") {
+                    TailscaleView(store: model.store, tunnel: model.tunnel, commanding: commanding)
+                }
+            }
+            Section("Source sync") {
+                NavigationLink("iCloud Sync") {
+                    List { iCloudSyncSection }
+                        .listStyle(.insetGrouped).navigationTitle("iCloud Sync")
+                        .confirmationDialog("Sync sources to iCloud?", isPresented: $confirmSyncEnable, titleVisibility: .visible) {
+                            Button("Enable sync") { sync.confirmEnable() }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("Node links, subscription URLs and imported conf may contain credentials. They will be uploaded to iCloud Drive. Generated configs, keys and logs remain local.")
+                        }
+                }
+                NavigationLink("S3 Sync") { S3SettingsView(model: s3) }
+            }
+            Section("Advanced") {
+                NavigationLink("Host-owned configuration") {
+                    List { hostOwnedSection }.listStyle(.insetGrouped).navigationTitle("Host configuration")
+                }
+            }
+            aboutSection
         }
         .navigationTitle("Settings")
         .listStyle(.insetGrouped)
@@ -164,22 +216,12 @@ struct SettingsView: View {
             model.activate()
             sync.activate()
         }
-        .confirmationDialog(
-            "Sync sources to iCloud?",
-            isPresented: $confirmSyncEnable,
-            titleVisibility: .visible
-        ) {
-            Button("Enable sync", role: .destructive) { sync.confirmEnable() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Node share links, subscription feed URLs (they usually contain access tokens) and the imported rule conf (it can contain proxy credentials and private host mappings) will be uploaded to your iCloud Drive. Consider Advanced Data Protection. Generated configs, keys and logs never sync.")
-        }
     }
 
     private var runtimeSection: some View {
         Section {
             Button {
-                Task { await model.cycleRoutingMode() }
+                showModes = true
             } label: {
                 HStack {
                     Text("Routing mode")
@@ -268,7 +310,7 @@ struct SettingsView: View {
                     .foregroundStyle(model.store.configState == .clean ? Color.green : Color.orange)
             }
             Button("Regenerate + Reconnect") {
-                Task { await model.regenerateAndApply() }
+                confirmApply = true
             }
             .sakamotoGlassButton(prominent: true)
             .disabled(model.store.configState == .clean)
@@ -346,6 +388,20 @@ struct SettingsView: View {
             Text("iCloud Sync")
         } footer: {
             Text("Off by default and never required: generated config.json, .srs, keys, Keychain content and logs stay local. The container id (iCloud.com.pidal.sakamoto) is a placeholder until a real Team signs the app — sync reports unavailable until then.")
+        }
+    }
+
+    private var aboutSection: some View {
+        Section {
+            NavigationLink { AboutView() } label: {
+                HStack {
+                    Text("About sakamoto")
+                    Spacer()
+                    Text("License & credits").foregroundStyle(.secondary)
+                }
+            }
+        } header: {
+            Text("App")
         }
     }
 

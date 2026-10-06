@@ -4,160 +4,138 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.snackbar.Snackbar
+import com.pidal.sakamoto.MainActivity
 import com.pidal.sakamoto.R
 import com.pidal.sakamoto.command.CommandClientRuntime
-import com.pidal.sakamoto.databinding.FragmentConfigBinding
-import com.pidal.sakamoto.mobilecore.Mobilecore
 import com.pidal.sakamoto.runtime.ConfigRepository
 import com.pidal.sakamoto.runtime.MobilecoreRuntime
+import io.nekohasekai.mobilecore.Mobilecore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
-/**
- * Config tab skeleton with the TUI/iOS section boundaries:
- *   Import config — a Shadowrocket .conf URL is fetched by the app and parsed
- *     through Mobilecore.parseConfContentJSON (the same parser the host
- *     importer runs). The report counts + pending references render here.
- *   Policy — staged rules validated via Mobilecore.normalizePolicyRule; the
- *     state model lives in ConfigRepository.
- *   Nodes & sources — staged share links + subscription METADATA (bodies are
- *     host-fetched; the device never pretends otherwise).
- *   Generate · Apply — Mobilecore.validateConfigJSON (structural, in-process)
- *     then the provider reload (serviceReload). The .srs compilation and
- *     `sing-box check` stay on the sakamoto host — this page says so.
- *
- * STATUS: page skeleton + working import/parse/apply path; the policy/nodes
- * EDITOR forms are follow-ups (the state model is already in
- * ConfigRepository). PENDING SDK BUILD VERIFICATION — android/README.md.
- */
-class ConfigFragment : Fragment() {
-
-    private var binding: FragmentConfigBinding? = null
-
-    override fun onCreateView(
-        inflater: LayoutInflater,
-        container: ViewGroup?,
-        savedInstanceState: Bundle?,
-    ): View {
-        val b = FragmentConfigBinding.inflate(inflater, container, false)
-        binding = b
-        b.importButton.setOnClickListener { importFromUrl() }
-        b.applyButton.setOnClickListener { applyToService() }
-        return b.root
-    }
-
-    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        super.onViewCreated(view, savedInstanceState)
-        renderStaged()
-    }
-
-    override fun onDestroyView() {
-        binding = null
-        super.onDestroyView()
-    }
-
-    private fun renderStaged() {
-        val staged = ConfigRepository.load(requireContext())
-        val b = binding ?: return
-        b.policySummary.text = if (staged.policy.isEmpty()) {
-            getString(R.string.policy_empty)
-        } else {
-            staged.policy.joinToString("\n") { "${it.match} → ${it.action}" }
-        }
-        b.nodesSummary.text = buildString {
-            appendLine(getString(R.string.nodes_count, staged.nodes.size))
-            append(getString(R.string.subscriptions_count, staged.subscriptions.size))
-        }
-        b.configStateValue.text = MobilecoreRuntime.state.value.configState
-    }
-
-    private fun importFromUrl() {
-        val b = binding ?: return
-        val urlText = b.importUrlInput.text?.toString()?.trim().orEmpty()
-        if (urlText.isEmpty()) {
-            b.importReport.text = getString(R.string.import_error_empty)
-            return
-        }
-        if (!urlText.startsWith("https://") && !urlText.startsWith("http://")) {
-            // Local .conf paste/file is a follow-up; keep the boundary honest.
-            b.importReport.text = getString(R.string.import_error_scheme)
-            return
-        }
-        b.importButton.isEnabled = false
-        viewLifecycleOwner.lifecycleScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                runCatching {
-                    val connection = java.net.URI(urlText).toURL().openConnection() as java.net.HttpURLConnection
-                    connection.connectTimeout = 10_000
-                    connection.readTimeout = 20_000
-                    connection.inputStream.bufferedReader().use { it.readText() }
+/** Index of real editing workflows with an explicit, acknowledged apply action. */
+class ConfigFragment : androidx.fragment.app.Fragment() {
+    private var sourceRow: GroupedPage.Row? = null
+    private var stateRow: GroupedPage.Row? = null
+    private var applyButton: com.google.android.material.button.MaterialButton? = null
+    private var importing = false
+    private var importButton: com.google.android.material.button.MaterialButton? = null
+    private val packagePicker = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) viewLifecycleOwner.lifecycleScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    requireContext().contentResolver.openInputStream(uri)?.use { com.pidal.sakamoto.runtime.TunnelPackage.import(requireContext(), it) }
+                        ?: error(getString(R.string.tunnel_package_read_failed))
                 }
-            }
-            b.importButton.isEnabled = true
-            result.fold(
-                onSuccess = { content ->
-                    // The same parser the host importer uses (single JSON
-                    // string across the gomobile boundary).
-                    val report = try {
-                        Mobilecore.parseConfContentJSON(content)
-                    } catch (e: Exception) {
-                        b.importReport.text = getString(R.string.import_error_parse, e.message)
-                        return@fold
-                    }
-                    val json = JSONObject(report)
-                    val summary = getString(
-                        R.string.import_summary,
-                        json.optInt("totalRules"),
-                        json.optInt("proxyRules"),
-                        json.optInt("directRules"),
-                        json.optInt("rejectRules"),
-                    )
-                    b.importReport.text = summary
-                    val staged = ConfigRepository.load(requireContext())
-                    ConfigRepository.save(
-                        requireContext(),
-                        staged.copy(
-                            sourceConfName = urlText.substringAfterLast('/'),
-                            sourceConfIsUrl = true,
-                            sourceConfContent = content,
-                        ),
-                    )
-                    MobilecoreRuntime.configEvent("modified")
-                    renderStaged()
-                },
-                onFailure = { e ->
-                    b.importReport.text = getString(R.string.import_error_fetch, e.message)
-                },
-            )
+                render()
+                view?.let { Snackbar.make(it, R.string.tunnel_package_imported, Snackbar.LENGTH_LONG).show() }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (error: Exception) { view?.let { Snackbar.make(it, error.message ?: getString(R.string.profile_import_failed), Snackbar.LENGTH_LONG).show() } }
         }
     }
 
-    private fun applyToService() {
-        val context = requireContext()
-        val content = ConfigRepository.readGeneratedContent(context)
-        if (content == null) {
-            MobilecoreRuntime.setNotice(getString(R.string.apply_error_no_config))
-            return
+    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, state: Bundle?): View {
+        val page = GroupedPage(requireContext())
+        val source = page.section(getString(R.string.config_source_section))
+        sourceRow = page.row(source, getString(R.string.source_current_conf), "", R.drawable.ic_link) { open(SourceFilesFragment(), R.string.source_files) }
+        importButton = page.button(source, getString(R.string.config_import_title)) {
+            EditDialogs.text(requireContext(), getString(R.string.config_import_hint), "") { url ->
+                val input = url.trim()
+                require(input.startsWith("https://") || input.startsWith("http://")) { getString(R.string.import_error_scheme) }
+                Mobilecore.validateSourceURL(input)
+                importFromUrl(input)
+            }
         }
-        // Structural check in-process (the bridge throws on invalid JSON).
-        try {
-            Mobilecore.validateConfigJSON(content)
-        } catch (e: Exception) {
-            MobilecoreRuntime.configEvent("regenerate_failed")
-            MobilecoreRuntime.setNotice(getString(R.string.apply_error_check, e.message))
-            return
+        page.row(source, getString(R.string.tunnel_package_import), getString(R.string.tunnel_package_note), R.drawable.ic_download) {
+            packagePicker.launch(arrayOf("application/zip", "application/octet-stream"))
         }
-        MobilecoreRuntime.configEvent("regenerate_succeeded")
-        // iOS collapses Regenerate + Reconnect into a provider reload; the
-        // Android equivalent is the CommandClient reload of the running box.
-        CommandClientRuntime.start()
-        CommandClientRuntime.reloadService()
-        MobilecoreRuntime.configEvent("applied")
-        MobilecoreRuntime.clearNotice()
-        renderStaged()
+        val manage = page.section(getString(R.string.config_manage_section))
+        page.row(manage, getString(R.string.profiles_title), getString(R.string.profile_index_detail), R.drawable.ic_node) { open(ProfilesFragment(), R.string.profiles_title) }
+        page.row(manage, getString(R.string.policy_effective_rules), getString(R.string.policy_index_detail), R.drawable.ic_route) { open(RoutingPolicyFragment(), R.string.policy_effective_rules) }
+        page.row(manage, getString(R.string.proxy_chain_title), getString(R.string.proxy_chain_entry_note), R.drawable.ic_route) { open(ProxyChainFragment(), R.string.proxy_chain_title) }
+        page.row(manage, getString(R.string.profile_source_title), getString(R.string.profile_sources_note), R.drawable.ic_sync) { open(SourcesManagerFragment(), R.string.profile_source_title) }
+        val apply = page.section(getString(R.string.config_apply_section))
+        stateRow = page.row(apply, getString(R.string.config_state_label))
+        applyButton = page.button(apply, getString(R.string.apply_saved), primary = true) {
+            MaterialAlertDialogBuilder(requireContext()).setTitle(R.string.config_apply_confirm_title).setMessage(R.string.config_apply_confirm_message)
+                .setNegativeButton(android.R.string.cancel, null).setPositiveButton(R.string.apply_saved) { _, _ -> apply() }.show()
+        }
+        page.row(apply, getString(R.string.edit_generated_config), getString(R.string.advanced_editor_note), R.drawable.ic_info) {
+            EditDialogs.text(requireContext(), getString(R.string.edit_generated_config), ConfigRepository.load(requireContext()).generatedContent, multiline = true) {
+                ConfigRepository.saveGeneratedEdit(requireContext(), it); render()
+            }
+        }
+        render()
+        return page.root
     }
+    private fun open(fragment: androidx.fragment.app.Fragment, title: Int) { (requireActivity() as MainActivity).openChild(fragment, getString(title)) }
+    override fun onViewCreated(view: View, state: Bundle?) {
+        super.onViewCreated(view, state)
+        parentFragmentManager.setFragmentResultListener("config-updated", viewLifecycleOwner) { _, _ -> render() }
+        viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.RESUMED) { MobilecoreRuntime.state.collect { render() } }
+        }
+    }
+    private fun render() {
+        val saved = ConfigRepository.load(requireContext())
+        val runtime = MobilecoreRuntime.state.value
+        sourceRow?.detail(saved.sourceConfPath.ifEmpty { saved.sourceConfName }.ifEmpty { getString(R.string.config_no_source) })
+        stateRow?.detail(when {
+            saved.sourceNeedsGenerate -> getString(R.string.source_generation_required)
+            runtime.configApplyPending -> getString(R.string.config_applying)
+            runtime.notice != null -> runtime.notice
+            runtime.serviceState != "Running" -> getString(R.string.config_connect_first)
+            else -> runtime.configState
+        })
+        applyButton?.isEnabled = saved.generatedContent.isNotBlank() && !saved.sourceNeedsGenerate && runtime.serviceState == "Running" && !runtime.configApplyPending
+    }
+    private fun apply() {
+        MobilecoreRuntime.beginConfigApply()
+        render()
+        viewLifecycleOwner.lifecycleScope.launch {
+            val ok = withContext(Dispatchers.IO) { CommandClientRuntime.reloadService() }
+            if (!ok) MobilecoreRuntime.configEvent("regenerate_failed")
+            render()
+        }
+    }
+    private fun importFromUrl(url: String) {
+        if (importing) return
+        importing = true; importButton?.isEnabled = false
+        viewLifecycleOwner.lifecycleScope.launch {
+            try {
+                val content = withContext(Dispatchers.IO) {
+                    val connection = java.net.URI(url).toURL().openConnection() as java.net.HttpURLConnection
+                    connection.connectTimeout = 10_000; connection.readTimeout = 20_000
+                    try {
+                        check(connection.responseCode == 200) { "HTTP ${connection.responseCode}" }
+                        connection.inputStream.use { input ->
+                            val output = java.io.ByteArrayOutputStream()
+                            val buffer = ByteArray(8192)
+                            while (true) {
+                                val count = input.read(buffer)
+                                if (count < 0) break
+                                require(output.size() + count <= (16 shl 20)) { "Import exceeds 16 MiB" }
+                                output.write(buffer, 0, count)
+                            }
+                            output.toString("UTF-8")
+                        }
+                    } finally { connection.disconnect() }
+                }
+                Mobilecore.parseConfContentJSON(content)
+                val current = ConfigRepository.load(requireContext())
+                ConfigRepository.save(requireContext(), current.copy(sourceConfName = java.net.URI(url).path.substringAfterLast('/'), sourceConfIsUrl = true, sourceConfContent = content, sourceConfPath = "", hostSnapshotAt = "", sourceNeedsGenerate = true))
+                MobilecoreRuntime.configEvent("modified")
+                view?.let { Snackbar.make(it, R.string.profile_source_imported, Snackbar.LENGTH_LONG).show() }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (_: Exception) { view?.let { Snackbar.make(it, R.string.profile_import_failed, Snackbar.LENGTH_LONG).show() } }
+            finally { importing = false; importButton?.isEnabled = true; if (isAdded) render() }
+        }
+    }
+    override fun onDestroyView() { sourceRow = null; stateRow = null; applyButton = null; importButton = null; super.onDestroyView() }
 }

@@ -37,6 +37,10 @@ object ConfigRepository {
         val sourceConfName: String = "",
         val sourceConfIsUrl: Boolean = false,
         val sourceConfContent: String = "",
+        val sourceConfPath: String = "",
+        val hostSnapshotAt: String = "",
+        val hostMetadata: String = "{}",
+        val sourceNeedsGenerate: Boolean = false,
         val policy: List<PolicyRule> = emptyList(),
         val nodes: List<String> = emptyList(),
         val subscriptions: List<Triple<String, String, String>> = emptyList(), // name, url, format
@@ -54,6 +58,10 @@ object ConfigRepository {
                 sourceConfName = root.optString("sourceConfName"),
                 sourceConfIsUrl = root.optBoolean("sourceConfIsUrl"),
                 sourceConfContent = root.optString("sourceConfContent"),
+                sourceConfPath = root.optString("sourceConfPath"),
+                hostSnapshotAt = root.optString("hostSnapshotAt"),
+                hostMetadata = root.optString("hostMetadata", "{}"),
+                sourceNeedsGenerate = root.optBoolean("sourceNeedsGenerate"),
                 policy = root.optJSONArray("policy")?.let { array ->
                     (0 until array.length()).mapNotNull { i ->
                         val o = array.optJSONObject(i) ?: return@mapNotNull null
@@ -81,6 +89,10 @@ object ConfigRepository {
         root.put("sourceConfName", config.sourceConfName)
         root.put("sourceConfIsUrl", config.sourceConfIsUrl)
         root.put("sourceConfContent", config.sourceConfContent)
+        root.put("sourceConfPath", config.sourceConfPath)
+        root.put("hostSnapshotAt", config.hostSnapshotAt)
+        root.put("hostMetadata", config.hostMetadata)
+        root.put("sourceNeedsGenerate", config.sourceNeedsGenerate)
         root.put(
             "policy",
             JSONArray().apply {
@@ -102,6 +114,70 @@ object ConfigRepository {
             file(context).writeText(root.toString())
             tmp.delete()
         }
+    }
+
+    fun saveGeneratedEdit(context: Context, content: String) {
+        io.nekohasekai.mobilecore.Mobilecore.validateConfigJSON(content)
+        // libbox validates semantic options and outbound references as well.
+        io.nekohasekai.libbox.Libbox.checkConfig(content)
+        val current = load(context)
+        save(context, current.copy(generatedContent = content))
+        MobilecoreRuntime.configEvent("modified")
+    }
+
+    fun savePolicy(context: Context, original: PolicyRule?, replacement: PolicyRule?) {
+        val current = load(context)
+        val root = JSONObject(current.generatedContent)
+        val route = root.getJSONObject("route")
+        val existing = route.optJSONArray("rules") ?: JSONArray()
+        val next = JSONArray()
+        if (replacement != null) {
+            val info = io.nekohasekai.mobilecore.Mobilecore.normalizePolicyRule(replacement.match, replacement.action)
+            val generated = JSONObject().put(info.kind, JSONArray().put(info.value))
+            if (info.action == "reject") generated.put("action", "reject")
+            else {
+                val destination = if (info.action == "direct") "direct" else RoutingSnapshot.parse(current.generatedContent).rules.firstOrNull { it.match.contains("rs-proxy") }?.outbound?.takeIf { it.isNotEmpty() }
+                    ?: ConfigEdits.outboundTags(current.generatedContent).firstOrNull { it == "MainProxy" }
+                    ?: error("No proxy outbound available")
+                generated.put("action", "route").put("outbound", destination)
+            }
+            next.put(generated)
+        }
+        val originalInfo = original?.let { io.nekohasekai.mobilecore.Mobilecore.normalizePolicyRule(it.match, it.action) }
+        for (i in 0 until existing.length()) {
+            val rule = existing.getJSONObject(i)
+            val matchesOriginal = originalInfo != null && rule.length() == (if (originalInfo.action == "reject") 2 else 3) && rule.optJSONArray(originalInfo.kind)?.let { it.length() == 1 && it.optString(0) == originalInfo.value } == true &&
+                (if (originalInfo.action == "reject") rule.optString("action") == "reject" else rule.optString("action") == "route")
+            if (!matchesOriginal) next.put(rule)
+        }
+        route.put("rules", next)
+        io.nekohasekai.mobilecore.Mobilecore.validateConfigJSON(root.toString())
+        io.nekohasekai.libbox.Libbox.checkConfig(root.toString())
+        val policy = current.policy.filterNot { it == original }.let { if (replacement == null) it else it + replacement }
+        save(context, current.copy(generatedContent = root.toString(), policy = policy))
+        MobilecoreRuntime.configEvent("modified")
+    }
+
+    data class GroupItem(val tag: String, val type: String, val delay: Int = 0, val testedAt: Long = 0L)
+    data class Group(val tag: String, val type: String, val selectable: Boolean, val selected: String, val items: List<GroupItem>)
+
+    fun savedGroups(context: Context): List<Group> = runCatching {
+        val root = JSONObject(readGeneratedContent(context) ?: return emptyList())
+        val array = root.optJSONArray("outbounds") ?: return emptyList()
+        val outbounds = (0 until array.length()).map { array.getJSONObject(it) }
+        val types = outbounds.associate { it.optString("tag") to it.optString("type") }
+        outbounds.filter { it.optString("type") in listOf("selector", "urltest") }.map { group ->
+            val items = group.optJSONArray("outbounds") ?: JSONArray()
+            Group(group.getString("tag"), group.getString("type"), group.getString("type") == "selector", group.optString("default"),
+                (0 until items.length()).map { GroupItem(items.getString(it), types[items.getString(it)].orEmpty()) })
+        }
+    }.getOrDefault(emptyList())
+
+    fun sourceFiles(context: Context): List<File> {
+        val root = File(context.filesDir, "imports/local")
+        if (!root.isDirectory) return emptyList()
+        return root.walkTopDown().filter { it.isFile && it.canonicalPath.startsWith(root.canonicalPath + File.separator) &&
+            (it.extension == "conf" || it.name in listOf("nodes.txt", "policy.json", "chain.json")) }.sortedBy { it.relativeTo(root).path }.toList()
     }
 
     /** The config content the tunnel service loads (BoxService start/reload). */

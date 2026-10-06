@@ -12,11 +12,19 @@ import (
 	"github.com/pi-dal/sakamoto/internal/config"
 	"github.com/pi-dal/sakamoto/internal/core"
 	"github.com/pi-dal/sakamoto/internal/gen"
+	"github.com/pi-dal/sakamoto/internal/s3sync"
 	"github.com/pi-dal/sakamoto/internal/security"
 	"github.com/pi-dal/sakamoto/internal/svc"
 )
 
 func (m *model) scrollBy(n int) {
+	if m.policyEditing || m.importing || m.editIndex >= 0 || m.formEditing {
+		return
+	}
+	if m.page == configPage && m.configDetail == policySection {
+		m.policyCursor = max(0, min(max(0, len(m.cfg.PolicyRules)-1), m.policyCursor+n))
+		return
+	}
 	if m.configForm && !m.formEditing {
 		available := max(2, m.height-6-8)
 		m.formScroll = max(0, min(max(0, len(m.formRows)-available), m.formScroll+n))
@@ -48,6 +56,20 @@ func (m *model) scrollBy(n int) {
 	}
 }
 func (m *model) click(x, y int) tea.Cmd {
+	if m.editIndex >= 0 {
+		for _, h := range m.hits {
+			if y != h.y || x < h.x0 || x >= h.x1 {
+				continue
+			}
+			switch h.action {
+			case "setting-save":
+				return m.handleInput(tea.KeyMsg{Type: tea.KeyEnter})
+			case "setting-cancel":
+				return m.handleInput(tea.KeyMsg{Type: tea.KeyEsc})
+			}
+		}
+		return nil
+	}
 	if m.policyEditing {
 		return m.clickPolicyEditor(x, y)
 	}
@@ -154,7 +176,7 @@ func (m *model) click(x, y int) tea.Cmd {
 	return nil
 }
 func (m *model) rightClick(x, y int) {
-	if m.page != homePage {
+	if m.page != homePage || m.policyEditing || m.configForm || m.importing || m.editIndex >= 0 {
 		return
 	}
 	for _, h := range m.hits {
@@ -180,6 +202,9 @@ func (m *model) activateSetting(i int) tea.Cmd {
 		return nil
 	}
 	r := m.cfgRows[i]
+	if r.action != nil {
+		return r.action()
+	}
 	if len(r.choices) > 0 {
 		old := r.value()
 		next := r.choices[0]
@@ -414,6 +439,8 @@ func (m *model) deleteSelectedSource() tea.Cmd {
 
 func (m *model) handleInput(k tea.KeyMsg) tea.Cmd {
 	switch k.String() {
+	case "ctrl+u":
+		m.input = ""
 	case "esc":
 		m.editIndex = -1
 		m.editing = ""
@@ -648,10 +675,29 @@ func (m *model) toggleSetting(i int) tea.Cmd {
 		return nil
 	}
 	m.notice = "Saved · regenerate to apply on the next connection"
+	if r.label == "Sync sources to S3" {
+		m.notice = "Saved; S3 sync runs every minute in the watcher"
+	}
 	if r.label == "Sync sources to iCloud" || r.label == "Include conf and rule includes" {
 		m.notice = "Saved; iCloud watcher reloads within one minute (no VPN reconnect)"
 	}
 	return nil
+}
+
+type s3SyncMsg struct {
+	messages []string
+	err      error
+}
+
+func (m *model) syncS3Now() tea.Cmd {
+	m.notice = "Syncing S3 sources…"
+	path := m.cfgPath
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		messages, err := s3sync.Sync(ctx, path)
+		return s3SyncMsg{messages, err}
+	}
 }
 func (m *model) generate() tea.Cmd {
 	m.notice = "Refreshing subscriptions and generating config…"

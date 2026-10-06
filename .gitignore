@@ -10,6 +10,11 @@ watch.lock
 *.srs
 *.db
 *.log
+__pycache__/
+*.py[cod]
+*.jks
+*.keystore
+/dist/
 
 # Local build outputs
 /sakamoto
@@ -22,6 +27,8 @@ watch.lock
 
 # iOS integration: SwiftPM build dir and built frameworks (never committed)
 /ios/.build/
+/ios/build/
+/ios/ExportOptions.local.plist
 /ios/Frameworks/
 # Xcode project is generated from ios/project.yml (`xcodegen generate`)
 /ios/*.xcodeproj

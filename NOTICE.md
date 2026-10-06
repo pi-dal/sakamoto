@@ -26,7 +26,9 @@ The upstream repository is **not** vendored; only the files above are derived, a
 ## About-page portrait
 
 - Source photograph: [RyuichiSakamoto2007.jpg](https://commons.wikimedia.org/wiki/File:RyuichiSakamoto2007.jpg) by **Joi Ito**; the Wikimedia Commons portrait was cropped by **Solid State Survivor**.
-- License for the source and its terminal pixel-art adaptations: [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/).
+- License for the source and terminal pixel-art adaptations: [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/).
 - Changes made here: face-focused crop, grayscale resampling, truecolor/ANSI-256 half-block portrait sizes and monochrome fallback. See [docs/portrait-license.md](docs/portrait-license.md) for attribution, source digest and reproduction details.
+
+The mobile app icon (`assets/app-icon.png`) is owner-provided artwork selected for this project. The launcher exports resize that image; the Android themed variant is a luminance adaptation. It is separate from the CC BY 2.0 terminal portrait.
 
 The name sakamoto is a tribute to the musician **Ryuichi Sakamoto**, not a claim of endorsement or association with him, his family, estate or representatives.

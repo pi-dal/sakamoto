@@ -17,6 +17,7 @@ PLIST=""
 while getopts "p:" opt; do
     case "$opt" in
         p) PLIST="$OPTARG" ;;
+        *) echo "usage: flatten-gomobile-framework.sh [-p Info.plist] path/to/Xxx.framework" >&2; exit 2 ;;
     esac
 done
 shift $((OPTIND - 1))
@@ -24,18 +25,15 @@ shift $((OPTIND - 1))
 FRAMEWORK="${1:?usage: flatten-gomobile-framework.sh [-p Info.plist] path/to/Xxx.framework}"
 NAME="$(basename "${FRAMEWORK}" .framework)"
 
-if [ ! -d "${FRAMEWORK}/Versions" ]; then
-    echo "flatten: ${FRAMEWORK} is already shallow"
-    exit 0
+if [ -d "${FRAMEWORK}/Versions" ]; then
+    # Versions/Current is a symlink; copy the real version directory.
+    REAL_VERSION="$(basename "$(readlink "${FRAMEWORK}/Versions/Current")")"
+    STAGE="$(mktemp -d)/${NAME}.framework"
+    cp -R "${FRAMEWORK}/Versions/${REAL_VERSION}" "${STAGE}"
+    rm -rf "${FRAMEWORK}"
+    mv "${STAGE}" "${FRAMEWORK}"
 fi
-
-# Versions/Current is a symlink; copy the real version directory so the
-# result is a plain shallow bundle, never a symlink chain.
-REAL_VERSION="$(basename "$(readlink "${FRAMEWORK}/Versions/Current")")"
-STAGE="$(mktemp -d)/${NAME}.framework"
-cp -R "${FRAMEWORK}/Versions/${REAL_VERSION}" "${STAGE}"
-rm -rf "${FRAMEWORK}"
-mv "${STAGE}" "${FRAMEWORK}"
+# Stamp shallow bundles too: an earlier build can carry incomplete keys.
 
 # gomobile parks the bundle Info.plist inside Resources/; iOS shallow
 # frameworks must carry it at the bundle root or Xcode rejects the embed.
@@ -56,7 +54,7 @@ plist_set CFBundleIdentifier string "io.sagernet.gomobile.${NAME}"
 plist_set CFBundleExecutable string "${NAME}"
 plist_set CFBundleName string "${NAME}"
 plist_set CFBundlePackageType string "FMWK"
-plist_set CFBundleShortVersion string "1.0"
+plist_set CFBundleShortVersionString string "1.0"
 plist_set CFBundleVersion string "1"
 plist_set MinimumOSVersion string "15.0"
 

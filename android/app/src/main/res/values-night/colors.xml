@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="widget_success">#9DD6B0</color>
+    <color name="widget_warning">#F3C378</color>
+    <color name="primary">#91CDE7</color>
+    <color name="on_primary">#053448</color>
+    <color name="primary_container">#23485B</color>
+    <color name="on_primary_container">#D8EEF8</color>
+    <color name="surface">#17212B</color>
+    <color name="surface_variant">#202E3A</color>
+    <color name="on_surface">#F0F4F8</color>
+    <color name="on_surface_variant">#B5C4D0</color>
+    <color name="outline">#718391</color>
+    <color name="divider">#293946</color>
+</resources>

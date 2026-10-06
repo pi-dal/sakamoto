@@ -2,28 +2,19 @@ name: Go checks
 on:
   push:
   pull_request:
+permissions:
+  contents: read
 jobs:
   test:
-    runs-on: macos-latest
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
-      - run: python3 scripts/check-english.py
-      - uses: actions/setup-go@v6
+      - uses: jdx/mise-action@v3
         with:
-          go-version-file: go.mod
+          version: '2026.10.0'
           cache: true
-      - run: brew update && brew install sing-box
-      - name: Require the native mode API (sing-box 1.14.2+)
-        run: |
-          sing-box version
-          python3 - <<'PY'
-          import re, subprocess
-          output = subprocess.check_output(['sing-box', 'version'], text=True)
-          match = re.search(r'sing-box version (\d+)\.(\d+)\.(\d+)', output)
-          if not match or tuple(map(int, match.groups())) < (1, 14, 2):
-              raise SystemExit('sing-box 1.14.2+ is required; runner Homebrew metadata may be stale')
-          PY
-      - run: go test ./...
-      - run: go vet ./...
-      - run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run ./...
-      - run: go build ./cmd/sakamoto
+          cache_save: ${{ github.event_name != 'pull_request' }}
+      - name: Validate workflows and scripts
+        run: mise run ci:check
+      - name: Check and build shared Go code
+        run: mise run go:check

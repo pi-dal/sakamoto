@@ -1,198 +1,176 @@
-# sakamoto Android integration
+# sakamoto Android
 
-A real, buildable Gradle/Kotlin client over sing-box **v1.14.2**
-`experimental/libbox` — with **built-in Tailscale** (the sing-box Tailscale
-endpoint embeds the Tailscale client inside the tunnel process; this is not
-a CLI probe and not an external-daemon count), and with ALL Home-page state
-semantics delegated to the shared Go bridge (`pkg/mobilecore` → Mobilecore
-AAR).
+A native Material 3 VPN client for sing-box **v1.14.2**, Android **7.0 / API 24+**.
+The Kotlin app binds libbox, mobilecore and mobileexperiment in one AAR and one
+JNI runtime. Native frameworks and private configuration are never committed.
 
-## Honest status
+## Install the official release
 
-| Piece | Status |
-|---|---|
-| Gradle Kotlin project (app + manifest + res + wrapper) | complete, compiled and verified by local Gradle CI-equivalent build |
-| `VpnService` + libbox `CommandServer` wiring (`bg/`) | compiled against the generated libbox AAR; runtime still needs a physical-device smoke test |
-| Home page phase/mode/probe semantics | real — calls `Mobilecore.sessionPhase/nextRoutingMode/probeStateOf/nodeStatus/configStateTransition` (AAR); no state logic copied |
-| Built-in Tailscale: 4 command RPCs + status model | compiled against v1.14.2 AAR bindings; runtime still needs a physical-device smoke test |
-| Tailscale auth key security | Android Keystore AES-256-GCM + app-private file (`security/TailscaleAuthKeyStore`), injected at start/reload only (`TailscaleConfigInjection`), masked display, never logged |
-| Five TUI pages (Home/Config/Data/Settings/About) | bottom-nav five pages + Settings→Tailscale entry; About carries GPL-3.0, sing-box attribution, non-affiliation |
-| Config / Data pages | skeletons + state model, boundaries stated in-product |
-| JVM unit tests (pure models) | `TailscaleModelsTest` (11 cases) + `TailscaleConfigInjectionTest` (5 cases), all passing in `./gradlew test` |
-| `scripts/build-libbox.sh` | delegates to sing-box's own `cmd/internal/build_libbox -target android` (which builds `with_tailscale` by default in v1.14.2) |
-| `scripts/build-mobilecore.sh` | `gomobile bind ./pkg/mobilecore` → `mobilecore.aar` |
-| Compilation / test execution | verified locally with `./gradlew test :app:assembleDebug`; GitHub Actions repeats this and uploads the APK |
+Download `sakamoto-android-v0.1.0.apk` and `SHA256SUMS` from the
+[Android v0.1.0 release](https://github.com/pi-dal/sakamoto/releases/tag/android-v0.1.0).
+Verify the checksum before installation. The APK is a non-debuggable release
+signed with the project's dedicated Android certificate:
 
-## Sources this structure is based on (read for this integration)
-
-- sing-box v1.14.2 `cmd/internal/build_libbox/main.go` — the official Android
-  builder: `gomobile bind -target android -androidapi 24 -javapkg=io.nekohasekai
-  -libname=box ./experimental/libbox`; `sharedTags` include `with_tailscale`
-  and the `ts_omit_*` set; it emits **two** variants: `libbox.aar` (API 24,
-  full tags) and `libbox-legacy.aar` (API 21, without `with_naive_outbound`);
-  it requires **openjdk 17 exactly** and an Android SDK.
-  <https://github.com/SagerNet/sing-box/blob/v1.14.2/cmd/internal/build_libbox/main.go>
-- sing-box v1.14.2 `experimental/libbox` — the API surface this client codes
-  against: `NewCommandServer(handler, platformInterface)` +
-  `Start()/StartOrReloadService(content, OverrideOptions)/CloseService()/Close()`;
-  `NewCommandClient(handler, options)` with `AddCommand(Libbox.CommandStatus /
-  CommandGroup)` and `StatusInterval` (a `time.Duration`, i.e. nanoseconds);
-  handler callbacks `Connected/Disconnected/WriteStatus(StatusMessage)/
-  WriteGroups(OutboundGroupIterator)/...`; `OutboundGroup.Selectable/Selected`
-  + `OutboundGroupItem.URLTestDelay` (the selected-dot vs reachability split);
-  `TunOptions` getters incl. `GetDNSMode() *StringBox` and the API-33 route
-  split; `PlatformInterface` method set incl. `TailscaleHostname()`.
-  <https://github.com/SagerNet/sing-box/tree/v1.14.2/experimental/libbox>
-- SagerNet/sing-box-for-android (SFA) — the reference app: package
-  `io.nekohasekai.sfa`, `BoxService : CommandServerHandler`, `VPNService :
-  VpnService, PlatformInterfaceWrapper` with `openTun(TunOptions)` →
-  `Builder().establish().fd` and `autoDetectInterfaceControl(fd) = protect(fd)`;
-  foreground service `foregroundServiceType="systemExempted"`; build values
-  minSdk 21 / targetSdk 35 / compileSdk 35.
-  <https://github.com/SagerNet/sing-box-for-android>
-- sing-box build-from-source docs — `with_tailscale` build tag semantics.
-  <https://sing-box.sagernet.org/installation/build-from-source/>
-
-## API-level decision (differs from SFA on purpose, documented)
-
-SFA declares `minSdk 21`; its 21–23 floor is served by shipping
-`libbox-legacy.aar` (built with `-androidapi 21`). This project wires only
-the **main** libbox variant (`-androidapi 24`), so the declared floor is
-**minSdk 24 / targetSdk 35 / compileSdk 35**. `scripts/build-libbox.sh`
-still produces `libbox-legacy.aar`; wiring it as a product flavor for API
-21–23 devices is a documented follow-up, not a silent gap.
-
-## Project layout
-
-| Path | What |
-|---|---|
-| `settings.gradle.kts` / `build.gradle.kts` / `gradle.properties` | Gradle 8.9 + AGP 8.7.3 + Kotlin 2.0.21 (stable pairing, JDK 17 toolchain) |
-| `gradle/wrapper/*`, `gradlew`, `gradlew.bat` | wrapper pinned to gradle-8.9-bin.zip; `gradle-wrapper.jar` is the official artifact from the gradle v8.9.0 tag |
-| `app/build.gradle.kts` | explicitly links generated `libbox.aar` + `mobilecore.aar` (never committed); excludes legacy AAR from the default API-24 variant |
-| `app/src/main/AndroidManifest.xml` | INTERNET, FOREGROUND_SERVICE(+SYSTEM_EXEMPTED), POST_NOTIFICATIONS; `SakamotoVpnService` with `BIND_VPN_SERVICE` + `android.net.VpnService` intent filter, `systemExempted` FGS type |
-| `SakamotoApplication` | notification channels + context accessors |
-| `runtime/MobilecoreRuntime.kt` | single owner of Home state; every word comes from the Mobilecore AAR |
-| `runtime/TailscaleModels.kt` | PURE Tailscale state model (backend state incl. verbatim `Unrecognized`, exit-node candidates, capabilities, key masking, ping rendering) — libbox-free so JVM tests cover it |
-| `runtime/TailscaleRuntime.kt` | Tailscale page UI state holder (status flow) |
-| `runtime/TailscaleBinding.kt` | the ONLY libbox-touching Tailscale file: maps `TailscaleEndpointStatus/TailscalePeer/TailscalePingResult` → pure summaries |
-| `security/TailscaleAuthKeyStore.kt` | auth key at rest: AndroidKeyStore AES-256-GCM, ciphertext+IV in filesDir (MODE_PRIVATE), `allowBackup=false`; no log/toString ever carries the key |
-| `security/TailscaleConfigInjection.kt` | pure port of the iOS injection: merges the stored key into `endpoints[type=tailscale]` at start/reload; stored key wins; no-endpoint → loud error |
-| `runtime/ConfigRepository.kt` | staged config/policy/nodes/subscriptions JSON in filesDir (the nodes/links are secrets: app-private storage, never logged) |
-| `bg/SakamotoVpnService.kt` | `VpnService` + full `PlatformInterface` (openTun port, protect(), getInterfaces, tailscaleHostname = device name; root/USB/shell/bridge legs fail loudly as "not supported") |
-| `bg/TunnelBoxService.kt` | `CommandServerHandler` + `CommandServer` lifecycle, foreground notifications, `startOrReloadService` with the staged generated config |
-| `command/CommandClientRuntime.kt` | app-side `Libbox.newCommandClient` (status + group streams); mode cycle = `Mobilecore.nextRoutingMode` → `setClashMode`; **Tailscale RPCs**: `subscribeTailscaleStatus` / `setTailscaleExitNode` / `tailscaleLogout` / `startTailscalePing` |
-| `ui/*` | Home (phase/mode/selected≠reachable/URL test/ConfigState), Config, Data, Settings (→ Built-in Tailscale entry), **About** (GPL-3.0, sing-box attribution, non-affiliation), **Tailscale** (status stream, auth-URL login, Keystore-backed key, exit-node pick/clear, ping, unsupported list verbatim) |
-| `app/src/test/java/...` | JVM unit tests for the pure layer: `TailscaleModelsTest`, `TailscaleConfigInjectionTest` (JUnit 4; `org.json:json` test artifact shadows the android.jar stubs) |
-| `scripts/build-libbox.sh` | upstream builder, both AAR variants → `app/libs/` |
-| `scripts/build-mobilecore.sh` | `gomobile bind -javapkg=com.pidal.sakamoto -libname=mobilecore ./pkg/mobilecore` → `app/libs/mobilecore.aar` |
-
-## State semantics: one source of truth (same as iOS)
-
-```
-internal/core (Go constants + PhaseOf/NextRoutingMode/ClassifyProbe)
-  → pkg/mobilecore (gomobile bind → mobilecore.aar)
-  → com.pidal.sakamoto.mobilecore.Mobilecore  (this repo's Android UI renders only)
+```text
+SHA-256: a6fb9d4b3070023b52c0efcf254b2cad251fa3fa79cab6eeec2c378f6daa66bc
 ```
 
-The phase folding (`Disconnected / Starting / TUNRunning / Reachable /
-Unverified / Conflict / Unavailable / Stopping`), the `Rule → Global →
-Direct` cycle, probe classification and the config state machine are NOT
-reimplemented in Kotlin. `MobilecoreRuntime` is a thin scheduler around the
-bridge; `OutboundGroupItem.URLTestDelay` feeds `Mobilecore.nodeStatus`, so
-the Home page shows **selected ≠ reachable** in the TUI's own vocabulary.
+The package is `com.pidal.sakamoto`, versionName `0.1.0`, versionCode `2`.
+Future official versions retain the signing certificate for upgrades.
+A development APK uses a different debug certificate and cannot be replaced
+in place by the official APK. Preserve/export configuration and credentials
+before a manual transition; uninstalling deletes app-private data and Keystore
+credentials. Release tooling never uninstalls or clears a connected phone.
 
-## Build from clean
+## First connection and configuration
+
+The app does not contain servers, credentials or a sample live connection.
+Import a validated tunnel package through **Config → Import tunnel package**:
 
 ```sh
-# 1. Toolchain (JDK is only the Kotlin/Gradle build runtime; app code is Kotlin)
-mise use -g java@corretto-17.0.20.8.1
-# Android SDK + NDK (adjust ANDROID_HOME for another machine):
-brew install --cask android-commandlinetools
-export ANDROID_HOME="/opt/homebrew/share/android-commandlinetools"
-sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;28.2.13676358"
-
-# 2. gomobile (GOPATH/bin; mise users: the explicit GOBIN matters)
-GOBIN="$(go env GOPATH)/bin" go install github.com/sagernet/gomobile/cmd/gomobile@latest
-GOBIN="$(go env GOPATH)/bin" go install github.com/sagernet/gomobile/cmd/gobind@latest
-export PATH="$PATH:$(go env GOPATH)/bin"
-
-# 3. AARs (libbox ~10 min; tailscale+gvisor dominate; mobilecore is fast)
-android/scripts/build-libbox.sh        # → app/libs/libbox.aar (+ libbox-legacy.aar)
-android/scripts/build-mobilecore.sh    # → app/libs/mobilecore.aar
-
-# 4. Build + test
-cd android
-./gradlew :app:assembleDebug           # debug APK
-./gradlew :app:assembleRelease         # needs signing config (below)
-./gradlew test                         # unit tests (state models; bridge calls need the AARs)
+# On your computer, from the source checkout:
+mise -E android exec -- python3 android/scripts/sync-host.py --export /private/path/android-tunnel.zip
 ```
 
-## Toolchain status
+Transfer this private ZIP to your phone, disconnect the VPN and select it in
+Config. The ZIP contains your server credentials; never attach it to a public
+release. Import validates the complete generated configuration and rule files
+before replacing app-private state, rewrites rule paths for this phone and
+preserves the previous configuration on failure. Source conf, includes, nodes
+and compiled rule sets are separate from the generated tunnel JSON. Plain
+source URL import stages a conf; it does not generate a runnable tunnel.
 
-Verified 2026-10-05 on the maintainer's Apple Silicon machine:
+- **Home:** a connection switch, network-check summary, routing mode and group
+  entries. Tap the status row for VPN diagnostics and Check.
+- **Config:** nodes/groups, route rules, exit proxy, source management and
+  explicit Apply. Tap a node to select, use the trailing edit icon to change
+  its server settings. Editors protect unsaved changes. Rules support ordering
+  and deletion with Undo.
+- **Data:** actual traffic and connection streams, connection details and
+  confirmed close actions.
+- **Settings:** tunnel settings, Tailscale, S3 sync, experiments, widgets,
+  notifications and About.
 
-- mise-managed OpenJDK 17 (Corretto 17.0.20)
-- Android command-line tools, API 35, Build Tools 35.0.0
-- NDK 28.2.13676358
-- `android/scripts/build-libbox.sh` and `build-mobilecore.sh`: pass
-- `./gradlew test :app:assembleDebug`: pass
+Generated-config edits (rule/action/final, selector default, server/detour,
+log level/TUN settings) are validated before saving and take effect on a
+successful native reload or next connection. Source conf, node share links
+and subscription declarations still require host generation. The app blocks
+Apply of an unchanged generated snapshot after source edits rather than
+claiming those edits are running. Local source-editor size limits keep large
+rule sources on the computer.
 
-NDK 28.2 is intentional: the current v1.14.2 Cronet archive uses AArch64
-relocations rejected by NDK 27's linker. The generated legacy API-21 AAR is
-not linked into the default API-24 variant, and the duplicate gomobile `go.*`
-runtime is retained only in `libbox.aar`.
+Android VPN consent and, on Android 13+, notification permission are requested
+through system dialogs. Denying notifications does not prevent the VPN, but
+removes status/control visibility from the notification shade. Diagnostics
+separate authorization, system TUN, physical internet, command channel and a
+real DNS/TLS/HTTPS 204 check. Node latency is not an end-to-end VPN health claim.
 
-## CI
+## Widgets and notification
 
-`.github/workflows/android.yml` runs on Android-related pushes and pull
-requests, and can also be started with `workflow_dispatch`. It installs the
-mise-managed Go/JDK toolchain, Android API 35 + Build Tools 35.0.0 + NDK
-28.2, builds the upstream libbox AAR and the local mobilecore bridge, runs the
-JVM tests, and assembles the debug APK.
+Settings can pin Toggle 1×1, Compact 2×1 or Status 3×2 widgets. Cell sizes depend
+on the launcher's grid. Android 12+ receives layouts for the launcher's actual
+SizeF options; older releases receive separate orientation layouts.
 
-The workflow uploads `app-debug.apk` and its SHA-256 file as a short-lived
-GitHub Actions artifact. It does not require an emulator or a connected
-phone; install the downloaded artifact on a physical Pixel with `adb`.
+Small/compact widgets toggle directly after prior VPN consent. If consent is
+missing, the app opens the authorization flow. All sizes preserve 48dp touch
+controls; busy states disable repeated actions. Compact layouts center their
+fixed status/latency slots, show node/protocol/mode/group only with sufficient
+height, and keep on/off geometry stable. Measured latency, stale results and
+untested state are distinct. The service refreshes widget/notification data
+while running; a terminated process cannot promise continuous launcher updates.
 
-## Signing (placeholders, like iOS)
+The foreground notification displays mode/node/check/experiments and offers
+Disconnect, Check and Recover. Credentials and source URLs are never placed
+in widget or notification payloads.
 
-`applicationId com.pidal.sakamoto` is a development placeholder. Release
-builds need a real keystore (`keytool -genkeypair -v -keystore
-sakamoto-release.keystore ...`), configured in `app/build.gradle.kts`
-`signingConfigs`. Debug builds use the auto-generated debug keystore. The
-VPN permission (`VpnService.prepare`) is a user grant, not a signing
-requirement; no special Google entitlement is needed for VpnService.
+## Experiments
 
-## Built-in Tailscale: real capabilities, same split as iOS
+Unmatched policy supports off (direct), on (proxy exit) and auto. The shared Go
+Tracker learns only correlated unmatched-direct TCP dial timeouts spaced at
+least ten seconds apart within thirty minutes, with a freshly healthy proxy
+URL test. Threshold is 1–20. Candidate route updates validate before reload;
+a private recovery journal restores an incomplete update at next connection.
+Explicit direct/reject rules remain authoritative. Learned domains stay local.
 
-The AAR is built with `with_tailscale` (part of the v1.14.2 builder's
-default tag set), so the endpoint `{"type": "tailscale", ...}` is available
-in configs exactly like on iOS/macOS. `tailscaleHostname()` reports the
-device name, mirroring `ExtensionPlatformInterface` on iOS.
+Cloudflare learning requires an explicit regional restriction in core logs.
+It does not inspect encrypted browser error pages or infer meaning from
+ordinary HTTP 403s. Fallback uses fresh group tests and preserves manual
+selection outside the priority chain; manual recovery has a cooldown.
+A broken fixed exit cannot be repaired by changing entry nodes. Automatic
+learning may interrupt active connections while the TUN reloads. These are
+experimental features; evidence/parser tests and device smoke do not prove
+all destination behavior or long-duration roaming reliability.
 
-**Wired in code** (each maps to a v1.14.2 `CommandClient` method, same set
-as the iOS app):
+## Sync
 
-| Capability | libbox v1.14.2 API | Android surface |
-|---|---|---|
-| Live tailnet status (state, tailnet name, self, peers, exit node, auth URL) | `SubscribeTailscaleStatus(TailscaleStatusHandler) → TailscaleStatusSubscription` | `CommandClientRuntime.subscribeTailscaleStatus()` → `TailscaleRuntime` |
-| Pick / clear exit node | `SetTailscaleExitNode(endpointTag, stableID)` (empty ID clears) | exit-candidate buttons / `clearExitNode` |
-| Log out of the tailnet | `TailscaleLogout(endpointTag)` | confirm-dialog logout |
-| Per-peer latency (direct vs DERP) | `StartTailscalePing(endpointTag, peerIP, TailscalePingHandler)` | "Ping exit node" (target = first Tailscale IP, else DNS name) |
-| Login | status-driven `BackendState == NeedsLogin` + `authURL` → system browser | "Open login URL" (visible only during the login flow) |
-| Auth key | `TailscaleAuthKeyStore` (Keystore AES-GCM) → `TailscaleConfigInjection` at start/reload | Settings→Tailscale page; masked display only |
+S3 source sync uses the same Go engine as the CLI. Credentials are encrypted
+with Android Keystore and never included in source bundles. Conflicts stop
+without silently replacing simultaneous edits. See [S3 sync](../docs/s3-sync.md).
 
-**Explicitly unsupported** (rendered verbatim on the Tailscale page; build
-and API facts — the `ts_omit_*` tags are in the v1.14.2 builder's
-`sharedTags` for ALL platforms, Android included):
+For a USB-connected **debug** install, the maintainer helper can transfer a
+snapshot from `~/.config/sakamoto` directly into private app storage:
 
-- Taildrop (`ts_omit_taildrop`)
-- Tailscale SSH (`ts_omit_ssh`)
-- serve/funnel (no libbox API)
-- login-by-auth-key as a client RPC (it is config input, not an action)
-- any external-CLI/system-daemon probing (Android apps cannot query a
-  system tailscaled; faking it would be fake support)
+```sh
+mise -E android exec -- python3 android/scripts/sync-host.py DEVICE_SERIAL
+```
 
-`TailscaleBackendState` maps the wire strings `Stopped / Starting /
-NeedsLogin / NeedsMachineAuth / Running` and carries unknown values verbatim
-(`Unrecognized`) instead of guessing — pinned by `TailscaleModelsTest`.
+It validates the adapted sing-box config and verifies every file SHA-256,
+retains a private rollback copy, and refuses to replace divergent device
+sources/config. The local-only helper uses existing PyYAML and `sing-box`;
+USB `run-as` does not apply to a non-debuggable release. Its `--export` mode
+creates the private ZIP for the official client's system file picker; neither
+path provides automatic cloud sync of generated tunnel state. No host API secret is copied.
+
+## Build and release
+
+```sh
+mise trust
+mise -E android install
+mise -E android run android:build
+mise -E android run android:checksum
+
+# AAR already built:
+mise -E android run android:verify
+
+# Official signature required; testReleaseUnitTest + lintVital + assembleRelease:
+mise -E android run android:release
+```
+
+Gradle 8.9, AGP 8.7.3, Kotlin 2.0.21, JDK 17, Android API 35, Build Tools 35.0.0
+and NDK 28.2.13676358 are pinned. The upstream builder produces API-24 and
+legacy AARs; this app ships the main API-24 variant only. The combined AAR
+binds `experimental/libbox`, `pkg/mobilecore` and `pkg/mobileexperiment` so
+there is one `go.Seq` and one native library. Do not mix independent AARs.
+
+`release.py` requires `SAKAMOTO_ANDROID_KEYSTORE`, `SAKAMOTO_ANDROID_STORE_PASSWORD`,
+`SAKAMOTO_ANDROID_KEY_ALIAS` and `SAKAMOTO_ANDROID_KEY_PASSWORD`, or the owner's
+private signing directory outside the repository. Public APKs never use a
+debug certificate. Preserve a secure backup of the release key: losing it
+prevents future package upgrades.
+
+CI builds debug artifacts on relevant commits. `android-v*` tags build officially
+signed release APKs, verify the tag/version, and attach APK, SHA256SUMS and
+commit metadata to a prepared GitHub release. Private signing material exists
+only in repository secrets and a temporary runner file.
+
+## Verification and upstream
+
+Pixel 8 Pro smoke tests exercised native binding, VPN system registration,
+DNS/TLS/HTTPS 204 through the exact application Check path, native reload,
+notification Check/Disconnect and widget direct connect/disconnect/reconnect.
+Native RemoteViews tests cover compact sizing, large font, fixed on/off
+geometry and provider registration. JVM tests cover pure edit/routing/fallback/
+widget projections and secret masking. Tests that use a real VPN require
+explicit arguments and existing consent/config, and disconnect at completion.
+
+Built-in Tailscale supports status, auth-URL login, exit-node choice, ping and
+logout through libbox. Auth keys are encrypted at rest and injected at start.
+Taildrop/SSH/serve are not shipped surfaces. No root, system tailscaled or
+macOS DNS takeover is emulated on Android.
+
+Reference implementations: [sing-box](https://github.com/SagerNet/sing-box),
+[sing-box-for-android](https://github.com/SagerNet/sing-box-for-android),
+[NekoBox](https://github.com/MatsuriDayo/NekoBoxForAndroid) and
+[Telegram Android](https://github.com/DrKLO/Telegram). Interaction patterns were
+studied; no association or endorsement is implied. Source code is GPL-3.0-or-later;
+separate artwork attribution remains in [NOTICE](../NOTICE.md).

@@ -216,8 +216,7 @@ func ValidateConfigJSON(content string) error {
 			return fmt.Errorf("config is missing the %q section", section)
 		}
 	}
-	var checkList func(section string) error
-	checkList = func(section string) error {
+	checkList := func(section string) error {
 		var list []map[string]json.RawMessage
 		if err := json.Unmarshal(root[section], &list); err != nil {
 			return fmt.Errorf("config %s must be a list of objects", section)

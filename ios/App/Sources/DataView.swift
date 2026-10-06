@@ -109,6 +109,8 @@ final class DataModel: ObservableObject {
 
 struct DataView: View {
     @StateObject private var model: DataModel
+    @State private var showConnectionDetails = false
+    @State private var confirmClose = false
 
     init(commanding: CoreCommanding?) {
         _model = StateObject(wrappedValue: DataModel(commanding: commanding))
@@ -117,16 +119,26 @@ struct DataView: View {
     var body: some View {
         List {
             trafficSection
-            if model.selectedConnection != nil {
-                detailSection
-            } else {
-                connectionsSection
-            }
+            connectionsSection
             logsSection
         }
         .navigationTitle("Data")
         .listStyle(.insetGrouped)
         .task { model.activate() }
+        .sheet(isPresented: $showConnectionDetails, onDismiss: { model.selectedConnID = nil }) {
+            NavigationStack {
+                List { detailSection }
+                    .listStyle(.insetGrouped)
+                    .navigationTitle("Connection details")
+                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { showConnectionDetails = false } } }
+                    .confirmationDialog("Close this connection?", isPresented: $confirmClose, titleVisibility: .visible) {
+                        Button("Close connection", role: .destructive) { Task { await model.closeSelectedConnection() } }
+                        Button("Cancel", role: .cancel) {}
+                    } message: { Text("The selected connection will be interrupted. Applications may reconnect automatically.") }
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
     }
 
     private var trafficSection: some View {
@@ -174,6 +186,7 @@ struct DataView: View {
             ForEach(visibleConnections) { record in
                 Button {
                     model.selectedConnID = record.id
+                    showConnectionDetails = true
                 } label: {
                     HStack {
                         VStack(alignment: .leading) {
@@ -223,13 +236,9 @@ struct DataView: View {
                     detailRow("Rule", conn.rule)
                 }
                 detailRow("Traffic", "↑\(formatBytes(conn.uplinkTotal)) ↓\(formatBytes(conn.downlinkTotal))")
-                HStack {
-                    Button("Back") { model.selectedConnID = nil }
-                    Button("Close connection", role: .destructive) {
-                        Task { await model.closeSelectedConnection() }
-                    }
-                    .disabled(model.closeInFlight)
-                }
+                Button("Close connection", role: .destructive) { confirmClose = true }
+                    .disabled(model.closeInFlight || conn.closed)
+                if let notice = model.notice { Text(notice.text).font(.footnote).foregroundStyle(.secondary) }
             }
         } header: {
             Text("Connection details")

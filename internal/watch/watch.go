@@ -12,6 +12,7 @@ import (
 	"github.com/pi-dal/sakamoto/internal/config"
 	"github.com/pi-dal/sakamoto/internal/experiment"
 	"github.com/pi-dal/sakamoto/internal/icloud"
+	"github.com/pi-dal/sakamoto/internal/s3sync"
 	"github.com/pi-dal/sakamoto/internal/sbclient"
 	"github.com/pi-dal/sakamoto/internal/svc"
 	"github.com/pi-dal/sakamoto/internal/sysproxy"
@@ -96,9 +97,21 @@ func (w *Watcher) proxyLoop(ctx context.Context) {
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 	var lastSync time.Time
+	var lastS3Sync time.Time
 	for {
 		cfg, err := config.Load(w.cfgPath)
 		if err == nil {
+			if cfg.S3.Enabled && time.Since(lastS3Sync) >= time.Minute {
+				lastS3Sync = time.Now()
+				updates, e := s3sync.Sync(ctx, w.cfgPath)
+				if e != nil {
+					w.emit("error", "S3 sync failed: %v", e)
+				} else {
+					for _, message := range updates {
+						w.emit("info", "S3: %s", message)
+					}
+				}
+			}
 			if cfg.ICloud.Enabled && time.Since(lastSync) >= time.Minute {
 				lastSync = time.Now()
 				updates, syncErr := icloud.Sync(filepath.Dir(w.cfgPath), cfg)

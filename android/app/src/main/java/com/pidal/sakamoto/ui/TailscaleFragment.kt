@@ -4,217 +4,114 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.text.InputType
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.EditText
-import android.widget.LinearLayout
-import android.widget.TextView
-import androidx.fragment.app.Fragment
-import androidx.lifecycle.lifecycleScope
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
-import com.google.android.material.button.MaterialButton
 import com.pidal.sakamoto.R
 import com.pidal.sakamoto.command.CommandClientRuntime
-import com.pidal.sakamoto.databinding.FragmentTailscaleBinding
 import com.pidal.sakamoto.runtime.TailscaleCapabilities
 import com.pidal.sakamoto.runtime.TailscaleRuntime
 import com.pidal.sakamoto.runtime.TailscaleUiState
 import com.pidal.sakamoto.security.TailscaleAuthKeyStore
+import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 
-/**
- * Built-in Tailscale page — the Android counterpart of the iOS TailscaleView.
- *
- * What is REAL here (each maps to a libbox v1.14.2 command RPC, issued by
- * CommandClientRuntime): live tailnet status via SubscribeTailscaleStatus,
- * exit-node pick/clear via SetTailscaleExitNode, logout via TailscaleLogout,
- * per-peer latency via StartTailscalePing. The auth URL opens the system
- * browser for the login flow; the optional auth key is stored
- * Keystore-encrypted in app-private storage (TailscaleAuthKeyStore) and is
- * injected into the endpoint config only at start/reload time
- * (TailscaleConfigInjection) — it never renders in full and never reaches a
- * log line.
- *
- * What is explicitly unsupported is rendered verbatim from
- * TailscaleCapabilities.unsupported (Taildrop, Tailscale SSH, serve, auth-key
- * login UI, external CLI probe) — build facts and API facts, not omissions.
- *
- * STATUS PENDING SDK BUILD VERIFICATION — android/README.md.
- */
-class TailscaleFragment : Fragment() {
+/** Tailscale detail page using the same grouped list grammar as Settings. */
+class TailscaleFragment : androidx.fragment.app.Fragment() {
+    private var status: GroupedPage.Row? = null
+    private var tailnet: GroupedPage.Row? = null
+    private var exit: GroupedPage.Row? = null
+    private var auth: GroupedPage.Row? = null
+    private var peers: GroupedPage.Row? = null
+    private var notice: GroupedPage.Row? = null
 
-    private var binding: FragmentTailscaleBinding? = null
-
-    override fun onCreateView(
-        inflater: LayoutInflater,
-        container: ViewGroup?,
-        savedInstanceState: Bundle?,
-    ): View {
-        val b = FragmentTailscaleBinding.inflate(inflater, container, false)
-        binding = b
-        b.openAuthUrl.setOnClickListener { openAuthURL() }
-        b.authkeyStore.setOnClickListener { promptStoreKey() }
-        b.authkeyDelete.setOnClickListener { deleteKey() }
-        b.clearExitNode.setOnClickListener { clearExitNode() }
-        b.pingExit.setOnClickListener { pingExitNode() }
-        b.logout.setOnClickListener { confirmLogout() }
-        return b.root
+    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, state: Bundle?): View {
+        val page = GroupedPage(requireContext())
+        val overview = page.section(getString(R.string.ts_section_status))
+        status = page.row(overview, getString(R.string.ts_backend_status), getString(R.string.ts_not_subscribed), R.drawable.ic_node)
+        tailnet = page.row(overview, getString(R.string.ts_tailnet_entry), "", R.drawable.ic_sync)
+        val authentication = page.section(getString(R.string.ts_section_auth))
+        auth = page.row(authentication, getString(R.string.ts_authkey_title), "", R.drawable.ic_info) { promptStoreKey() }
+        page.button(authentication, getString(R.string.ts_open_auth_url)) { openAuthURL() }
+        page.button(authentication, getString(R.string.ts_authkey_delete)) {
+            MaterialAlertDialogBuilder(requireContext()).setTitle(R.string.ts_authkey_delete_confirm_title).setMessage(R.string.ts_authkey_delete_confirm_message).setNegativeButton(android.R.string.cancel, null).setPositiveButton(R.string.ts_authkey_delete) { _, _ -> TailscaleAuthKeyStore(requireContext()).deleteAuthKey(); refreshAuthKeyState() }.show()
+        }
+        page.note(getString(R.string.ts_authkey_note))
+        val exitGroup = page.section(getString(R.string.ts_section_exit))
+        exit = page.row(exitGroup, getString(R.string.ts_exit_node_entry), getString(R.string.ts_exit_none), R.drawable.ic_route) { chooseExitNode() }
+        page.button(exitGroup, getString(R.string.ts_clear_exit)) {
+            MaterialAlertDialogBuilder(requireContext()).setTitle(R.string.ts_clear_exit_confirm_title).setMessage(R.string.ts_clear_exit_confirm_message).setNegativeButton(android.R.string.cancel, null).setPositiveButton(R.string.ts_clear_exit) { _, _ -> clearExitNode() }.show()
+        }
+        page.button(exitGroup, getString(R.string.ts_ping_exit)) { pingExitNode() }
+        val peerGroup = page.section(getString(R.string.ts_section_peers))
+        peers = page.row(peerGroup, getString(R.string.ts_peers), "", R.drawable.ic_node)
+        val advanced = page.section(getString(R.string.ts_section_advanced))
+        page.row(advanced, getString(R.string.ts_logout), getString(R.string.ts_logout_confirm), R.drawable.ic_info) { confirmLogout() }
+        notice = page.row(advanced, getString(R.string.ts_notice_title), "", R.drawable.ic_info)
+        page.note(TailscaleCapabilities.unsupported.joinToString("\n") { "${it.capability}: ${it.reason}" })
+        return page.root
     }
 
-    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        super.onViewCreated(view, savedInstanceState)
+    override fun onViewCreated(view: View, state: Bundle?) {
+        super.onViewCreated(view, state)
         refreshAuthKeyState()
-        // The status stream rides the command channel; open it when the page
-        // shows (the channel itself follows the tunnel lifecycle).
-        CommandClientRuntime.start()
-        CommandClientRuntime.subscribeTailscaleStatus()
-        viewLifecycleOwner.lifecycleScope.launch {
-            TailscaleRuntime.state.collect { state -> render(state) }
+        CommandClientRuntime.start(); CommandClientRuntime.subscribeTailscaleStatus()
+        viewLifecycleOwner.lifecycleScope.launch { TailscaleRuntime.state.collect { render(it) } }
+    }
+
+    private fun refreshAuthKeyState() {
+        val key = TailscaleAuthKeyStore(requireContext()).readAuthKey()
+        auth?.detail(if (key == null) getString(R.string.ts_authkey_absent) else getString(R.string.ts_authkey_stored, com.pidal.sakamoto.runtime.TailscaleAuthKeyMasking.mask(key)))
+    }
+
+    private fun render(state: TailscaleUiState) {
+        val primary = state.primary
+        status?.detail(primary?.backendState?.wireString ?: getString(R.string.ts_not_subscribed))
+        tailnet?.detail(primary?.let { getString(R.string.ts_tailnet_line, it.networkName.ifEmpty { "—" }, it.magicDNSSuffix.ifEmpty { "—" }) } ?: "")
+        exit?.detail(primary?.exitNodePeer?.let { getString(R.string.ts_exit_line, it.displayName) } ?: getString(R.string.ts_exit_none))
+        peers?.detail(primary?.peers?.joinToString(" · ") { it.displayName + if (it.online) " · online" else "" } ?: "—")
+        notice?.detail(state.notice.orEmpty())
+    }
+
+    private fun openAuthURL() { TailscaleRuntime.state.value.authURL.takeIf { it.isNotEmpty() }?.let { try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(it))) } catch (_: ActivityNotFoundException) { TailscaleRuntime.setNotice(getString(R.string.ts_no_browser)) } } }
+    private fun promptStoreKey() {
+        EditDialogs.text(requireContext(), getString(R.string.ts_authkey_store), "", secret = true) { value ->
+            require(value.trim().isNotEmpty()) { getString(R.string.required_value) }
+            TailscaleAuthKeyStore(requireContext()).storeAuthKey(value.trim())
+            refreshAuthKeyState()
         }
     }
 
     override fun onDestroyView() {
-        binding = null
+        status = null; tailnet = null; exit = null; auth = null; peers = null; notice = null
         super.onDestroyView()
     }
-
-    private fun refreshAuthKeyState() {
-        val store = TailscaleAuthKeyStore(requireContext())
-        val key = store.readAuthKey()
-        TailscaleRuntime.setAuthKeyState(
-            hasKey = key != null,
-            masked = key?.let { com.pidal.sakamoto.runtime.TailscaleAuthKeyMasking.mask(it) } ?: "",
-        )
-    }
-
-    private fun render(state: TailscaleUiState) {
-        val b = binding ?: return
-        val primary = state.primary
-        b.backendState.text = primary?.backendState?.wireString ?: getString(R.string.ts_not_subscribed)
-        b.tailnetSummary.text = primary?.let {
-            getString(R.string.ts_tailnet_line, it.networkName.ifEmpty { "—" }, it.magicDNSSuffix.ifEmpty { "—" })
-        } ?: ""
-        b.exitNodeSummary.text = primary?.exitNodePeer?.let {
-            getString(R.string.ts_exit_line, it.displayName)
-        } ?: getString(R.string.ts_exit_none)
-
-        val showLogin = primary != null && primary.backendState.needsLoginFlow && state.authURL.isNotEmpty()
-        b.openAuthUrl.visibility = if (showLogin) View.VISIBLE else View.GONE
-
-        b.authkeyState.text = if (state.hasAuthKey) {
-            getString(R.string.ts_authkey_stored, state.authKeyMasked)
-        } else {
-            getString(R.string.ts_authkey_absent)
+    private fun chooseExitNode() {
+        val primary = TailscaleRuntime.state.value.primary ?: run {
+            TailscaleRuntime.setNotice(getString(R.string.ts_not_subscribed)); return
         }
-
-        renderCandidates(primary)
-
-        b.peersSummary.text = primary?.peers?.joinToString("\n") { peer ->
-            val flags = buildList {
-                if (peer.online) add("online")
-                if (peer.active) add("active")
-                if (peer.expired) add("expired")
-                if (peer.exitNodeOption) add("exit-candidate")
-            }
-            "• ${peer.displayName} (${peer.os})" + if (flags.isEmpty()) "" else "  [${flags.joinToString(", ")}]"
-        } ?: ""
-
-        b.pingResults.text = state.pingLines.joinToString("\n")
-        b.unsupportedList.text = TailscaleCapabilities.unsupported.joinToString("\n") {
-            "• ${it.capability}: ${it.reason}"
-        }
-        b.tsNotice.text = state.notice ?: ""
-    }
-
-    private fun renderCandidates(primary: com.pidal.sakamoto.runtime.TailscaleEndpointSummary?) {
-        val b = binding ?: return
-        b.exitCandidatesContainer.removeAllViews()
-        val candidates = primary?.exitNodeCandidates.orEmpty()
-        if (candidates.isEmpty()) {
-            val empty = TextView(requireContext())
-            empty.text = getString(R.string.ts_no_candidates)
-            b.exitCandidatesContainer.addView(empty)
-            return
-        }
-        val endpointTag = primary?.endpointTag ?: return
-        for (candidate in candidates) {
-            val button = MaterialButton(requireContext())
-            button.text = getString(R.string.ts_candidate_button, candidate.displayName)
-            button.setOnClickListener {
-                CommandClientRuntime.setTailscaleExitNode(endpointTag, candidate.stableID)
-            }
-            b.exitCandidatesContainer.addView(button)
-        }
-    }
-
-    private fun openAuthURL() {
-        val url = TailscaleRuntime.state.value.authURL
-        if (url.isEmpty()) return
-        try {
-            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-        } catch (e: ActivityNotFoundException) {
-            TailscaleRuntime.setNotice(getString(R.string.ts_no_browser))
-        }
-    }
-
-    private fun promptStoreKey() {
-        val context = requireContext()
-        val input = EditText(context)
-        input.hint = getString(R.string.ts_authkey_hint)
-        input.inputType = android.text.InputType.TYPE_CLASS_TEXT or
-            android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
-        val container = LinearLayout(context)
-        container.setPadding(48, 24, 48, 0)
-        container.addView(input)
-        MaterialAlertDialogBuilder(context)
-            .setTitle(R.string.ts_authkey_store)
-            .setView(container)
-            .setPositiveButton(R.string.ts_authkey_store) { _, _ ->
-                val key = input.text?.toString()?.trim().orEmpty()
-                if (key.isNotEmpty()) {
-                    try {
-                        TailscaleAuthKeyStore(context).storeAuthKey(key)
-                    } catch (e: Exception) {
-                        TailscaleRuntime.setNotice("store failed: ${e.message}")
-                    }
-                }
-                input.setText("") // never keep the secret in the widget
-                refreshAuthKeyState()
-            }
-            .setNegativeButton(android.R.string.cancel) { dialog, _ -> input.setText(""); dialog.dismiss() }
-            .show()
-    }
-
-    private fun deleteKey() {
-        TailscaleAuthKeyStore(requireContext()).deleteAuthKey()
-        refreshAuthKeyState()
+        val candidates = primary.exitNodeCandidates
+        if (candidates.isEmpty()) { TailscaleRuntime.setNotice(getString(R.string.ts_no_candidates)); return }
+        MaterialAlertDialogBuilder(requireContext()).setTitle(R.string.ts_choose_exit_node).setItems(candidates.map { it.displayName }.toTypedArray()) { _, which -> CommandClientRuntime.setTailscaleExitNode(primary.endpointTag, candidates[which].stableID) }.setNegativeButton(android.R.string.cancel, null).show()
     }
 
     private fun clearExitNode() {
-        val primary = TailscaleRuntime.state.value.primary ?: return
+        val primary = TailscaleRuntime.state.value.primary ?: run { TailscaleRuntime.setNotice(getString(R.string.ts_not_subscribed)); return }
         CommandClientRuntime.setTailscaleExitNode(primary.endpointTag, "")
     }
-
     private fun pingExitNode() {
-        val primary = TailscaleRuntime.state.value.primary ?: return
-        val target = primary.exitNodePingTarget
-        if (target == null) {
-            TailscaleRuntime.setNotice(getString(R.string.ts_no_ping_target))
-            return
-        }
+        val primary = TailscaleRuntime.state.value.primary
+        val target = primary?.exitNodePingTarget
+        if (primary == null || target == null) { TailscaleRuntime.setNotice(getString(R.string.ts_no_ping_target)); return }
         CommandClientRuntime.startTailscalePing(primary.endpointTag, target)
     }
-
     private fun confirmLogout() {
-        val primary = TailscaleRuntime.state.value.primary ?: return
-        MaterialAlertDialogBuilder(requireContext())
-            .setTitle(R.string.ts_logout)
-            .setMessage(R.string.ts_logout_confirm)
-            .setPositiveButton(R.string.ts_logout) { _, _ ->
-                CommandClientRuntime.tailscaleLogout(primary.endpointTag)
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
+        val primary = TailscaleRuntime.state.value.primary ?: run { TailscaleRuntime.setNotice(getString(R.string.ts_not_subscribed)); return }
+        MaterialAlertDialogBuilder(requireContext()).setTitle(R.string.ts_logout).setMessage(R.string.ts_logout_confirm)
+            .setPositiveButton(R.string.ts_logout) { _, _ -> CommandClientRuntime.tailscaleLogout(primary.endpointTag) }
+            .setNegativeButton(android.R.string.cancel, null).show()
     }
 }

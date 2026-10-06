@@ -198,6 +198,20 @@ final class HomeModel: ObservableObject {
 
     // MARK: Mode cycle ([ Mode ] button / `m` equivalent)
 
+    func setRoutingMode(_ mode: RoutingMode) async {
+        guard let commanding, commandChannelActive else {
+            notice = Notice(kind: .warning, text: "mode: command channel unavailable — connect the tunnel first")
+            return
+        }
+        do {
+            try await commanding.setClashMode(mode)
+            routingMode = mode
+            notice = Notice(kind: .info, text: "Mode: \(mode.rawValue)")
+        } catch {
+            notice = Notice(kind: .error, text: "mode \(mode.rawValue) unavailable — regenerate the config and reconnect")
+        }
+    }
+
     func cycleRoutingMode() async {
         guard let commanding else {
             notice = Notice(kind: .warning, text: "mode: command channel unavailable")

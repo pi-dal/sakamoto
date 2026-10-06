@@ -31,6 +31,8 @@ import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancel
 
 /**
  * The VPN (TUN) service — a port of upstream SagerNet/sing-box-for-android
@@ -42,28 +44,42 @@ import java.net.NetworkInterface
  *     auto-detect-interface binds sockets per default interface; binding a
  *     fd outside the VPN requires VpnService.protect.
  *   * openTun(options) — turns libbox's TunOptions into a VpnService.Builder
- *     and hands the established fd back to the core. Route/exclude handling
- *     differs at API 33 (IpPrefix-based addRoute/excludeRoute) exactly like
- *     upstream.
+ *     and hands the established fd back to the core. Routing uses libbox's
+ *     precomputed CIDR ranges on every API level, so shared host exclusions
+ *     (including loopback) never become invalid Android excludeRoute calls.
  *
  * Root/USB/shell/bridge platform features of upstream are declared
  * unsupported here (they need root or hardware this client does not target);
  * each returns the same style of loud error upstream uses for its own
  * unsupported legs instead of a silent fake.
  *
- * STATUS PENDING SDK BUILD VERIFICATION: not compiled on this machine (no
- * Android SDK/JDK) — see android/README.md.
+ * Built and exercised on Pixel hardware, including the openTun path.
  */
 class SakamotoVpnService : VpnService(), PlatformInterface {
 
     private val service = TunnelBoxService(this, this)
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int =
-        service.onStartCommand()
+    private val actionScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            com.pidal.sakamoto.runtime.SystemStatusSurface.ACTION_STOP -> { service.stopService(); return START_NOT_STICKY }
+            com.pidal.sakamoto.runtime.SystemStatusSurface.ACTION_CHECK -> {
+                if (com.pidal.sakamoto.runtime.MobilecoreRuntime.state.value.serviceState == "Running") actionScope.launch { com.pidal.sakamoto.runtime.VpnDiagnostics.probe(this@SakamotoVpnService) }
+                else stopSelf()
+                return START_NOT_STICKY
+            }
+            com.pidal.sakamoto.runtime.SystemStatusSurface.ACTION_RECOVER -> {
+                if (com.pidal.sakamoto.runtime.MobilecoreRuntime.state.value.serviceState == "Running") com.pidal.sakamoto.runtime.ExperimentRuntime.recover() else stopSelf()
+                return START_NOT_STICKY
+            }
+        }
+        return service.onStartCommand()
+    }
 
     override fun onBind(intent: Intent?): IBinder? = super.onBind(intent)
 
     override fun onDestroy() {
+        actionScope.cancel()
         service.stopService()
         super.onDestroy()
     }
@@ -83,15 +99,33 @@ class SakamotoVpnService : VpnService(), PlatformInterface {
     override fun localDNSTransport(): LocalDNSTransport? = null
 
     override fun autoDetectInterfaceControl(fd: Int) {
-        protect(fd)
+        check(protect(fd)) { "android: failed to protect outbound socket from VPN routing" }
     }
 
     override fun openTun(options: TunOptions): Int {
+        return try {
+            createTun(options)
+        } catch (error: Exception) {
+            throw IllegalStateException("android: open TUN: ${error.message}", error)
+        }
+    }
+
+    private fun createTun(options: TunOptions): Int {
         if (prepare(this) != null) error("android: missing vpn permission")
 
+        DefaultNetworkMonitor.setUnderlyingListener { network ->
+            // Null means follow the system default; a physical network is
+            // supplied explicitly when available, never the VPN itself.
+            setUnderlyingNetworks(network?.let { arrayOf(it) })
+        }
         val builder = Builder()
             .setSession("sakamoto")
+            .setConfigureIntent(android.app.PendingIntent.getActivity(
+                this, 0, Intent(this, com.pidal.sakamoto.MainActivity::class.java),
+                android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT,
+            ))
             .setMtu(options.mtu)
+        DefaultNetworkMonitor.currentNetwork()?.let { builder.setUnderlyingNetworks(arrayOf(it)) }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             builder.setMetered(false)
@@ -113,49 +147,32 @@ class SakamotoVpnService : VpnService(), PlatformInterface {
             if (options.dnsMode.value != Libbox.DNSModeDisabled) {
                 val dnsServerAddress = options.dnsServerAddress
                 while (dnsServerAddress.hasNext()) {
-                    builder.addDnsServer(dnsServerAddress.next())
+                    val dns = dnsServerAddress.next()
+                    builder.addDnsServer(dns)
+                    // Shared host configs commonly exclude private ranges
+                    // (including 172.16/12), while libbox's Android DNS
+                    // endpoint lives at the next address in the TUN subnet
+                    // (172.18.0.2 here). The /32 or /128 route must be more
+                    // specific than the exclusion or Android sends DNS to
+                    // the underlying network and hostname resolution fails.
+                    builder.addRoute(dns, if (dns.contains(':')) 128 else 32)
                 }
             }
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                val inet4RouteAddress = options.inet4RouteAddress
-                if (inet4RouteAddress.hasNext()) {
-                    while (inet4RouteAddress.hasNext()) {
-                        builder.addRoute(inet4RouteAddress.next().toIpPrefix())
-                    }
-                } else if (options.inet4Address.hasNext()) {
-                    builder.addRoute("0.0.0.0", 0)
-                }
-
-                val inet6RouteAddress = options.inet6RouteAddress
-                if (inet6RouteAddress.hasNext()) {
-                    while (inet6RouteAddress.hasNext()) {
-                        builder.addRoute(inet6RouteAddress.next().toIpPrefix())
-                    }
-                } else if (options.inet6Address.hasNext()) {
-                    builder.addRoute("::", 0)
-                }
-
-                val inet4RouteExcludeAddress = options.inet4RouteExcludeAddress
-                while (inet4RouteExcludeAddress.hasNext()) {
-                    builder.excludeRoute(inet4RouteExcludeAddress.next().toIpPrefix())
-                }
-
-                val inet6RouteExcludeAddress = options.inet6RouteExcludeAddress
-                while (inet6RouteExcludeAddress.hasNext()) {
-                    builder.excludeRoute(inet6RouteExcludeAddress.next().toIpPrefix())
-                }
-            } else {
-                val inet4RouteRange = options.inet4RouteRange
-                while (inet4RouteRange.hasNext()) {
-                    val address = inet4RouteRange.next()
-                    builder.addRoute(address.address(), address.prefix())
-                }
-                val inet6RouteRange = options.inet6RouteRange
-                while (inet6RouteRange.hasNext()) {
-                    val address = inet6RouteRange.next()
-                    builder.addRoute(address.address(), address.prefix())
-                }
+            // libbox subtracts excluded CIDRs when computing these ranges.
+            // Use the result on every API level: Android's excludeRoute
+            // rejects loopback destinations (127/8, ::1), which are valid
+            // exclusions in the shared host config. Do not silently drop
+            // those rules or attempt to install a family absent from the TUN.
+            val inet4RouteRange = options.inet4RouteRange
+            while (inet4RouteRange.hasNext()) {
+                val route = inet4RouteRange.next()
+                builder.addRoute(route.address(), route.prefix())
+            }
+            val inet6RouteRange = options.inet6RouteRange
+            while (inet6RouteRange.hasNext()) {
+                val route = inet6RouteRange.next()
+                builder.addRoute(route.address(), route.prefix())
             }
 
             val includePackage = options.includePackage
@@ -186,8 +203,11 @@ class SakamotoVpnService : VpnService(), PlatformInterface {
                 ),
             )
         }
-        val pfd = builder.establish()
-            ?: error("android: the application is not prepared or is revoked")
+        val pfd = try {
+            builder.establish() ?: error("the application is not prepared or is revoked")
+        } catch (error: Exception) {
+            throw IllegalStateException("establish VPN interface: ${error.message}", error)
+        }
         service.fileDescriptor = pfd
         return pfd.fd
     }
@@ -388,9 +408,6 @@ class SakamotoVpnService : VpnService(), PlatformInterface {
         while (hasNext()) result.add(next())
         return result
     }
-
-    private fun io.nekohasekai.libbox.RoutePrefix.toIpPrefix(): android.net.IpPrefix =
-        android.net.IpPrefix(InetAddress.getByName(address()), prefix())
 
     private fun java.net.InterfaceAddress.toPrefix(): String? {
         val host = address.hostAddress ?: return null

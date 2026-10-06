@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pi-dal/sakamoto/pkg/sourcesync"
 	"gopkg.in/yaml.v3"
 )
 
@@ -75,9 +76,10 @@ type Config struct {
 		Directory   string   `yaml:"directory"`    // absolute iCloud Drive directory
 		Files       []string `yaml:"files"`        // additional relative source paths; generated files are forbidden
 	} `yaml:"icloud"`
-	TailscaleOptimize bool         `yaml:"tailscale_optimize"` // auto-detect Tailscale; default true
-	UTLSFingerprint   string       `yaml:"utls_fingerprint"`   // global fingerprint override; empty uses node links
-	PolicyRules       []PolicyRule `yaml:"policy"`             // user overrides: host/domain → proxy/direct/reject
+	TailscaleOptimize bool                `yaml:"tailscale_optimize"` // auto-detect Tailscale; default true
+	UTLSFingerprint   string              `yaml:"utls_fingerprint"`   // global fingerprint override; empty uses node links
+	PolicyRules       []PolicyRule        `yaml:"policy"`             // user overrides: host/domain → proxy/direct/reject
+	S3                sourcesync.Settings `yaml:"s3"`                 // credentials live in private s3-credentials.json
 
 	// URLTest parameters match Shadowrocket's interval/tolerance/timeout/URL.
 	URLTest struct {
@@ -158,6 +160,8 @@ func Default() *Config {
 	c.URLTest.URL = "https://www.gstatic.com/generate_204"
 	c.URLTest.Interval = "10m"
 	c.URLTest.Tolerance = 100
+	c.S3.Region = "us-east-1"
+	c.S3.Prefix = "sakamoto"
 	return c
 }
 
@@ -221,6 +225,11 @@ func Load(path string) (*Config, error) {
 	}
 	if err := c.ValidatePolicy(); err != nil {
 		return nil, err
+	}
+	if c.S3.Enabled {
+		if _, err := c.S3.ObjectURL(); err != nil {
+			return nil, err
+		}
 	}
 	return c, nil
 }
@@ -336,6 +345,11 @@ func (c *Config) MarshalYAML() ([]byte, error) { return yaml.Marshal(c) }
 // Save writes settings without allowing a TUI opened before a credential
 // rotation to silently put the old API key back on disk.
 func (c *Config) Save(path string) error {
+	if c.S3.Enabled {
+		if _, err := c.S3.ObjectURL(); err != nil {
+			return err
+		}
+	}
 	if err := c.ValidateDNSGuard(); err != nil {
 		return err
 	}

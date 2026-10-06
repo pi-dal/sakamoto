@@ -604,56 +604,39 @@ func (m *model) renderConfig(b *strings.Builder, startY int) {
 		return
 	}
 	if m.configDetail >= 0 && m.configDetail < len(configSections) {
-		fmt.Fprintf(b, " %s\n", accent.Render(configSections[m.configDetail]))
+		w := newContentWriter(m, b, startY)
+		w.line(" " + accent.Render(configSections[m.configDetail]))
+		w.buttons(control{text: "[ Back to Config ]", action: "back"})
 		items := m.sectionDetails(m.configDetail)
-		available := max(2, m.height-startY-4)
+		available := max(1, m.height-2-w.y())
 		m.detailScroll = min(m.detailScroll, max(0, len(items)-available))
 		for j := m.detailScroll; j < len(items) && j < m.detailScroll+available; j++ {
-			fmt.Fprintf(b, "   %s\n", muted.Render(trunc(items[j], max(25, m.width-5))))
+			w.line("   " + muted.Render(ansi.Truncate(items[j], m.width-7, "…")))
 		}
-		y := startY + 1 + min(available, max(0, len(items)-m.detailScroll)) + 1
-		b.WriteString("\n [ Back to Config ]\n")
-		m.addHit(1, 1+lipgloss.Width("[ Back to Config ]"), y, "back", 0)
 		return
 	}
-	b.WriteString(" Configuration\n")
+	w := newContentWriter(m, b, startY)
+	w.line(" Configuration")
+	// Primary actions stay visible at the supported minimum terminal size.
+	w.buttons(control{text: "[ Import config ]", action: "import"}, control{text: "[ Regenerate ]", action: "generate"}, control{text: "[ Edit settings ]", action: "edit-config"})
 	for i, name := range configSections {
-		y := startY + 1 + i
-		line := "   " + name + "  ›"
-		if m.hovered("section", i) {
-			line = focus.Render(line)
-		}
-		b.WriteString(line + "\n")
-		m.addHit(0, max(40, m.width), y, "section", i)
+		w.row("   "+name+"  ›", "section", i, false)
 	}
-	y := startY + 1 + len(configSections) + 1
-	b.WriteString("\n Subscription sources\n")
-	y++
+	w.line(" Subscription sources")
+	w.buttons(control{text: "[ Add source ]", action: "add-sub"}, control{text: "[ Edit source ]", action: "edit-sub"}, control{text: "[ Remove source ]", action: "delete-sub"})
 	if len(m.cfg.Subscriptions) == 0 {
-		b.WriteString("   (No subscriptions; nodes.txt remains available)\n")
-		y++
+		w.line("   (No subscriptions; nodes.txt remains available)")
 	} else {
 		for i, s := range m.cfg.Subscriptions {
+			if w.y() >= m.height-2 {
+				break
+			}
 			name := s.Name
 			if name == "" {
 				name = "Unnamed"
 			}
-			line := fmt.Sprintf("   %s  %s", name, redactURL(s.URL))
-			if i == m.sourceCursor {
-				line = focus.Render(">" + line)
-			}
-			b.WriteString(line + "\n")
-			m.addHit(0, max(60, m.width), y, "source", i)
-			y++
+			w.row(fmt.Sprintf("   %s  %s", name, redactURL(s.URL)), "source", i, i == m.sourceCursor)
 		}
-	}
-	b.WriteString("\n")
-	y++ // account for the blank line before the action row
-	x := 1
-	for _, bt := range []struct{ text, action string }{{"[ Import config ]", "import"}, {"[ Add source ]", "add-sub"}, {"[ Remove source ]", "delete-sub"}, {"[ Regenerate ]", "generate"}, {"[ Edit settings ]", "edit-config"}} {
-		b.WriteString(" " + muted.Render(bt.text))
-		m.addHit(x, x+lipgloss.Width(bt.text), y, bt.action, 0)
-		x += lipgloss.Width(bt.text) + 2
 	}
 }
 func (m *model) renderImportForm(b *strings.Builder, startY int) {
@@ -673,13 +656,7 @@ func (m *model) renderImportForm(b *strings.Builder, startY int) {
 		title = "Edit subscription"
 		hint = "Format: name|HTTPS URL (Ctrl+R reveals it)"
 	}
-	paneWidth := min(76, max(48, m.width-8))
-	paneLeft := max(0, (m.width-4-paneWidth)/2)
-	innerWidth := paneWidth - 4
-	prefix := strings.Repeat(" ", paneLeft)
-	box := func(text string) {
-		b.WriteString(prefix + "│ " + padLine(trunc(text, innerWidth), innerWidth) + " │\n")
-	}
+	p := newPaneWriter(m, b, startY, 76)
 	display := m.input
 	if (m.importKind == "node" || m.importKind == "node-edit") && !m.revealInput {
 		display = fmt.Sprintf("●●● (%d chars)", len([]rune(m.input)))
@@ -693,41 +670,21 @@ func (m *model) renderImportForm(b *strings.Builder, startY int) {
 	if display == "" {
 		display = "Paste an address or share link"
 	}
-	b.WriteString(prefix + "╭" + strings.Repeat("─", paneWidth-2) + "╮\n")
-	box(title)
-	box("Input  " + display + "▏")
-	box(hint)
-	confirmLabel, cancelLabel := "[ Confirm ]", "[ Cancel ]"
-	if m.hovered("import-confirm", 0) {
-		confirmLabel = focus.Render(confirmLabel)
-	}
-	if m.hovered("import-cancel", 0) {
-		cancelLabel = focus.Render(cancelLabel)
-	}
-	box(confirmLabel + "    " + cancelLabel)
-	confirmX := paneLeft + 1
-	m.addHit(confirmX, confirmX+lipgloss.Width("[ Confirm ]"), startY+4, "import-confirm", 0)
-	cancelX := paneLeft + 1 + lipgloss.Width("[ Confirm ]    ")
-	m.addHit(cancelX, cancelX+lipgloss.Width("[ Cancel ]"), startY+4, "import-cancel", 0)
-	b.WriteString(prefix + "╰" + strings.Repeat("─", paneWidth-2) + "╯\n")
+	p.line(accent.Render(title))
+	p.field("Input  "+display+"▏", "import-input", 0, true)
+	p.line(hint)
+	p.buttons(control{text: "[ Confirm ]", action: "import-confirm"}, control{text: "[ Cancel ]", action: "import-cancel"})
+	p.end()
 }
 
 func (m *model) renderConfigForm(b *strings.Builder, startY int) {
 	if m.formCfg == nil {
 		return
 	}
-	paneWidth := min(82, max(48, m.width-8))
-	paneLeft := max(0, (m.width-4-paneWidth)/2)
-	innerWidth := paneWidth - 4
-	prefix := strings.Repeat(" ", paneLeft)
-	box := func(text string) {
-		b.WriteString(prefix + "│ " + padLine(trunc(text, innerWidth), innerWidth) + " │\n")
-	}
-	b.WriteString(prefix + "╭" + strings.Repeat("─", paneWidth-2) + "╮\n")
-	box("Edit sakamoto.yaml")
-	box("↑↓ choose · Enter selects / edits · Ctrl+S save · Esc cancel")
-
-	available := max(2, m.height-startY-8)
+	p := newPaneWriter(m, b, startY, 82)
+	p.line(accent.Render("Edit sakamoto.yaml"))
+	p.line("↑↓ choose · Enter selects / edits · Ctrl+S save · Esc cancel")
+	available := max(1, m.height-p.y()-5)
 	if m.formCursor < m.formScroll {
 		m.formScroll = m.formCursor
 	}
@@ -738,9 +695,8 @@ func (m *model) renderConfigForm(b *strings.Builder, startY int) {
 	end := min(len(m.formRows), m.formScroll+available)
 	for i := m.formScroll; i < end; i++ {
 		r := m.formRows[i]
-		y := startY + 2 + i - m.formScroll
 		if r.value == nil {
-			box("  " + r.label)
+			p.line(accent.Render("  " + r.label))
 			continue
 		}
 		value := r.value()
@@ -753,72 +709,106 @@ func (m *model) renderConfigForm(b *strings.Builder, startY int) {
 		} else {
 			value = "= " + value
 		}
-		line := fmt.Sprintf("%-31s %s", r.label, value)
-		if i == m.formCursor || m.hovered("form-field", i) {
-			line = focus.Render(">" + line)
-		}
-		box(trunc(line, innerWidth))
-		m.addHit(paneLeft+1, paneLeft+1+paneWidth, y, "form-field", i)
+		p.field(fmt.Sprintf("%-31s %s", r.label, value), "form-field", i, i == m.formCursor)
 	}
-	if m.formNotice != "" {
-		box("! " + m.formNotice)
-	}
-	footerY := startY + 2 + (end - m.formScroll) + 1
-	if m.formNotice != "" {
-		footerY++
-	}
-	saveLabel, cancelLabel := "[ Save ]", "[ Cancel ]"
-	if m.hovered("form-save", 0) {
-		saveLabel = focus.Render(saveLabel)
-	}
-	if m.hovered("form-cancel", 0) {
-		cancelLabel = focus.Render(cancelLabel)
-	}
-	box(saveLabel + "    " + cancelLabel)
-	m.addHit(paneLeft+1, paneLeft+1+lipgloss.Width("[ Save ]"), footerY, "form-save", 0)
-	cancelX := paneLeft + 1 + lipgloss.Width("[ Save ]    ")
-	m.addHit(cancelX, cancelX+lipgloss.Width("[ Cancel ]"), footerY, "form-cancel", 0)
-	b.WriteString(prefix + "╰" + strings.Repeat("─", paneWidth-2) + "╯\n")
+	p.line(m.formNotice)
+	p.buttons(control{text: "[ Save ]", action: "form-save"}, control{text: "[ Cancel ]", action: "form-cancel"})
+	p.end()
 }
 
 func (m *model) renderPolicy(b *strings.Builder, startY int) {
-	b.WriteString(" " + accent.Render("Routing policy") + "  [ Back ]\n")
-	m.addHit(2+lipgloss.Width("Routing policy")+2, 2+lipgloss.Width("Routing policy")+2+lipgloss.Width("[ Back ]"), startY, "back", 0)
-	b.WriteString(" Match a hostname, not a URL path; https://example.com/a becomes example.com.\n")
-	b.WriteString(" direct overrides proxy; reject always wins. Global/Direct mode still changes ordinary unmatched traffic.\n\n")
-	y := startY + 3
+	w := newContentWriter(m, b, startY)
+	w.line(" " + accent.Render("Routing policy"))
+	w.buttons(control{text: "[ Add rule ]", action: "policy-add"}, control{text: "[ Edit rule ]", action: "policy-edit"}, control{text: "[ Remove rule ]", action: "policy-delete"}, control{text: "[ Back ]", action: "back"})
+	w.line(" URL matches use the hostname; paths are ignored.")
+	w.line(" Rule mode: reject first, then direct, then proxy.")
+	w.line(" " + accent.Render("User overrides · editable"))
 	if len(m.cfg.PolicyRules) == 0 {
-		b.WriteString("   No custom rules. Imported conf rules are still active.\n")
-		y++
+		w.line("   No user overrides.")
 	} else {
-		available := max(1, m.height-y-7)
-		start := min(m.policyCursor, max(0, len(m.cfg.PolicyRules)-available))
-		for i := start; i < len(m.cfg.PolicyRules) && i < start+available; i++ {
+		available := max(1, m.height-2-w.y())
+		if m.policyCursor < m.detailScroll {
+			m.detailScroll = m.policyCursor
+		}
+		if m.policyCursor >= m.detailScroll+available {
+			m.detailScroll = m.policyCursor - available + 1
+		}
+		m.detailScroll = max(0, min(m.detailScroll, max(0, len(m.cfg.PolicyRules)-available)))
+		for i := m.detailScroll; i < len(m.cfg.PolicyRules) && w.y() < m.height-2; i++ {
 			rule := m.cfg.PolicyRules[i]
-			action := strings.ToUpper(rule.Action)
-			line := fmt.Sprintf("   %-7s %s", action, policyDisplayMatch(rule.Match))
-			if i == m.policyCursor || m.hovered("policy-rule", i) {
-				line = focus.Render(">" + line)
-			} else if strings.EqualFold(rule.Action, "reject") {
-				line = bad.Render(line)
-			} else if strings.EqualFold(rule.Action, "direct") {
-				line = muted.Render(line)
-			}
-			b.WriteString(trunc(line, max(25, m.width-5)) + "\n")
-			m.addHit(0, max(50, m.width), y, "policy-rule", i)
-			y++
+			w.row(fmt.Sprintf("   %-7s %s", strings.ToUpper(rule.Action), policyDisplayMatch(rule.Match)), "policy-rule", i, i == m.policyCursor)
 		}
 	}
-	b.WriteString("\n")
-	buttonsY := y + 1
-	x := 1
-	for _, button := range []struct{ text, action string }{
-		{"[ Add rule ]", "policy-add"}, {"[ Edit rule ]", "policy-edit"}, {"[ Remove rule ]", "policy-delete"},
-	} {
-		b.WriteString(" " + muted.Render(button.text))
-		m.addHit(x, x+lipgloss.Width(button.text), buttonsY, button.action, 0)
-		x += lipgloss.Width(button.text) + 2
+	if w.y() < m.height-2 {
+		w.line(" " + accent.Render("Imported conf rules · read-only"))
+		for _, line := range importedPolicySummary(m.cfg.ConfPath) {
+			if w.y() < m.height-2 {
+				w.line("   " + line)
+			}
+		}
 	}
+}
+
+func importedPolicySummary(confPath string) []string {
+	if u, err := url.Parse(confPath); err == nil && (u.Scheme == "http" || u.Scheme == "https") {
+		confPath = filepath.Join(filepath.Dir(confPath), "imports", "macOS.conf")
+	}
+	seen := map[string]bool{}
+	counts := map[string]int{"proxy": 0, "direct": 0, "reject": 0}
+	files := 0
+	var readConf func(string) error
+	readConf = func(file string) error {
+		if seen[file] {
+			return nil
+		}
+		seen[file] = true
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return err
+		}
+		files++
+		section := ""
+		for _, raw := range strings.Split(string(data), "\n") {
+			line := strings.TrimSpace(strings.SplitN(raw, "//", 2)[0])
+			if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+				section = strings.ToLower(line)
+				continue
+			}
+			if section == "[general]" {
+				key, value, ok := strings.Cut(line, "=")
+				if !ok || !strings.EqualFold(strings.TrimSpace(key), "include") {
+					continue
+				}
+				for _, inc := range splitNonEmpty(strings.TrimSpace(value), ",") {
+					if !strings.Contains(inc, "://") {
+						_ = readConf(filepath.Join(filepath.Dir(file), inc))
+					}
+				}
+				continue
+			}
+			if section != "[rule]" {
+				continue
+			}
+			parts := strings.Split(line, ",")
+			if len(parts) < 3 {
+				continue
+			}
+			target := strings.ToLower(strings.TrimSpace(parts[2]))
+			switch target {
+			case "direct", "tailscale":
+				counts["direct"]++
+			case "reject", "reject-drop", "reject-no-drop":
+				counts["reject"]++
+			default:
+				counts["proxy"]++
+			}
+		}
+		return nil
+	}
+	if err := readConf(confPath); err != nil {
+		return []string{"Source unavailable: " + filepath.Base(confPath)}
+	}
+	return []string{fmt.Sprintf("Source: %s", filepath.Base(confPath)), fmt.Sprintf("Files: %d · proxy: %d · direct: %d · reject: %d", files, counts["proxy"], counts["direct"], counts["reject"]), "Edit the imported .conf or add an override above."}
 }
 
 func policyDisplayMatch(match string) string {
@@ -829,108 +819,54 @@ func policyDisplayMatch(match string) string {
 }
 
 func (m *model) renderPolicyEditor(b *strings.Builder, startY int) {
-	paneWidth := min(76, max(48, m.width-8))
-	paneLeft := max(0, (m.width-4-paneWidth)/2)
-	innerWidth := paneWidth - 4
-	prefix := strings.Repeat(" ", paneLeft)
-	box := func(text string) {
-		b.WriteString(prefix + "│ " + padLine(trunc(text, innerWidth), innerWidth) + " │\n")
-	}
+	p := newPaneWriter(m, b, startY, 76)
 	title := "Add policy rule"
 	if m.policyEditIndex >= 0 {
 		title = "Edit policy rule"
 	}
-	b.WriteString(prefix + "╭" + strings.Repeat("─", paneWidth-2) + "╮\n")
-	box(title)
-	box("Match: hostname, *.suffix, keyword:foo, cidr:192.0.2.0/24, or URL")
-	match := m.policyMatch + "▏"
-	if m.policyField != 0 {
-		match = m.policyMatch
-	}
-	line := "Match   = " + match
+	p.line(accent.Render(title))
+	p.line("Host, *.suffix, keyword:foo, CIDR or URL")
+	match := m.policyMatch
 	if m.policyField == 0 {
-		line = focus.Render(">" + line)
+		match += "▏"
 	}
-	box(line)
-	m.addHit(paneLeft+1, paneLeft+1+paneWidth, startY+2, "policy-match", 0)
-	action := "‹ " + strings.ToLower(m.policyAction) + " ›"
-	line = "Action  " + action
-	if m.policyField == 1 {
-		line = focus.Render(">" + line)
+	p.field("Match   = "+match, "policy-match", 0, m.policyField == 0)
+	p.field("Action  ‹ "+strings.ToLower(m.policyAction)+" ›", "policy-action", 0, m.policyField == 1)
+	p.line("Tab/↑↓ moves · Enter selects · Ctrl+S saves")
+	if m.policyNotice != "" && p.y() < m.height-5 {
+		p.line(m.policyNotice)
 	}
-	box(line)
-	m.addHit(paneLeft+1, paneLeft+1+paneWidth, startY+3, "policy-action", 0)
-	box("Enter edits/selects · Tab/↑↓ moves · Ctrl+S saves")
-	if m.policyNotice != "" {
-		box("! " + m.policyNotice)
-	}
-	footerY := startY + 6
-	if m.policyNotice != "" {
-		footerY++
-	}
-	saveLabel, cancelLabel := "[ Save ]", "[ Cancel ]"
-	if m.hovered("policy-save", 0) {
-		saveLabel = focus.Render(saveLabel)
-	}
-	if m.hovered("policy-cancel", 0) {
-		cancelLabel = focus.Render(cancelLabel)
-	}
-	box(saveLabel + "    " + cancelLabel)
-	m.addHit(paneLeft+1, paneLeft+1+lipgloss.Width("[ Save ]"), footerY, "policy-save", 0)
-	cancelX := paneLeft + 1 + lipgloss.Width("[ Save ]    ")
-	m.addHit(cancelX, cancelX+lipgloss.Width("[ Cancel ]"), footerY, "policy-cancel", 0)
-	b.WriteString(prefix + "╰" + strings.Repeat("─", paneWidth-2) + "╯\n")
+	p.buttons(control{text: "[ Save ]", action: "policy-save"}, control{text: "[ Cancel ]", action: "policy-cancel"})
+	p.end()
 }
 
 func (m *model) renderSources(b *strings.Builder, startY int) {
-	b.WriteString(" " + accent.Render("Nodes & sources") + "  [ Back ]\n")
-	m.addHit(2+lipgloss.Width("Nodes & sources")+2, 2+lipgloss.Width("Nodes & sources")+2+lipgloss.Width("[ Back ]"), startY, "back", 0)
-	y := startY + 1
-	groups := [][]struct{ text, action string }{
-		{{"[ Add node ]", "add-node"}, {"[ Edit node ]", "edit-node"}, {"[ Remove node ]", "delete-node"}},
-		{{"[ Add source ]", "add-sub"}, {"[ Edit source ]", "edit-sub"}, {"[ Remove source ]", "delete-sub"}},
-	}
-	for _, buttons := range groups {
-		x := 1
-		for _, btn := range buttons {
-			b.WriteString(" " + muted.Render(btn.text))
-			m.addHit(x, x+lipgloss.Width(btn.text), y, btn.action, 0)
-			x += lipgloss.Width(btn.text) + 2
-		}
-		b.WriteByte('\n')
-		y++
-	}
-	b.WriteString("\n Subscriptions\n")
-	y += 2
+	w := newContentWriter(m, b, startY)
+	w.line(" " + accent.Render("Nodes & sources"))
+	w.buttons(control{text: "[ Add node ]", action: "add-node"}, control{text: "[ Edit node ]", action: "edit-node"}, control{text: "[ Remove node ]", action: "delete-node"})
+	w.buttons(control{text: "[ Add source ]", action: "add-sub"}, control{text: "[ Edit source ]", action: "edit-sub"}, control{text: "[ Remove source ]", action: "delete-sub"}, control{text: "[ Back ]", action: "back"})
+	w.line(" Subscriptions")
 	if len(m.cfg.Subscriptions) == 0 {
-		b.WriteString("   None (manual nodes remain available)\n")
-		y++
+		w.line("   None (manual nodes remain available)")
 	} else {
 		for i, s := range m.cfg.Subscriptions {
-			if y >= m.height-5 {
+			if w.y() >= m.height-5 {
 				break
 			}
-			line := fmt.Sprintf("   %-17s %s", s.Name, redactURL(s.URL))
-			if i == m.sourceCursor || m.hovered("source", i) {
-				line = focus.Render(">" + line)
-			}
-			b.WriteString(line + "\n")
-			m.addHit(0, max(40, m.width), y, "source", i)
-			y++
+			w.row(fmt.Sprintf("   %-17s %s", s.Name, redactURL(s.URL)), "source", i, i == m.sourceCursor)
 		}
 	}
-	b.WriteString("\n Manual nodes (select one, then use the buttons above)\n")
-	y += 2
+	w.line(" Manual nodes (select one, then use the buttons above)")
 	entries, err := gen.ReadNodes(m.cfg.NodesFile)
 	if err != nil {
-		b.WriteString("   Read failed: " + err.Error() + "\n")
+		w.line("   Read failed: " + err.Error())
 		return
 	}
 	if len(entries) == 0 {
-		b.WriteString("   No nodes\n")
+		w.line("   No nodes")
 		return
 	}
-	available := max(1, m.height-2-y)
+	available := max(1, m.height-2-w.y())
 	m.detailScroll = min(max(0, m.detailScroll), max(0, len(entries)-available))
 	if m.nodeCursor < m.detailScroll {
 		m.detailScroll = m.nodeCursor
@@ -938,15 +874,9 @@ func (m *model) renderSources(b *strings.Builder, startY int) {
 	if m.nodeCursor >= m.detailScroll+available {
 		m.detailScroll = m.nodeCursor - available + 1
 	}
-	for i := m.detailScroll; i < len(entries) && y < m.height-2; i++ {
+	for i := m.detailScroll; i < len(entries) && w.y() < m.height-2; i++ {
 		e := entries[i]
-		line := fmt.Sprintf("   %-44s %-12s", trunc(e.Tag, 43), e.Type)
-		if i == m.nodeCursor || m.hovered("node-source", i) {
-			line = focus.Render(">" + line)
-		}
-		b.WriteString(line + "\n")
-		m.addHit(0, max(45, m.width), y, "node-source", i)
-		y++
+		w.row(fmt.Sprintf("   %-44s %-12s", ansi.Truncate(e.Tag, 43, "…"), e.Type), "node-source", i, i == m.nodeCursor)
 	}
 }
 
@@ -1018,6 +948,10 @@ func (m *model) renderData(b *strings.Builder, startY int) {
 	}
 }
 func (m *model) renderSettings(b *strings.Builder, startY int) {
+	if m.editIndex >= 0 {
+		m.renderSettingEditor(b, startY)
+		return
+	}
 	available := max(3, m.height-startY-4)
 	if m.cfgCursor < m.settingsScroll {
 		m.settingsScroll = m.cfgCursor
@@ -1036,6 +970,9 @@ func (m *model) renderSettings(b *strings.Builder, startY int) {
 		}
 		indicator := ""
 		value := r.value()
+		if r.secret && value != "" {
+			value = "•••••• (saved)"
+		}
 		if len(r.choices) > 0 {
 			parts := make([]string, len(r.choices))
 			for j, state := range r.choices {
@@ -1055,16 +992,34 @@ func (m *model) renderSettings(b *strings.Builder, startY int) {
 			line = focus.Render(">" + line)
 		}
 		b.WriteString(line + "\n")
-		if r.toggle != nil || r.edit != nil {
+		if r.toggle != nil || r.edit != nil || r.action != nil {
 			m.addHit(0, max(m.width, 80), y, "setting", i)
 		}
 	}
 	if m.editIndex >= 0 {
-		fmt.Fprintf(b, "\n %s: %s▏\n Enter save · Esc cancel\n", m.editing, m.input)
+		display := m.input
+		if m.cfgRows[m.editIndex].secret {
+			display = strings.Repeat("•", len([]rune(display)))
+		}
+		fmt.Fprintf(b, "\n %s: %s▏\n Enter save · Esc cancel\n", m.editing, display)
 	} else {
 		b.WriteString("\n Click or Enter to edit · scroll to browse · regenerate and reconnect to apply\n")
 	}
 }
+func (m *model) renderSettingEditor(b *strings.Builder, startY int) {
+	r := m.cfgRows[m.editIndex]
+	p := newPaneWriter(m, b, startY, 76)
+	p.line(accent.Render("Edit " + r.label))
+	display := m.input
+	if r.secret {
+		display = strings.Repeat("•", len([]rune(display)))
+	}
+	p.field(display+"▏", "setting-input", 0, true)
+	p.line("Enter save · Esc cancel · Ctrl+U clear")
+	p.buttons(control{text: "[ Save ]", action: "setting-save"}, control{text: "[ Cancel ]", action: "setting-cancel"})
+	p.end()
+}
+
 func fmtB(v int64) string {
 	if v >= 1<<20 {
 		return fmt.Sprintf("%.1fM", float64(v)/(1<<20))

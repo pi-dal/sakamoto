@@ -18,10 +18,6 @@ package mobileconf
 
 import "strings"
 
-// maxIncludeDepth mirrors internal/gen: relative include chains are resolved
-// recursively on the host with the same bound.
-const maxIncludeDepth = 8
-
 // ruleTypes maps Shadowrocket rule names to sing-box rule kinds. An empty
 // kind means "no sing-box equivalent; skip".
 var ruleTypes = map[string]string{

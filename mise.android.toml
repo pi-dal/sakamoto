@@ -1,0 +1,5 @@
+# Opt in with `mise -E android install`, then `mise -E android run android:build`.
+# This profile avoids downloading Android SDK/NDK for iOS-only development.
+[tools]
+java = "corretto-17.0.20.8.1"
+android-sdk = "22.0"

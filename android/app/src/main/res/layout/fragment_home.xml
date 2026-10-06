@@ -1,131 +1,200 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools"
+<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:fillViewport="true">
+    android:fillViewport="true"
+    android:background="@color/surface_variant">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="16dp">
+        android:paddingBottom="24dp">
 
-        <TextView
-            android:id="@+id/phase_value"
-            style="?attr/textAppearanceHeadlineMedium"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="center_horizontal"
-            android:paddingTop="24dp"
-            android:paddingBottom="8dp"
-            tools:text="Disconnected" />
-
-        <TextView
-            android:id="@+id/service_state_value"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="center_horizontal"
-            tools:text="Stopped" />
-
-        <TextView
-            android:id="@+id/probe_state_value"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="center_horizontal"
-            tools:text="Idle" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/connect_button"
+        <!-- One status/control row, not a stack of status labels and buttons. -->
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="@string/connect" />
+            android:minHeight="80dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="@color/surface"
+            android:paddingStart="20dp"
+            android:paddingEnd="12dp"
+            android:paddingVertical="8dp">
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/disconnect_button"
+            <ImageView
+                android:id="@+id/status_icon"
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:layout_marginEnd="16dp"
+                android:importantForAccessibility="no"
+                android:src="@drawable/ic_service"
+                android:tint="@color/primary" />
+
+            <LinearLayout
+                android:id="@+id/connection_status_entry"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:minHeight="56dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:layout_marginEnd="8dp"
+                android:paddingVertical="8dp"
+                android:clickable="true"
+                android:focusable="true"
+                android:foreground="?attr/selectableItemBackground">
+                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1" android:orientation="vertical">
+                <TextView
+                    android:id="@+id/phase_value"
+                    style="@style/Text.Sakamoto.HomeLabel"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:accessibilityLiveRegion="polite"
+                    tools:text="Disconnected" />
+                <TextView
+                    android:id="@+id/phase_description"
+                    style="@style/Text.Sakamoto.HomeDetail"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    tools:text="Network check passed" />
+                </LinearLayout>
+                <ImageView android:id="@+id/connection_status_chevron"
+                    android:layout_width="20dp" android:layout_height="20dp"
+                    android:layout_marginStart="8dp" android:importantForAccessibility="no"
+                    android:src="@drawable/ic_chevron" android:tint="@color/on_surface_variant" />
+            </LinearLayout>
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/connection_switch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="48dp"
+                android:minHeight="48dp"
+                android:contentDescription="@string/toggle_connection" />
+        </LinearLayout>
+
+        <!-- Errors get their own surface only when there is an error. -->
+        <LinearLayout
+            android:id="@+id/notice_panel"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="@string/disconnect" />
+            android:background="?attr/colorErrorContainer"
+            android:orientation="vertical"
+            android:paddingHorizontal="20dp"
+            android:paddingVertical="16dp"
+            android:visibility="gone"
+            tools:visibility="gone">
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textAppearance="?attr/textAppearanceTitleSmall"
+                android:textColor="?attr/colorOnErrorContainer"
+                android:text="@string/connection_problem" />
+            <TextView
+                android:id="@+id/notice_value"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textAppearance="?attr/textAppearanceBodyMedium"
+                android:textColor="?attr/colorOnErrorContainer"
+                android:textIsSelectable="true"
+                android:accessibilityLiveRegion="polite" />
+        </LinearLayout>
 
-        <com.google.android.material.divider.MaterialDivider
+        <TextView
+            style="@style/Text.Sakamoto.HomeSection"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginVertical="12dp" />
+            android:text="@string/connection_settings" />
 
-        <TextView
-            android:id="@+id/mode_label"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/mode_label" />
-
-        <TextView
-            android:id="@+id/mode_value"
-            style="?attr/textAppearanceTitleLarge"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            tools:text="Rule" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/cycle_mode_button"
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="@string/cycle_mode" />
+            android:orientation="vertical"
+            android:background="@color/surface">
 
-        <com.google.android.material.divider.MaterialDivider
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginVertical="12dp" />
+            <LinearLayout
+                android:id="@+id/mode_row"
+                style="@style/Widget.Sakamoto.HomeRow"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:clickable="true"
+                android:focusable="true"
+                android:foreground="?attr/selectableItemBackground">
+                <ImageView
+                    style="@style/Widget.Sakamoto.HomeRowIcon"
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    app:srcCompat="@drawable/ic_route" />
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+                    <TextView style="@style/Text.Sakamoto.HomeLabel"
+                        android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:text="@string/mode_label" />
+                    <TextView android:id="@+id/mode_value" style="@style/Text.Sakamoto.HomeDetail"
+                        android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp" tools:text="Rule · Follow your routing rules" />
+                </LinearLayout>
+                <ImageView
+                    android:layout_width="24dp" android:layout_height="24dp"
+                    android:layout_marginStart="12dp" android:importantForAccessibility="no"
+                    app:srcCompat="@drawable/ic_chevron" app:tint="@color/on_surface_variant" />
+            </LinearLayout>
+
+            <View style="@style/Widget.Sakamoto.HomeDivider"
+                android:layout_width="match_parent" android:layout_height="1dp" />
+
+            <LinearLayout
+                style="@style/Widget.Sakamoto.HomeRow"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+                <ImageView
+                    style="@style/Widget.Sakamoto.HomeRowIcon"
+                    android:layout_width="24dp" android:layout_height="24dp"
+                    app:srcCompat="@drawable/ic_node" />
+                <LinearLayout
+                    android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1" android:orientation="vertical">
+                    <TextView android:id="@+id/selected_value" style="@style/Text.Sakamoto.HomeLabel"
+                        android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:maxLines="2" android:ellipsize="end" tools:text="Selected node" />
+                    <TextView android:id="@+id/selected_reachability" style="@style/Text.Sakamoto.HomeDetail"
+                        android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp" tools:text="Latency not tested" />
+                </LinearLayout>
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/url_test_button"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:minWidth="48dp" android:minHeight="48dp"
+                    android:text="@string/test_latency"
+                    android:contentDescription="@string/url_test" />
+            </LinearLayout>
+        </LinearLayout>
 
         <TextView
-            android:id="@+id/selected_label"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/selected_label" />
+            android:id="@+id/routing_note"
+            style="@style/Text.Sakamoto.HomeDetail"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:paddingHorizontal="20dp" android:paddingTop="12dp" android:paddingBottom="8dp"
+            android:text="@string/routing_connect_hint" />
 
-        <TextView
-            android:id="@+id/selected_value"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            tools:text="—" />
-
-        <TextView
-            android:id="@+id/selected_reachability"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            tools:text="Untested" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/url_test_button"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/url_test" />
-
-        <com.google.android.material.divider.MaterialDivider
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginVertical="12dp" />
-
-        <TextView
-            android:id="@+id/config_state_label"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/config_state_label" />
-
-        <TextView
-            android:id="@+id/config_state_value"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            tools:text="Clean" />
-
-        <TextView
-            android:id="@+id/notice_value"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:textIsSelectable="true" />
+        <LinearLayout
+            android:id="@+id/groups_container"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical" />
 
     </LinearLayout>
-</ScrollView>
+</androidx.core.widget.NestedScrollView>

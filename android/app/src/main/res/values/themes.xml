@@ -1,12 +1,83 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Material 3 baseline. MainActivity applies dynamic colors when the
-         device supports them; the theme remains usable on older devices. -->
     <style name="Theme.Sakamoto" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="android:fontFamily">sans</item>
-        <item name="android:statusBarColor">?attr/colorSurface</item>
-        <item name="android:navigationBarColor">?attr/colorSurface</item>
+        <item name="android:windowBackground">@color/surface</item>
+        <item name="colorPrimary">@color/primary</item>
+        <item name="colorOnPrimary">@color/on_primary</item>
+        <item name="colorPrimaryContainer">@color/primary_container</item>
+        <item name="colorOnPrimaryContainer">@color/on_primary_container</item>
+        <item name="colorSurface">@color/surface</item>
+        <item name="colorOnSurface">@color/on_surface</item>
+        <item name="colorSurfaceVariant">@color/surface_variant</item>
+        <item name="colorOnSurfaceVariant">@color/on_surface_variant</item>
+        <item name="colorOutline">@color/outline</item>
+        <item name="android:textColorPrimary">@color/on_surface</item>
+        <item name="android:textColorSecondary">@color/on_surface_variant</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">?attr/isLightTheme</item>
+        <item name="android:windowLightNavigationBar">?attr/isLightTheme</item>
         <item name="android:windowActionModeOverlay">true</item>
+    </style>
+    <style name="Text.Sakamoto.Body" parent="TextAppearance.Material3.BodyLarge">
+        <item name="android:textSize">16sp</item>
+        <item name="android:textColor">@color/on_surface</item>
+        <item name="android:lineSpacingExtra">4dp</item>
+    </style>
+    <style name="Text.Sakamoto.Supporting" parent="TextAppearance.Material3.BodyMedium">
+        <item name="android:textSize">14sp</item>
+        <item name="android:textColor">@color/on_surface_variant</item>
+        <item name="android:lineSpacingExtra">4dp</item>
+    </style>
+    <style name="Text.Sakamoto.Section" parent="TextAppearance.Material3.TitleSmall">
+        <item name="android:textSize">14sp</item>
+        <item name="android:textColor">@color/primary</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+    <!-- Telegram-like grouped rows, using Material 3 roles and scalable sp. -->
+    <style name="Text.Sakamoto.HomeTitle" parent="TextAppearance.Material3.TitleLarge">
+        <item name="android:textColor">@color/on_surface</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+    </style>
+    <style name="Text.Sakamoto.HomeLabel" parent="TextAppearance.Material3.BodyLarge">
+        <item name="android:textColor">@color/on_surface</item>
+    </style>
+    <style name="Text.Sakamoto.HomeDetail" parent="TextAppearance.Material3.BodySmall">
+        <item name="android:textColor">@color/on_surface_variant</item>
+    </style>
+    <style name="Text.Sakamoto.HomeSection" parent="TextAppearance.Material3.TitleSmall">
+        <item name="android:textColor">@color/primary</item>
+        <item name="android:paddingStart">20dp</item>
+        <item name="android:paddingEnd">20dp</item>
+        <item name="android:paddingTop">24dp</item>
+        <item name="android:paddingBottom">8dp</item>
+    </style>
+    <style name="Widget.Sakamoto.HomeRow" parent="">
+        <item name="android:minHeight">72dp</item>
+        <item name="android:gravity">center_vertical</item>
+        <item name="android:paddingStart">20dp</item>
+        <item name="android:paddingEnd">16dp</item>
+        <item name="android:paddingTop">12dp</item>
+        <item name="android:paddingBottom">12dp</item>
+    </style>
+    <style name="Widget.Sakamoto.HomeRowIcon" parent="">
+        <item name="android:layout_marginEnd">16dp</item>
+        <item name="android:importantForAccessibility">no</item>
+        <item name="tint">@color/on_surface_variant</item>
+    </style>
+    <style name="Widget.Sakamoto.HomeDivider" parent="">
+        <item name="android:background">@color/divider</item>
+        <item name="android:layout_marginStart">60dp</item>
+    </style>
+    <style name="Widget.Sakamoto.Button" parent="Widget.Material3.Button">
+        <item name="android:minHeight">56dp</item>
+        <item name="android:textSize">16sp</item>
+        <item name="cornerRadius">16dp</item>
+    </style>
+    <style name="Widget.Sakamoto.SecondaryButton" parent="Widget.Material3.Button.TextButton">
+        <item name="android:minHeight">48dp</item>
+        <item name="android:textSize">16sp</item>
+        <item name="cornerRadius">12dp</item>
     </style>
 </resources>

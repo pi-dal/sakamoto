@@ -37,7 +37,8 @@ struct AboutView: View {
 
             Section {
                 Text("The name sakamoto honors musician and composer Ryuichi Sakamoto (1952–2023). This independent project is not affiliated with or endorsed by him, his family, estate, or representatives.")
-                Text("Portrait: Joi Ito / Solid State Survivor · CC BY 2.0 (commons.wikimedia.org — RyuichiSakamoto2007.jpg). The macOS TUI renders terminal adaptations of it; see NOTICE.md and docs/portrait-license.md.")
+                Text("About portrait: photo by Joi Ito; Commons crop by Solid State Survivor. Adapted into grayscale terminal pixels, licensed CC BY 2.0. The app icon uses artwork provided by the project owner. See NOTICE.md and docs/portrait-license.md.")
+                Link("Source photograph", destination: URL(string: "https://commons.wikimedia.org/wiki/File:RyuichiSakamoto2007.jpg")!)
                 Link("CC BY 2.0", destination: URL(string: "https://creativecommons.org/licenses/by/2.0/")!)
             } header: {
                 Text("Name & portrait")

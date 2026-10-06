@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -60,6 +61,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.batch.results[tag] = -1
 			}
 			m.refreshTestProgress()
+		}
+	case s3SyncMsg:
+		if v.err != nil {
+			m.notice = "S3 sync failed: " + v.err.Error()
+		} else {
+			if latest, err := config.Load(m.cfgPath); err == nil {
+				m.cfg = latest
+				m.buildSettings()
+			}
+			m.notice = strings.Join(v.messages, "; ")
 		}
 	case importMsg:
 		m.onImport(v)
@@ -195,9 +206,7 @@ func (m *model) onMouse(v tea.MouseMsg) tea.Cmd {
 	if m.importBusy {
 		return nil
 	}
-	if v.Action == tea.MouseActionMotion {
-		m.hoverX, m.hoverY = v.X, v.Y
-	}
+	m.hoverX, m.hoverY = v.X, v.Y
 	if v.Action == tea.MouseActionPress {
 		switch v.Button {
 		case tea.MouseButtonLeft:

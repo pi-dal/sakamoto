@@ -1,6 +1,6 @@
 package com.pidal.sakamoto.runtime
 
-import com.pidal.sakamoto.mobilecore.Mobilecore
+import io.nekohasekai.mobilecore.Mobilecore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -39,6 +39,9 @@ data class RuntimeState(
     val selectedNodeStatus: String = "Untested",
     val configState: String = "Clean",
     val notice: String? = null,
+    val probeDetail: String = "Not checked",
+    val probeAt: Long = 0L,
+    val configApplyPending: Boolean = false,
 )
 
 /**
@@ -70,7 +73,19 @@ object MobilecoreRuntime {
     }
 
     /** Report a core.ServiceState word from the tunnel service. */
-    fun setServiceState(value: String) = apply { it.copy(serviceState = value.trim()) }
+    fun setServiceState(value: String) = apply {
+        val next = value.trim()
+        if (next == it.serviceState) it else it.copy(serviceState = next, probeState = "Idle", probeDetail = "Not checked", probeAt = 0L)
+    }
+
+    fun beginConfigApply() = apply { it.copy(configApplyPending = true) }
+    fun completeConfigApply() {
+        configEvent("regenerate_succeeded")
+        configEvent("applied")
+        apply { it.copy(configApplyPending = false, notice = null, probeState = "Idle", probeDetail = "Not checked", probeAt = 0L) }
+    }
+
+    fun beginProbe() = apply { it.copy(probeState = "Checking", probeDetail = "Checking DNS and HTTPS…") }
 
     /**
      * Classify one probe round. Android has no browser-proxy path, so the
@@ -84,7 +99,7 @@ object MobilecoreRuntime {
         val passed = routeError.isEmpty()
         val probeState = Mobilecore.probeStateOf(passed, true, false)
         val detail = if (passed) Mobilecore.probePathOf(passed, true, false) else routeError
-        it.copy(probeState = probeState, notice = detail.ifEmpty { null })
+        it.copy(probeState = probeState, probeDetail = if (passed) "DNS + TLS + HTTPS 204 passed" else detail, probeAt = System.currentTimeMillis())
     }
 
     /** Advance the routing-mode cycle: Rule → Global → Direct (the `m` key). */
@@ -125,7 +140,7 @@ object MobilecoreRuntime {
                 _state.value = current.copy(notice = "config state machine: ${e.message}")
                 return
             }
-            _state.value = current.copy(configState = next)
+            _state.value = current.copy(configState = next, configApplyPending = if (event == "regenerate_failed") false else current.configApplyPending)
         }
     }
 

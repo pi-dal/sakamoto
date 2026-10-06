@@ -6,6 +6,8 @@ import SakamotoKit
 
 struct HomeView: View {
     @ObservedObject var model: HomeModel
+    @State private var showRoutingModes = false
+    @State private var showDisconnectConfirm = false
 
     var body: some View {
         List {
@@ -55,6 +57,18 @@ struct HomeView: View {
         }
         .navigationTitle("Home")
         .listStyle(.insetGrouped)
+        .confirmationDialog("Disconnect tunnel?", isPresented: $showDisconnectConfirm, titleVisibility: .visible) {
+            Button("Disconnect", role: .destructive) { Task { await model.disconnect() } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The active tunnel and its network routing will stop.")
+        }
+        .confirmationDialog("Routing mode", isPresented: $showRoutingModes, titleVisibility: .visible) {
+            ForEach([RoutingMode.rule, .global, .direct], id: \.self) { mode in
+                Button(mode.rawValue) { Task { await model.setRoutingMode(mode) } }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
         .task { await model.activate() }
     }
 
@@ -75,7 +89,7 @@ struct HomeView: View {
                 if model.phase == .disconnected || model.phase == .unavailable {
                     await model.connect()
                 } else {
-                    await model.disconnect()
+                    showDisconnectConfirm = true
                 }
             }
         } label: {
@@ -88,7 +102,7 @@ struct HomeView: View {
 
     private var modeButton: some View {
         Button {
-            Task { await model.cycleRoutingMode() }
+            showRoutingModes = true
         } label: {
             HStack {
                 Text("Mode")
