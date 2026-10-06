@@ -25,14 +25,14 @@
             android:paddingEnd="12dp"
             android:paddingVertical="8dp">
 
-            <ImageView
+            <androidx.appcompat.widget.AppCompatImageView
                 android:id="@+id/status_icon"
                 android:layout_width="24dp"
                 android:layout_height="24dp"
                 android:layout_marginEnd="16dp"
                 android:importantForAccessibility="no"
-                android:src="@drawable/ic_service"
-                android:tint="@color/primary" />
+                app:srcCompat="@drawable/ic_service"
+                app:tint="@color/primary" />
 
             <LinearLayout
                 android:id="@+id/connection_status_entry"
@@ -64,10 +64,10 @@
                     android:layout_marginTop="4dp"
                     tools:text="Network check passed" />
                 </LinearLayout>
-                <ImageView android:id="@+id/connection_status_chevron"
+                <androidx.appcompat.widget.AppCompatImageView android:id="@+id/connection_status_chevron"
                     android:layout_width="20dp" android:layout_height="20dp"
                     android:layout_marginStart="8dp" android:importantForAccessibility="no"
-                    android:src="@drawable/ic_chevron" android:tint="@color/on_surface_variant" />
+                    app:srcCompat="@drawable/ic_chevron" app:tint="@color/on_surface_variant" />
             </LinearLayout>
 
             <com.google.android.material.materialswitch.MaterialSwitch

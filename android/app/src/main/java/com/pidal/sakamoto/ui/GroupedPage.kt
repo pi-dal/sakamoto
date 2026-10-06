@@ -90,7 +90,10 @@ class GroupedPage(val context: Context) {
                 uri -> InputType.TYPE_TEXT_VARIATION_URI
                 else -> InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
             }
-            if (secret) { isSaveEnabled = false; importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO }
+            if (secret) {
+                isSaveEnabled = false
+                if (android.os.Build.VERSION.SDK_INT >= 26) importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+            }
         }
         layout.addView(input, LinearLayout.LayoutParams(-1, -2))
         group.addView(layout, LinearLayout.LayoutParams(-1, -2).apply {

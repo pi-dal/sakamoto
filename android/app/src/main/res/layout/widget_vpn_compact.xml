@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!-- RemoteViews only supports framework widgets; native tint is required. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools"
+    tools:ignore="UseAppTint"
     android:id="@+id/widget_root" android:layout_width="match_parent" android:layout_height="match_parent"
     android:orientation="vertical" android:gravity="center" android:paddingHorizontal="8dp" android:paddingVertical="0dp" android:background="@drawable/bg_widget">
     <LinearLayout android:id="@+id/widget_compact_content" android:layout_width="match_parent" android:layout_height="wrap_content"

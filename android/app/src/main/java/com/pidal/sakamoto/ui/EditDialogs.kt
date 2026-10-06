@@ -20,7 +20,7 @@ object EditDialogs {
             isSingleLine = !multiline
             minLines = if (multiline) 8 else 1
             isSaveEnabled = !secret
-            if (secret) importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+            if (secret && android.os.Build.VERSION.SDK_INT >= 26) importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
         }
         layout.addView(input, LinearLayout.LayoutParams(-1, -2))
         val root = LinearLayout(context).apply {

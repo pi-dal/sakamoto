@@ -31,7 +31,7 @@ if not env.get("SAKAMOTO_ANDROID_KEYSTORE"):
 for key in ("SAKAMOTO_ANDROID_KEYSTORE", "SAKAMOTO_ANDROID_STORE_PASSWORD", "SAKAMOTO_ANDROID_KEY_ALIAS", "SAKAMOTO_ANDROID_KEY_PASSWORD"):
     if not env.get(key):
         raise SystemExit("Incomplete release signing configuration")
-command = ["./gradlew", ":app:testReleaseUnitTest", ":app:assembleRelease", "--no-daemon", "--max-workers=2"]
+command = ["./gradlew", ":app:testReleaseUnitTest", ":app:lintRelease", ":app:assembleRelease", "--no-daemon", "--max-workers=2"]
 if args.offline:
     command.append("--offline")
 if args.init_script:

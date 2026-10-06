@@ -20,7 +20,7 @@ object VpnDiagnostics {
         val networks = cm.allNetworks.toList()
         val owned = networks.filter { network -> cm.getNetworkCapabilities(network)?.let {
             it.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
-                (android.os.Build.VERSION.SDK_INT < 29 || it.ownerUid == android.os.Process.myUid())
+                (android.os.Build.VERSION.SDK_INT < 30 || it.ownerUid == android.os.Process.myUid())
         } == true }
         // During reload Android briefly reports both old and new VPN agents.
         // Prefer the active owned network; otherwise the newest owned agent.
