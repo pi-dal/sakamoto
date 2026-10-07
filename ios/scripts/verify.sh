@@ -98,14 +98,17 @@ else
 fi
 
 if command -v xcodebuild >/dev/null 2>&1; then
+    XCODE_LOG="${REPO_ROOT}/ios/build/verify-xcodebuild.log"
+    mkdir -p "$(dirname "${XCODE_LOG}")"
     if (cd "${REPO_ROOT}/ios" && xcodebuild -project Sakamoto.xcodeproj \
         -scheme Sakamoto -destination 'generic/platform=iOS Simulator' \
-        -configuration Debug CODE_SIGNING_ALLOWED=NO build >/dev/null); then
+        -configuration Debug CODE_SIGNING_ALLOWED=NO build >"${XCODE_LOG}" 2>&1); then
         echo "xcodebuild (unsigned simulator): PASS"
         echo "NOTE: a signed device build additionally needs DEVELOPMENT_TEAM and"
         echo "provisioned NetworkExtension capabilities — intentionally not attempted here."
     else
         echo "xcodebuild (unsigned simulator): FAIL"
+        tail -n 120 "${XCODE_LOG}"
         FAILED=1
     fi
 else
