@@ -37,7 +37,8 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
     /// target at runtime; this repository deliberately does not invent one
     /// (README.md "Boundaries": no guessed bundle IDs).
     public let providerBundleIdentifier: String
-    private let manager: NEVPNManager
+    private var manager: NEVPNManager
+    private var preferencesLoaded = false
 
     /// Hook for VPN-conflict detection (core: another VPN TUN active while
     /// ours runs). The app target wires this to real system VPN inspection.
@@ -47,7 +48,7 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
 
     public init(
         providerBundleIdentifier: String,
-        manager: NEVPNManager = .shared(),
+        manager: NEVPNManager = NETunnelProviderManager(),
         conflictCheck: @escaping @Sendable () async -> Bool = { false }
     ) {
         self.providerBundleIdentifier = providerBundleIdentifier
@@ -58,19 +59,27 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
     // MARK: TunnelControlling
 
     public func connect(options: TunnelStartOptions) async throws {
+        try await loadProviderPreferences()
         manager.protocolConfiguration = Self.makeProviderProtocol(
             bundleIdentifier: providerBundleIdentifier,
             options: options
         )
+        manager.localizedDescription = "sakamoto"
+        manager.isEnabled = true
         try await savePreferences()
+        try await reloadPreferences()
         try manager.connection.startVPNTunnel(options: options.startTunnelOptions)
     }
 
     public func disconnect() async throws {
+        try await loadProviderPreferences()
         manager.connection.stopVPNTunnel()
     }
 
     public func ping() async throws -> TunnelStateSnapshot {
+        try await loadProviderPreferences()
+        let service = Self.serviceState(for: manager.connection.status)
+        if service != .running { return TunnelStateSnapshot(serviceState: service, detail: nil) }
         let response = try await send(.ping)
         guard response.ok else {
             throw TunnelControllerError.providerReported(response.error ?? "ping failed")
@@ -82,6 +91,7 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
     }
 
     public func reload(configContent: String) async throws {
+        try await loadProviderPreferences()
         let response = try await send(.reloadConfig(content: configContent))
         guard response.ok else {
             throw TunnelControllerError.providerReported(response.error ?? "reloadConfig failed")
@@ -90,12 +100,11 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
 
     public func observations() -> AsyncStream<TunnelObservation> {
         AsyncStream { continuation in
-            let connection = manager.connection
             // NEVPNStatusDidChange is the unified cross-platform status
             // notification (iOS 9+ / macOS 10.11+).
             let observer = NotificationCenter.default.addObserver(
                 forName: .NEVPNStatusDidChange,
-                object: connection,
+                object: nil,
                 queue: nil
             ) { [weak self] _ in
                 guard let self else { return }
@@ -152,6 +161,31 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
     private func currentObservation() -> TunnelObservation {
         let state = Self.serviceState(for: manager.connection.status)
         return TunnelObservation(serviceState: state, conflict: false, detail: nil)
+    }
+
+    private func loadProviderPreferences() async throws {
+        guard !preferencesLoaded else { return }
+        if manager is NETunnelProviderManager {
+            let managers: [NETunnelProviderManager] = try await withCheckedThrowingContinuation { continuation in
+                NETunnelProviderManager.loadAllFromPreferences { managers, error in
+                    if let error { continuation.resume(throwing: error) }
+                    else { continuation.resume(returning: managers ?? []) }
+                }
+            }
+            if let saved = managers.first(where: {
+                ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == providerBundleIdentifier
+            }) { manager = saved }
+        }
+        preferencesLoaded = true
+    }
+
+    private func reloadPreferences() async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            manager.loadFromPreferences { error in
+                if let error { continuation.resume(throwing: error) }
+                else { continuation.resume() }
+            }
+        }
     }
 
     private func savePreferences() async throws {

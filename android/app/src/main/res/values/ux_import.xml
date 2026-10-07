@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ux_import_clipboard">Import from clipboard</string>
+    <string name="ux_import_qr">Scan QR code</string>
+    <string name="ux_import_scan_prompt">Scan a node, subscription or configuration QR code</string>
+    <string name="ux_import_camera_denied">Camera access is needed to scan. You can import from the clipboard instead.</string>
+    <string name="ux_import_invalid">No supported configuration or link found</string>
+    <string name="ux_import_url_title">Import link as</string>
+    <string name="ux_import_url_config">Configuration</string>
+    <string name="ux_import_url_subscription">Subscription</string>
+    <string name="ux_import_confirm_json">Import saved configuration?</string>
+    <string name="ux_import_confirm_conf">Import configuration source?</string>
+    <string name="ux_import_confirm_message">The imported configuration will be saved locally. Your running tunnel will keep its current configuration until you apply the change.</string>
+    <string name="ux_import_saved">Imported locally</string>
+    <string name="ux_import_source_name">Clipboard or QR code</string>
+    <string name="ux_clipboard_offer_node">Node link on your clipboard — import it?</string>
+    <string name="ux_clipboard_offer_url">Configuration or subscription link on your clipboard — import it?</string>
+    <string name="ux_clipboard_offer_config">Configuration on your clipboard — import it?</string>
+    <string name="ux_clipboard_import">Import</string>
+</resources>

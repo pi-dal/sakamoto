@@ -3,31 +3,54 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:background="@color/surface">
+    android:orientation="vertical">
 
-    <com.google.android.material.appbar.MaterialToolbar
-        android:id="@+id/top_app_bar"
+    <!-- Insets belong to the wrapper; the toolbar keeps its own content height. -->
+    <FrameLayout
+        android:id="@+id/top_bar_container"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:minHeight="?attr/actionBarSize"
-        app:title="@string/app_name"
-        app:titleTextAppearance="?attr/textAppearanceTitleLarge"
-        app:navigationIconTint="@color/on_surface" />
+        android:background="@color/surface">
+        <com.google.android.material.appbar.MaterialToolbar
+            android:id="@+id/top_app_bar"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:gravity="center_vertical"
+            android:background="@color/surface"
+            app:contentInsetStart="21dp"
+            app:contentInsetEnd="21dp"
+            app:titleMarginTop="0dp"
+            app:titleMarginBottom="0dp"
+            app:title="@string/app_name"
+            app:titleTextAppearance="@style/Text.Sakamoto.AppBarTitle"
+            app:navigationIconTint="@color/on_surface"
+            app:elevation="0dp" />
+    </FrameLayout>
 
     <FrameLayout
-        android:id="@+id/fragment_container"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1" />
+        android:layout_weight="1"
+        android:background="@color/surface_variant">
+        <FrameLayout
+            android:id="@+id/fragment_container"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
 
-    <com.google.android.material.bottomnavigation.BottomNavigationView
-        android:id="@+id/bottom_nav"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:background="@color/surface"
-        app:labelVisibilityMode="labeled"
-        app:itemHorizontalTranslationEnabled="false"
-        app:menu="@menu/bottom_nav" />
-
+        <FrameLayout
+            android:id="@+id/bottom_bar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom"
+            android:clipChildren="false"
+            android:clipToPadding="false"
+            android:paddingHorizontal="16dp"
+            android:paddingVertical="8dp">
+            <com.pidal.sakamoto.ui.TelegramTabBar
+                android:id="@+id/bottom_nav"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center_horizontal" />
+        </FrameLayout>
+    </FrameLayout>
 </LinearLayout>

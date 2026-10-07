@@ -21,6 +21,7 @@ class NativeBindingSmokeTest : Instrumentation() {
     private var controls = false
     private var widgetSizes = false
     private var homeLayout = false
+    private var navigation = false
     private var widgetToggle = false
 
     override fun onCreate(arguments: Bundle?) {
@@ -32,6 +33,7 @@ class NativeBindingSmokeTest : Instrumentation() {
         controls = arguments?.getString("controls") == "true"
         widgetSizes = arguments?.getString("widgets") == "true"
         homeLayout = arguments?.getString("home") == "true"
+        navigation = arguments?.getString("navigation") == "true"
         widgetToggle = arguments?.getString("toggle") == "true"
         if (widgetToggle) checkVpn = true
         holdMillis = arguments?.getString("holdMillis")?.toLongOrNull()?.coerceIn(0L, 30_000L) ?: 0L
@@ -88,6 +90,79 @@ class NativeBindingSmokeTest : Instrumentation() {
             renders.forEach { bitmap -> canvas.drawBitmap(bitmap, 0f, offset, null); offset += bitmap.height; bitmap.recycle() }
             java.io.File(targetContext.cacheDir, "row-action-verification.png").outputStream().use { result.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
             result.recycle()
+        }
+    }
+
+    private fun checkNavigation() {
+        val activity = startActivitySync(Intent(targetContext, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+        waitForIdleSync()
+        fun descendants(root: android.view.View): List<android.view.View> = listOf(root) +
+            if (root is android.view.ViewGroup) (0 until root.childCount).flatMap { descendants(root.getChildAt(it)) } else emptyList()
+        for ((id, name) in listOf(R.id.nav_config to "config", R.id.nav_data to "data", R.id.nav_settings to "settings")) {
+            runOnMainSync { activity.findViewById<android.view.View>(id).performClick() }
+            waitForIdleSync()
+            runOnMainSync {
+                val bar = activity.findViewById<com.pidal.sakamoto.ui.TelegramTabBar>(R.id.bottom_nav)
+                check(bar.selectedItemId == id && bar.visibility == android.view.View.VISIBLE)
+                val toolbar = activity.findViewById<com.google.android.material.appbar.MaterialToolbar>(R.id.top_app_bar)
+                val density = activity.resources.displayMetrics.density
+                check(toolbar.paddingTop == 0) { "Status inset is compressing the toolbar" }
+                check(kotlin.math.abs(toolbar.height - (56 * density).toInt()) <= 1) { "Unexpected toolbar content height" }
+                val titleView = descendants(toolbar).filterIsInstance<android.widget.TextView>().first { it.text == toolbar.title }
+                check(kotlin.math.abs((titleView.top + titleView.bottom) / 2f - toolbar.height / 2f) <= 2 * density) {
+                    "Toolbar title is not vertically centered"
+                }
+                val container = activity.findViewById<android.view.View>(R.id.top_bar_container)
+                check(container.height == container.paddingTop + toolbar.height) { "Status inset and title height overlap" }
+                val root = activity.window.decorView
+                val text = descendants(activity.findViewById(R.id.fragment_container)).filterIsInstance<android.widget.TextView>().map { it.text.toString() }
+                if (name == "settings") {
+                    check(targetContext.getString(R.string.settings_tailscale_entry) in text)
+                    check(targetContext.getString(R.string.settings_tailscale_detail) !in text)
+                    check(targetContext.getString(R.string.settings_host_boundary) !in text)
+                }
+                if (name == "config") check(targetContext.getString(R.string.profile_index_detail) !in text)
+                if (name == "data") check(targetContext.getString(R.string.data_uplink) in text)
+                val bitmap = android.graphics.Bitmap.createBitmap(root.width, root.height, android.graphics.Bitmap.Config.ARGB_8888)
+                root.draw(android.graphics.Canvas(bitmap))
+                java.io.File(targetContext.cacheDir, "telegram-$name.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                bitmap.recycle()
+            }
+        }
+        runOnMainSync {
+            activity.openChild(com.pidal.sakamoto.ui.AboutFragment(), targetContext.getString(R.string.settings_about_entry))
+            activity.supportFragmentManager.executePendingTransactions()
+            check(activity.findViewById<android.view.View>(R.id.bottom_bar).visibility == android.view.View.GONE)
+            activity.supportFragmentManager.popBackStackImmediate()
+            check(activity.findViewById<android.view.View>(R.id.bottom_bar).visibility == android.view.View.VISIBLE)
+            for (night in listOf(false, true)) for (scale in listOf(1f, 1.3f)) for (rtl in listOf(false, true)) {
+                val config = android.content.res.Configuration(targetContext.resources.configuration).apply {
+                    fontScale = scale
+                    uiMode = (uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK.inv()) or
+                        if (night) android.content.res.Configuration.UI_MODE_NIGHT_YES else android.content.res.Configuration.UI_MODE_NIGHT_NO
+                    setLayoutDirection(java.util.Locale(if (rtl) "ar" else "en"))
+                }
+                val context = android.view.ContextThemeWrapper(targetContext.createConfigurationContext(config), R.style.Theme_Sakamoto)
+                val bar = com.pidal.sakamoto.ui.TelegramTabBar(context)
+                val density = context.resources.displayMetrics.density
+                val width = (360 * density).toInt()
+                bar.measure(android.view.View.MeasureSpec.makeMeasureSpec(width, android.view.View.MeasureSpec.EXACTLY), android.view.View.MeasureSpec.makeMeasureSpec(0, android.view.View.MeasureSpec.UNSPECIFIED))
+                bar.layout(0, 0, bar.measuredWidth, bar.measuredHeight)
+                for (index in 0 until bar.childCount) {
+                    val tab = bar.getChildAt(index) as android.view.ViewGroup
+                    check(tab.width >= 48 * density && tab.height >= 48 * density) { "Tab target is too small" }
+                    val label = tab.getChildAt(1) as android.widget.TextView
+                    check(label.height > 0 && label.layout != null && label.layout.lineCount > 0 &&
+                        label.top >= 0 && label.bottom <= tab.height && label.layout.height <= label.height) {
+                        "Tab label clipped at large type: h=${label.height} layout=${label.layout?.height} bottom=${label.bottom} tab=${tab.height}"
+                    }
+                }
+                val bitmap = android.graphics.Bitmap.createBitmap(bar.width, bar.height, android.graphics.Bitmap.Config.ARGB_8888)
+                bar.draw(android.graphics.Canvas(bitmap))
+                java.io.File(targetContext.cacheDir, "telegram-tabs-$night-$scale-$rtl.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                bitmap.recycle()
+            }
+            activity.findViewById<android.view.View>(R.id.nav_home).performClick()
         }
     }
 
@@ -269,6 +344,10 @@ class NativeBindingSmokeTest : Instrumentation() {
     override fun onStart() {
         val results = Bundle()
         try {
+            // Instrumentation starts concurrently with Application.onCreate.
+            // Wait for main-thread native setup before touching gomobile classes;
+            // otherwise Libbox/SetupOptions static initializers can deadlock.
+            runOnMainSync { }
             check(Mobilecore.sessionPhase("Running", "Reachable", false) == "Reachable")
             check(Mobilecore.nextRoutingMode("Rule") == "Global")
             check(Libbox.version().isNotBlank())
@@ -295,6 +374,7 @@ class NativeBindingSmokeTest : Instrumentation() {
                 check(com.pidal.sakamoto.runtime.ConfigRepository.sourceFiles(targetContext).any { it.name == "policy.json" })
                 check(com.pidal.sakamoto.runtime.ConfigRepository.sourceFiles(targetContext).any { it.name == "chain.json" })
             }
+            if (navigation) checkNavigation()
             if (checkVpn) {
                 check(VpnService.prepare(targetContext) == null) { "VPN consent is required" }
                 if (widgetToggle) com.pidal.sakamoto.runtime.SystemStatusSurface.toggle(targetContext).send()
@@ -370,7 +450,7 @@ class NativeBindingSmokeTest : Instrumentation() {
                 sendStatus(0, Bundle().apply { putString("stream", "VPN running: system inspection window\n") })
                 Thread.sleep(holdMillis)
             }
-            results.putString("stream", "PASS: JNI + network permission + VPN service registration${if (checkUi) " + trailing row actions/48dp/large font/RTL/click isolation" else ""}${if (checkVpn) " + real VPN startup + mode stream" else ""}${if (probe) " + application Check DNS/TLS/HTTPS204 + Reachable state" else ""}${if (checkSnapshot) " + host policy/exit snapshot" else ""}${if (controls) " + native reload + notification check/stop + widget provider" else ""}${if (widgetSizes) " + three widget providers/resizing/48dp at font1.3" else ""}${if (homeLayout) " + Home connection states/font1.3/status-switch click isolation" else ""}${if (widgetToggle) " + widget direct connect/disconnect/reconnect" else ""}\n")
+            results.putString("stream", "PASS: JNI + network permission + VPN service registration${if (checkUi) " + trailing row actions/48dp/large font/RTL/click isolation" else ""}${if (navigation) " + Telegram tabs/Config/Data/Settings/back/font1.3/RTL/light-dark" else ""}${if (checkVpn) " + real VPN startup + mode stream" else ""}${if (probe) " + application Check DNS/TLS/HTTPS204 + Reachable state" else ""}${if (checkSnapshot) " + host policy/exit snapshot" else ""}${if (controls) " + native reload + notification check/stop + widget provider" else ""}${if (widgetSizes) " + three widget providers/resizing/48dp at font1.3" else ""}${if (homeLayout) " + Home connection states/font1.3/status-switch click isolation" else ""}${if (widgetToggle) " + widget direct connect/disconnect/reconnect" else ""}\n")
             finish(Activity.RESULT_OK, results)
         } catch (error: Throwable) {
             val safe = error.message.orEmpty().replace(Regex("https?://\\S+"), "[URL]").take(200)

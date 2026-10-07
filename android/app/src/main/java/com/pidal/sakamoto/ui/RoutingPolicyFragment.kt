@@ -72,7 +72,9 @@ class RoutingPolicyFragment : androidx.fragment.app.Fragment() {
         }
         page.row(group, getString(R.string.policy_final), snapshot.final, R.drawable.ic_route) {
             EditDialogs.choice(requireContext(), getString(R.string.policy_final), ConfigEdits.outboundTags(content), snapshot.final) {
-                save(ConfigEdits.finalOutbound(ConfigRepository.load(requireContext()).generatedContent, it))
+                val latest = ConfigRepository.load(requireContext()).generatedContent
+                check(latest == content) { getString(R.string.editor_conflict) }
+                save(ConfigEdits.finalOutbound(latest, it))
             }
         }
         page.note(getString(R.string.device_edits_note))

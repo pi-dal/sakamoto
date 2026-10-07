@@ -1,5 +1,5 @@
 import SwiftUI
-import Mobilecore
+import Libbox
 import SakamotoKit
 
 // Settings tab: the TUI's Settings semantics, adapted to the iOS trust
@@ -169,10 +169,11 @@ struct SettingsView: View {
     var body: some View {
         List {
             Section("Connections") {
-                NavigationLink("Routing & tunnel settings") {
+                NavigationLink("Tunnel settings") {
                     List { runtimeSection; editableSection; applySection }
                         .listStyle(.insetGrouped)
                         .navigationTitle("Tunnel settings")
+                        .navigationBarTitleDisplayMode(.inline)
                         .confirmationDialog("Routing mode", isPresented: $showModes, titleVisibility: .visible) {
                             ForEach(RoutingMode.allCases, id: \.rawValue) { mode in
                                 Button(mode.rawValue) { Task { await model.setRoutingMode(mode) } }
@@ -186,7 +187,7 @@ struct SettingsView: View {
                             Text("Reloading the tunnel can interrupt active connections. Host-side generation is not performed on this device.")
                         }
                 }
-                NavigationLink("Built-in Tailscale") {
+                NavigationLink("Tailscale") {
                     TailscaleView(store: model.store, tunnel: model.tunnel, commanding: commanding)
                 }
             }
@@ -194,6 +195,7 @@ struct SettingsView: View {
                 NavigationLink("iCloud Sync") {
                     List { iCloudSyncSection }
                         .listStyle(.insetGrouped).navigationTitle("iCloud Sync")
+                        .navigationBarTitleDisplayMode(.inline)
                         .confirmationDialog("Sync sources to iCloud?", isPresented: $confirmSyncEnable, titleVisibility: .visible) {
                             Button("Enable sync") { sync.confirmEnable() }
                             Button("Cancel", role: .cancel) {}
@@ -206,12 +208,13 @@ struct SettingsView: View {
             Section("Advanced") {
                 NavigationLink("Host-owned configuration") {
                     List { hostOwnedSection }.listStyle(.insetGrouped).navigationTitle("Host configuration")
+                        .navigationBarTitleDisplayMode(.inline)
                 }
             }
             aboutSection
         }
         .navigationTitle("Settings")
-        .listStyle(.insetGrouped)
+        .sakamotoRootPage()
         .task {
             model.activate()
             sync.activate()
@@ -393,13 +396,8 @@ struct SettingsView: View {
 
     private var aboutSection: some View {
         Section {
-            NavigationLink { AboutView() } label: {
-                HStack {
-                    Text("About sakamoto")
-                    Spacer()
-                    Text("License & credits").foregroundStyle(.secondary)
-                }
-            }
+            NavigationLink("Widgets & Shortcuts") { SystemSurfacesView() }
+            NavigationLink("About sakamoto") { AboutView() }
         } header: {
             Text("App")
         }

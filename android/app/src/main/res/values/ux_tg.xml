@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ux_tg_needs_sync">Needs sync</string>
+    <string name="ux_tg_applying">Applying…</string>
+    <string name="ux_tg_config_error">Check VPN status</string>
+    <string name="ux_tg_no_connections">No recent connections</string>
+</resources>

@@ -5,6 +5,17 @@ import SwiftUI
 /// Liquid Glass is available only on iOS 26. Older supported releases keep the
 /// same hierarchy with a native material fallback instead of a fake blur.
 extension View {
+    /// Top-level destinations share Home's grouped canvas. Native large titles
+    /// collapse on scroll; the iOS 26 tab bar keeps its system Liquid Glass.
+    func sakamotoRootPage() -> some View {
+        self
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(Color(uiColor: .systemGroupedBackground))
+            .navigationBarTitleDisplayMode(.large)
+            .toolbarBackground(.hidden, for: .navigationBar)
+    }
+
     @ViewBuilder
     func sakamotoGlassCard(cornerRadius: CGFloat = 20) -> some View {
         if #available(iOS 26, *) {

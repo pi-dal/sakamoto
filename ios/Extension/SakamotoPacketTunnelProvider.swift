@@ -131,11 +131,19 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
         }
         try commandServer!.start()
 
-        try await startService(content: options.configContent)
+        do {
+            try await startService(content: options.configContent)
+            SystemSurfaceStore.write(SystemSurfaceSnapshot(serviceState: .running, phase: .tunRunning))
+        } catch {
+            SystemSurfaceStore.write(SystemSurfaceSnapshot(serviceState: .unavailable, phase: .unavailable))
+            throw error
+        }
         writeTunnelMessage("(packet-tunnel): Here I stand")
     }
 
     override open func stopTunnel(with reason: NEProviderStopReason) async {
+        SystemSurfaceStore.write(SystemSurfaceSnapshot(serviceState: .stopping, phase: .stopping))
+        defer { SystemSurfaceStore.write(SystemSurfaceSnapshot(serviceState: .stopped, phase: .disconnected)) }
         writeTunnelMessage("(packet-tunnel) stopping, reason: \(reason.rawValue)")
         do {
             try commandServer?.closeService()

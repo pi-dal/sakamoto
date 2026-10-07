@@ -1,6 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
-import Mobilecore
+import Libbox
 import SakamotoKit
 
 // Config tab, mirroring the macOS TUI sections (docs/tui.md): Import config,
@@ -176,7 +176,7 @@ final class ConfigModel: ObservableObject {
     /// Parse → report → commit. Throwing keeps the last-known-good import
     /// untouched on any parse failure (docs/import.md: invalid imports do
     /// not replace the last working config).
-    private func importContent(_ content: String, displaySource: String) throws -> ImportSummary {
+    func importContent(_ content: String, displaySource: String) throws -> ImportSummary {
         var bridgeError: NSError?
         let reportJSON = MobilecoreParseConfContentJSON(content, &bridgeError)
         if let bridgeError {
@@ -316,22 +316,114 @@ final class ConfigModel: ObservableObject {
 
 struct ConfigView: View {
     @ObservedObject var model: ConfigModel
+    @Environment(\.scenePhase) private var scenePhase
     @State private var showImportOptions = false
     @State private var showURLImport = false
     @State private var showEditor = false
     @State private var confirmApply = false
+    @State private var showScanner = false
+    @State private var showURLKind = false
+    @State private var pendingImport: ImportPayload?
+    @State private var confirmTextImport = false
+    @State private var payloadError: String?
+    /// Foreground clipboard offer: presence-only detection (hasStrings /
+    /// hasURLs), deduped by UIPasteboard.changeCount. Payload content is
+    /// never read silently — the row embeds a user-directed PasteButton.
+    @State private var clipboardOffer: ClipboardOffer?
+    @State private var clipboardOfferContent: ClipboardOffer.Content?
 
     var body: some View {
         List {
-            stateSection
-            importSection
-            policySection
-            nodesSourcesSection
-            generateSection
-            advancedSection
+            Section {
+                if let imported = model.store.importedSource {
+                    LabeledRow("Configuration", imported.displaySource)
+                }
+                Button("Import configuration…") { showImportOptions = true }
+                    .disabled(model.importing)
+                if let clipboardOfferContent {
+                    clipboardOfferRow(content: clipboardOfferContent)
+                }
+                PasteButton(payloadType: String.self) { strings in
+                    guard let text = strings.first else { return }
+                    consumeClipboardOffer()
+                    receiveImport(text)
+                }
+                .controlSize(.large)
+                .frame(minHeight: 44)
+                .accessibilityLabel("Import from clipboard")
+                .disabled(model.importing)
+                Button("Scan QR code") { pendingImport = nil; showScanner = true }
+                    .disabled(model.importing)
+                if let payloadError { Text(payloadError).font(.footnote).foregroundStyle(.red) }
+                if let error = model.importError {
+                    Text(error).font(.footnote).foregroundStyle(.red)
+                }
+            }
+            Section("Manage") {
+                NavigationLink("Policy") {
+                    List { policySection }
+                        .listStyle(.insetGrouped)
+                        .navigationTitle("Policy")
+                        .navigationBarTitleDisplayMode(.inline)
+                }
+                NavigationLink("Nodes & sources") {
+                    List { nodesSourcesSection }
+                        .listStyle(.insetGrouped)
+                        .navigationTitle("Nodes & sources")
+                        .navigationBarTitleDisplayMode(.inline)
+                }
+                NavigationLink("Import details") {
+                    List { importSection }
+                        .listStyle(.insetGrouped)
+                        .navigationTitle("Import details")
+                        .navigationBarTitleDisplayMode(.inline)
+                }
+            }
+            Section("Apply changes") {
+                LabeledRow("Config state", model.store.configState.rawValue)
+                Button("Apply saved configuration") { confirmApply = true }
+                    .disabled(model.store.configState == .clean)
+                Button("Edit generated configuration…") { showEditor = true }
+                if let lastAction = model.store.lastAction {
+                    DisclosureGroup("Last action") {
+                        Text(lastAction).font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+            }
         }
         .navigationTitle("Config")
-        .listStyle(.insetGrouped)
+        .sakamotoRootPage()
+        .onAppear(perform: probeClipboard)
+        .onChange(of: scenePhase) { phase in
+            if phase == .active { probeClipboard() }
+        }
+        .sheet(isPresented: $showScanner, onDismiss: processScannedImport) {
+            QRScannerView { code in
+                do { pendingImport = try ImportPayload.detect(code); payloadError = nil }
+                catch { pendingImport = nil; payloadError = "No supported configuration or link found" }
+                showScanner = false
+            }
+        }
+        .confirmationDialog("Import link as", isPresented: $showURLKind, titleVisibility: .visible) {
+            Button("Configuration") {
+                model.importURLText = pendingImport?.text ?? ""
+                pendingImport = nil
+                showURLImport = true
+            }
+            Button("Subscription") {
+                model.newSubscriptionURL = pendingImport?.text ?? ""
+                model.newSubscriptionName = ""
+                pendingImport = nil
+                model.showAddSubscription = true
+            }
+            Button("Cancel", role: .cancel) { pendingImport = nil }
+        }
+        .confirmationDialog("Import configuration?", isPresented: $confirmTextImport, titleVisibility: .visible) {
+            Button("Import") { commitTextImport() }
+            Button("Cancel", role: .cancel) { pendingImport = nil }
+        } message: {
+            Text("Save locally. The running tunnel keeps its current configuration until you apply the change.")
+        }
         .fileImporter(
             isPresented: $model.showFileImporter,
             allowedContentTypes: [UTType(filenameExtension: "conf") ?? .data, .plainText, .json],
@@ -427,6 +519,114 @@ struct ConfigView: View {
         } message: {
             Text(model.pendingSubscriptionDeletion.map { SecretMasking.maskSecret($0.url) } ?? "")
         }
+    }
+
+    // MARK: Clipboard offer
+
+    /// Presence-only probe: changeCount revision + hasStrings/hasURLs say
+    /// whether something is waiting, never what it is. Dismissed revisions
+    /// stay suppressed; a new copy (new changeCount) offers again.
+    private func probeClipboard() {
+        let pasteboard = UIPasteboard.general
+        let revision = pasteboard.changeCount
+        var offer = clipboardOffer ?? ClipboardOffer()
+        guard offer.shouldOffer(revision: revision) else {
+            clipboardOffer = offer
+            clipboardOfferContent = nil
+            return
+        }
+        if pasteboard.hasURLs { clipboardOfferContent = .link }
+        else if pasteboard.hasStrings { clipboardOfferContent = .text }
+        else { clipboardOfferContent = nil }
+        clipboardOffer = offer
+    }
+
+    private func consumeClipboardOffer() {
+        var offer = clipboardOffer ?? ClipboardOffer()
+        offer.dismiss(revision: UIPasteboard.general.changeCount)
+        clipboardOffer = offer
+        clipboardOfferContent = nil
+    }
+
+    /// Compact offer row: honest wording ("text" / "link" — the payload is
+    /// unknown until the user directs the paste), a real PasteButton that
+    /// routes through the same import pipeline, and a dismiss affordance.
+    private func clipboardOfferRow(content: ClipboardOffer.Content) -> some View {
+        HStack(spacing: 12) {
+            Text(content == .link
+                 ? "A link is on your clipboard — paste to import it"
+                 : "Text is on your clipboard — paste to import it")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            Spacer()
+            PasteButton(payloadType: String.self) { strings in
+                guard let text = strings.first else { return }
+                consumeClipboardOffer()
+                receiveImport(text)
+            }
+            .controlSize(.large)
+            .frame(minWidth: 44, minHeight: 44)
+            .accessibilityLabel("Paste clipboard import suggestion")
+            .disabled(model.importing)
+            Button {
+                consumeClipboardOffer()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Dismiss clipboard import suggestion")
+        }
+    }
+
+    private func receiveImport(_ raw: String) {
+        do { pendingImport = try ImportPayload.detect(raw); payloadError = nil; routePendingImport() }
+        catch { pendingImport = nil; payloadError = "No supported configuration or link found" }
+    }
+
+    private func processScannedImport() {
+        guard pendingImport != nil else { return }
+        routePendingImport()
+    }
+
+    private func routePendingImport() {
+        guard let candidate = pendingImport else { return }
+        switch candidate.kind {
+        case .node:
+            var error: NSError?
+            _ = MobilecoreParseShareLink(candidate.text, &error)
+            guard error == nil else { payloadError = "Invalid node link"; pendingImport = nil; return }
+            model.newNodeLink = candidate.text
+            model.nodeFormError = nil
+            pendingImport = nil
+            model.showAddNode = true
+        case .url: showURLKind = true
+        case .generatedConfig, .conf: confirmTextImport = true
+        }
+    }
+
+    private func commitTextImport() {
+        guard let candidate = pendingImport else { return }
+        defer { pendingImport = nil }
+        do {
+            if candidate.kind == .generatedConfig {
+                var error: NSError?
+                _ = MobilecoreValidateConfigJSON(candidate.text, &error)
+                if let error { throw error }
+                _ = LibboxCheckConfig(candidate.text, &error)
+                if let error { throw error }
+                model.store.save(candidate.text)
+                model.draft = model.store.content
+            } else {
+                model.importReport = try model.importContent(candidate.text, displaySource: "Clipboard or QR code")
+                model.importError = nil
+            }
+            payloadError = nil
+        } catch { payloadError = "Invalid configuration. The saved configuration was kept." }
     }
 
     // MARK: State

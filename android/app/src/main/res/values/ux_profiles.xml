@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- profiles lane: NekoBox group-tab profile UX. Only new strings; shared
+         strings.xml is untouched. -->
+    <string name="ux_profiles_auto_suffix">· auto</string>
+    <string name="ux_profiles_state_selected">Selected</string>
+    <string name="ux_profiles_state_stale">Last test %1$d ms</string>
+    <string name="ux_profiles_stale_label">Last test</string>
+    <string name="ux_profiles_group_detail">Group · %1$d nodes</string>
+    <string name="ux_profiles_group_detail_unlabeled">Group</string>
+    <string name="ux_profiles_sources_note">Edit node links and subscription sources here. Source changes require host generation before applying. Long press a source to remove it with Undo.</string>
+</resources>

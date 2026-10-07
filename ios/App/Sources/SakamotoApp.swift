@@ -25,6 +25,8 @@ struct SakamotoApp: App {
     @StateObject private var iCloudSyncModel: ICloudSyncModel
     @StateObject private var s3SyncModel: S3SyncModel
 
+    @State private var selectedTab = 0
+
     private let tunnel: NETunnelController
     private let commanding: LibboxCoreCommanding
 
@@ -60,25 +62,32 @@ struct SakamotoApp: App {
 
     var body: some Scene {
         WindowGroup {
-            TabView {
+            TabView(selection: $selectedTab) {
                 NavigationStack {
                     HomeView(model: homeModel)
                 }
                 .tabItem { Label("Home", systemImage: "house") }
+                .tag(0)
                 NavigationStack {
                     ConfigView(model: configModel)
                 }
                 .tabItem { Label("Config", systemImage: "slider.horizontal.3") }
+                .tag(1)
                 NavigationStack {
                     DataView(commanding: commanding)
                 }
                 .tabItem { Label("Data", systemImage: "chart.bar") }
+                .tag(2)
                 NavigationStack {
                     SettingsView(model: settingsModel, sync: iCloudSyncModel, s3: s3SyncModel, commanding: commanding)
                 }
                 .tabItem { Label("Settings", systemImage: "gearshape") }
+                .tag(3)
             }
             .tint(.primary)
+            .onOpenURL { url in
+                if url.scheme == "sakamoto", url.host == "home" { selectedTab = 0 }
+            }
         }
     }
 }

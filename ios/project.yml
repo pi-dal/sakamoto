@@ -27,8 +27,8 @@ settings:
   base:
     DEVELOPMENT_TEAM: ""
     CODE_SIGN_STYLE: Automatic
-    CURRENT_PROJECT_VERSION: 1
-    MARKETING_VERSION: 0.1.0
+    CURRENT_PROJECT_VERSION: 2
+    MARKETING_VERSION: 0.1.1
     SWIFT_VERSION: "5.10"
 
 targets:
@@ -37,6 +37,7 @@ targets:
     platform: iOS
     sources:
       - path: App/Sources
+      - path: Shared
       - path: App/Assets.xcassets
     dependencies:
       - package: SakamotoiOS
@@ -46,10 +47,13 @@ targets:
       - target: SakamotoPacketTunnel
         embed: true
         codeSign: true
+      - target: SakamotoWidgets
+        embed: true
+        codeSign: true
+      # Static combined gomobile archive includes both Libbox and Mobilecore
+      # APIs. It must be linked, not embedded as an installable framework.
       - framework: Frameworks/Libbox.xcframework
-        embed: true
-      - framework: Frameworks/Mobilecore.xcframework
-        embed: true
+        embed: false
       - sdk: libresolv.tbd
     settings:
       base:
@@ -62,6 +66,12 @@ targets:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: sakamoto
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSCameraUsageDescription: Scan QR codes to import nodes, subscriptions or configurations.
+        CFBundleURLTypes:
+          - CFBundleURLName: com.pidal.sakamoto
+            CFBundleURLSchemes: [sakamoto]
         SakamotoAppGroupIdentifier: group.com.pidal.sakamoto
         SakamotoProviderBundleIdentifier: com.pidal.sakamoto.PacketTunnel
         UILaunchScreen: {}
@@ -98,10 +108,41 @@ targets:
       path: Extension/Info.plist
       properties:
         CFBundleDisplayName: sakamoto Tunnel
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.networkextension.packet-tunnel
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SakamotoPacketTunnelProvider
         SakamotoAppGroupIdentifier: group.com.pidal.sakamoto
+
+  SakamotoWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Widgets
+      - path: Shared
+    dependencies:
+      - package: SakamotoiOS
+        product: SakamotoKit
+      - package: SakamotoiOS
+        product: SakamotoNE
+      - sdk: WidgetKit.framework
+      - sdk: AppIntents.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pidal.sakamoto.Widgets
+        CODE_SIGN_ENTITLEMENTS: Widgets/SakamotoWidgets.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+    info:
+      path: Widgets/Info.plist
+      properties:
+        CFBundleDisplayName: sakamoto Widgets
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
 
 schemes:
   Sakamoto:
@@ -109,5 +150,6 @@ schemes:
       targets:
         Sakamoto: all
         SakamotoPacketTunnel: all
+        SakamotoWidgets: all
     run:
       config: Debug

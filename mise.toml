@@ -49,7 +49,7 @@ depends = ["mobile:tools"]
 run = "ios/scripts/build-libbox.sh"
 
 [tasks."ios:mobilecore"]
-description = "Build shared Go bridge for iOS/simulator"
+description = "Build combined iOS libbox and Go bridge (compatibility alias)"
 depends = ["mobile:tools"]
 run = "ios/scripts/build-mobilecore.sh"
 
@@ -61,7 +61,7 @@ run = "ios/scripts/verify.sh"
 
 [tasks."ios:build"]
 description = "Build native frameworks and verify the iOS app"
-run = ["mise run ios:libbox", "mise run ios:mobilecore", "mise run ios:verify"]
+run = ["mise run ios:libbox", "mise run ios:verify"]
 
 [tasks."ios:package"]
 description = "Package an unsigned simulator .app zip (frameworks must already exist)"

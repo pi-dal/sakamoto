@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Editing lane strings. Every name carries the ux_editing_ prefix; do not
+     touch shared strings.xml from this lane. -->
+<resources>
+    <string name="ux_editing_section_server">Server</string>
+    <string name="ux_editing_section_auth">Authentication</string>
+    <string name="ux_editing_section_security">Security</string>
+    <string name="ux_editing_section_transport">Transport</string>
+    <string name="ux_editing_section_chain">Chain</string>
+    <string name="ux_editing_section_match">Match &amp; action</string>
+
+    <string name="ux_editing_field_username">Username</string>
+    <string name="ux_editing_field_password">Password</string>
+    <string name="ux_editing_field_uuid">UUID</string>
+    <string name="ux_editing_field_auth_str">Auth password</string>
+    <string name="ux_editing_field_private_key">Private key</string>
+    <string name="ux_editing_field_method">Encryption method</string>
+    <string name="ux_editing_field_flow">Flow</string>
+    <string name="ux_editing_field_encryption">Encryption</string>
+    <string name="ux_editing_field_alter_id">Alter ID</string>
+    <string name="ux_editing_field_congestion">Congestion control</string>
+    <string name="ux_editing_field_up_mbps">Upstream Mbps</string>
+    <string name="ux_editing_field_down_mbps">Downstream Mbps</string>
+    <string name="ux_editing_field_alpn">TLS ALPN</string>
+    <string name="ux_editing_field_insecure">Skip certificate verification</string>
+    <string name="ux_editing_field_fingerprint">uTLS fingerprint</string>
+    <string name="ux_editing_field_reality_key">Reality public key</string>
+    <string name="ux_editing_field_reality_id">Reality short ID</string>
+    <string name="ux_editing_field_path">Path</string>
+    <string name="ux_editing_field_host">Host</string>
+    <string name="ux_editing_field_service_name">Service name</string>
+    <string name="ux_editing_transport_type">Transport type</string>
+
+    <string name="ux_editing_pred_domain">Domain</string>
+    <string name="ux_editing_pred_domain_suffix">Domain suffix</string>
+    <string name="ux_editing_pred_domain_keyword">Domain keyword</string>
+    <string name="ux_editing_pred_ip_cidr">IP CIDR</string>
+    <string name="ux_editing_pred_rule_set">Rule set</string>
+    <string name="ux_editing_pred_protocol">Protocol</string>
+    <string name="ux_editing_pred_clash_mode">Clash mode</string>
+    <string name="ux_editing_pred_network">Network</string>
+    <string name="ux_editing_pred_port">Ports</string>
+    <string name="ux_editing_pred_ip_is_private">Private IP</string>
+    <string name="ux_editing_option_none">None</string>
+
+    <string name="ux_editing_error_number">Enter a whole number</string>
+    <string name="ux_editing_error_port">Enter a port between 1 and 65535</string>
+    <string name="ux_editing_error_match">Add at least one match value</string>
+    <string name="ux_editing_error_bool">Use on or off</string>
+    <string name="ux_editing_error_missing_entry">This entry no longer exists in the saved configuration</string>
+
+    <string name="ux_editing_sheet_node_title">Node link</string>
+    <string name="ux_editing_sheet_subscription_title">Subscription</string>
+    <string name="ux_editing_exit_auth">Credentials set</string>
+    <string name="ux_editing_exit_plain">No credentials</string>
+</resources>

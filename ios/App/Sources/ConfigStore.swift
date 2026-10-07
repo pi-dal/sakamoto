@@ -1,5 +1,5 @@
 import Foundation
-import Mobilecore
+import Libbox
 import SakamotoKit
 
 // Single owner of the SAVED sing-box config content and its ConfigState

@@ -74,15 +74,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ios/Frameworks
-          key: ios-frameworks-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.build }}-${{ hashFiles('mise.toml', 'go.mod', 'go.sum', 'pkg/**', 'internal/**', 'ios/scripts/build-*.sh', 'ios/scripts/flatten-gomobile-framework.sh') }}
+          key: ios-frameworks-v4-combined-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.build }}-${{ hashFiles('mise.toml', 'go.mod', 'go.sum', 'pkg/**', 'internal/**', 'ios/scripts/build-*.sh', 'ios/scripts/flatten-gomobile-framework.sh') }}
 
-      - name: Build Libbox framework
+      - name: Build combined Libbox and Mobilecore framework
         if: steps.frameworks.outputs.cache-hit != 'true'
         run: mise run ios:libbox
-
-      - name: Build Mobilecore framework
-        if: steps.frameworks.outputs.cache-hit != 'true'
-        run: mise run ios:mobilecore
 
       - name: Verify Go, Swift and unsigned simulator app
         run: mise run ios:verify

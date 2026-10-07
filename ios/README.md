@@ -9,8 +9,7 @@ tunnel process; this is not a CLI probe and not an external-daemon count).
 
 | Piece | Status |
 |---|---|
-| `Libbox.xcframework` (ios + simulator, `with_tailscale` + `with_gvisor`) | builds via `scripts/build-libbox.sh` (verified) |
-| `Mobilecore.xcframework` (phase/latency/config-state folding) | builds via `scripts/build-mobilecore.sh` (verified) |
+| Combined `Libbox.xcframework` (libbox + mobilecore, iOS + simulator, `with_tailscale` + `with_gvisor`) | builds via `scripts/build-libbox.sh`; one Go runtime per process |
 | Xcode app + PacketTunnel extension targets | `project.yml` → `xcodegen generate` (verified) |
 | `ExtensionPlatformInterface` (iOS subset, upstream port) | `Extension/ExtensionPlatformInterface.swift` (verified by unsigned build) |
 | Provider compiling against real Libbox API | `Extension/SakamotoPacketTunnelProvider.swift` (verified by unsigned build) |
@@ -20,7 +19,31 @@ tunnel process; this is not a CLI probe and not an external-daemon count).
 | Config tab: Import / Policy / Nodes & sources / Generate·Apply | `App/Sources/ConfigView.swift` + `ConfigStore.swift`; parsing/validation via `pkg/mobileconf` + `pkg/mobilecore/importer.go` (real, tested) |
 | iCloud source sync (Settings → Sync sources to iCloud) | `SakamotoKit/ICloudSyncStore.swift` (actor, conflict-safe baseline pass, unit-tested in memory) + `App/Sources/ICloudSyncModel.swift` + real ubiquity container / `NSFileCoordinator` writes; entitlements are real declarations with a **placeholder container id** |
 | Unsigned simulator build | `xcodebuild … CODE_SIGNING_ALLOWED=NO build` (verified) |
+| Home Screen widgets (small/medium/large) | `Widgets/SakamotoWidgets.swift`; interactive on iOS 17+, opens the app to execute VPN actions |
+| Shortcuts / Siri | Connect, Disconnect, Toggle and Get VPN status in `Shared/SystemSurfaceIntents.swift` |
+| Control Center control | Native VPN toggle on iOS 18+, shared saved-profile operation |
 | Device build / VPN entitlement grant | **blocked on a real signing Team** (see below) — not faked |
+
+## Widgets, Shortcuts and Control Center
+
+Connect once in the app to create and authorize its VPN profile. System actions
+load only the sakamoto provider's saved profile, read current system state and
+request start/stop. They open the app to use its VPN capability; background
+operation is not claimed. Starting and Stopping are requests, not connection
+confirmation. On iOS 16 the widget opens Home; interactive widget buttons require
+iOS 17, and the Control Center toggle requires iOS 18.
+
+The app and provider write a display-only App Group snapshot. Widgets show the
+system VPN state, node label, mode and measured latency; no config, credentials or
+logs are copied into widget storage. Latency and network-check results expire
+after 120 seconds. Widget timelines are scheduled for refresh, with their actual
+execution cadence controlled by iOS.
+
+Provision the same App Group for the app, tunnel and WidgetKit extension. The
+WidgetKit extension is registered in Simulator, but desktop rendering, Shortcuts
+execution and VPN actions need runtime verification with a working WidgetKit host
+and a signed NetworkExtension profile. Compile success alone does not validate
+those operations.
 
 ## App icon
 
@@ -100,7 +123,7 @@ Direct`, config states, notice kinds):
 
 ```
 internal/core (Go constants)
-  → pkg/mobilecore (gomobile bind → Mobilecore.xcframework)
+  → pkg/mobilecore (bound alongside libbox in Libbox.xcframework)
   → ios/contract/vocabulary.json (golden, pinned by go test + swift test)
   → SakamotoKit enums (pinned by ContractAlignmentTests)
 ```
@@ -117,8 +140,10 @@ changes are the Rule → Global → Direct cycle; unavailable modes surface
 ## Config tab: what is real on device, what stays host-owned
 
 `pkg/mobileconf` is the platform-independent parser (stdlib only, no
-sing-box imports — Mobilecore.xcframework is statically linked next to
-Libbox.xcframework and duplicate sing-box packages would break app linking).
+sing-box imports). The app and extension link the combined static
+`Libbox.xcframework` without embedding it. Its umbrella header exports both
+Libbox and Mobilecore APIs through `import Libbox`. Binding these packages
+separately would initialize two Go runtimes and can crash at startup.
 `internal/gen` delegates to it, so the iOS importer validates with the exact
 host semantics. On device:
 
@@ -200,7 +225,7 @@ deliberately has NO iCloud entitlements: sync is an app-process feature.
 | `Tests/SakamotoKitTests/` | contract alignment + IPC codec + Data folding + Settings merges + Tailscale vocabulary/injection/provisioning tests |
 | `contract/vocabulary.json` | golden generated from Go |
 | `scripts/build-libbox.sh` | reproducible Libbox.xcframework build (see notes below) |
-| `scripts/build-mobilecore.sh` | reproducible Mobilecore.xcframework bind |
+| `scripts/build-mobilecore.sh` | compatibility alias for the combined bind |
 | `scripts/flatten-gomobile-framework.sh` | gomobile deep→shallow bundle fix (required for Xcode 26 embedding) |
 | `Frameworks/` | built xcframeworks — **git-ignored, never committed** |
 

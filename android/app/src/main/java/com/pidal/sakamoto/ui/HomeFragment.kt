@@ -65,6 +65,10 @@ class HomeFragment : Fragment() {
         b.connectionStatusEntry.setOnClickListener {
             (requireActivity() as com.pidal.sakamoto.MainActivity).openChild(VpnStatusFragment(), getString(R.string.vpn_status_title))
         }
+        b.noticeRetry.setOnClickListener {
+            // Recovery stays on this page: retry the connection attempt itself.
+            requestConnect()
+        }
         b.modeRow.setOnClickListener { chooseMode() }
         b.selectedValue.setOnClickListener { openProfiles() }
         b.urlTestButton.setOnClickListener {
@@ -95,7 +99,7 @@ class HomeFragment : Fragment() {
     }
 
     fun requestConnect() {
-        if (MobilecoreRuntime.state.value.serviceState in setOf("Running", "Starting")) return
+        if (MobilecoreRuntime.state.value.serviceState in setOf("Running", "Starting", "Stopping")) return
         connect()
     }
 
@@ -164,7 +168,9 @@ class HomeFragment : Fragment() {
         b.groupsContainer.removeAllViews()
         val page = GroupedPage(requireContext())
         val section = page.section(getString(R.string.profiles_title))
-        page.row(section, getString(R.string.profile_open_all), getString(R.string.profile_group_count, groups.size), R.drawable.ic_node) { openProfiles() }
+        if (groups.isEmpty()) {
+            page.row(section, getString(R.string.profile_open_all), getString(R.string.ux_pages_home_no_groups), R.drawable.ic_node) { openProfiles() }
+        }
         for (group in groups) {
             page.row(section, group.tag, group.selected.ifEmpty { if (isLive) "—" else getString(R.string.profile_saved) }, R.drawable.ic_route) { openProfiles(group.tag) }
         }
@@ -219,9 +225,10 @@ class HomeFragment : Fragment() {
             else -> getString(R.string.node_latency_untested)
         }
         b.urlTestButton.isEnabled = running && state.selectedNode.isNotEmpty() && !state.selectedNodeTesting
-        b.routingNote.setText(if (running) R.string.node_testing_hint else R.string.routing_connect_hint)
         b.noticeValue.text = state.notice.orEmpty()
         // Successful probe observations are not errors.
         b.noticePanel.visibility = if (state.notice.isNullOrEmpty()) View.GONE else View.VISIBLE
+        // In-place recovery only makes sense while the tunnel is not already running.
+        b.noticeRetry.visibility = if (!state.notice.isNullOrEmpty() && !running && !busy) View.VISIBLE else View.GONE
     }
 }

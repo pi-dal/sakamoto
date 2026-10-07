@@ -47,8 +47,7 @@ struct HomeView: View {
                 .disabled(model.phase != .tunRunning && model.phase != .reachable && model.phase != .unverified)
             } header: {
                 Text("Network")
-            } footer: {
-                Text("TUN running is not network reachable; the probe verifies. One failed probe stays Unverified — a retry state, not a verdict.")
+
             }
 
             commandChannelSection
@@ -56,7 +55,7 @@ struct HomeView: View {
             groupsSection
         }
         .navigationTitle("Home")
-        .listStyle(.insetGrouped)
+        .sakamotoRootPage()
         .confirmationDialog("Disconnect tunnel?", isPresented: $showDisconnectConfirm, titleVisibility: .visible) {
             Button("Disconnect", role: .destructive) { Task { await model.disconnect() } }
             Button("Cancel", role: .cancel) {}
@@ -127,11 +126,6 @@ struct HomeView: View {
                 Text(model.commandChannelActive ? "Connected" : "Unavailable")
                     .foregroundStyle(model.commandChannelActive ? Color.green : Color.secondary)
             }
-            if !model.commandChannelActive {
-                Text("The libbox command server runs inside the tunnel process. Connect the tunnel; the channel follows it with retries — mode, selection, tests and the Data page wait for it.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
         } header: {
             Text("Control plane")
         }
@@ -141,7 +135,7 @@ struct HomeView: View {
     private var groupsSection: some View {
         Section {
             if model.groups.isEmpty {
-                Text("No group stream. Connect first; the stream arrives through the libbox command channel.")
+                Text("Connect to view groups")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

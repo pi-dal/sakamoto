@@ -91,20 +91,30 @@
             android:visibility="gone"
             tools:visibility="gone">
             <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:textAppearance="?attr/textAppearanceTitleSmall"
-                android:textColor="?attr/colorOnErrorContainer"
-                android:text="@string/connection_problem" />
-            <TextView
                 android:id="@+id/notice_value"
+                style="@style/Text.Sakamoto.HomeDetail"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:textAppearance="?attr/textAppearanceBodyMedium"
                 android:textColor="?attr/colorOnErrorContainer"
                 android:textIsSelectable="true"
-                android:accessibilityLiveRegion="polite" />
+                android:accessibilityLiveRegion="polite"
+                tools:text="Unable to start VPN" />
+
+            <!-- Recovery happens here, not in a separate diagnostics page. -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/notice_retry"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="start"
+                android:minWidth="48dp"
+                android:minHeight="48dp"
+                android:layout_marginTop="4dp"
+                android:layout_marginStart="-12dp"
+                android:text="@string/ux_pages_retry"
+                android:textColor="?attr/colorOnErrorContainer"
+                tools:visibility="gone" />
         </LinearLayout>
 
         <TextView
@@ -183,13 +193,6 @@
                     android:contentDescription="@string/url_test" />
             </LinearLayout>
         </LinearLayout>
-
-        <TextView
-            android:id="@+id/routing_note"
-            style="@style/Text.Sakamoto.HomeDetail"
-            android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:paddingHorizontal="20dp" android:paddingTop="12dp" android:paddingBottom="8dp"
-            android:text="@string/routing_connect_hint" />
 
         <LinearLayout
             android:id="@+id/groups_container"

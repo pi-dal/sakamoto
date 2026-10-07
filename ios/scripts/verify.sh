@@ -4,7 +4,7 @@
 #
 #   1/4  Go:    gofmt clean + go test ./...        (state vocabulary, contract golden)
 #   2/4  iOS:   swift build && swift test          (contract models, IPC codec, NE transport, Tailscale vocabulary)
-#   3/4  Frameworks: Libbox.xcframework + Mobilecore.xcframework present and stamped
+#   3/4  Framework: combined Libbox.xcframework present and stamped
 #   4/4  Xcode: xcodegen generate + unsigned simulator build of app + extension
 #
 # Exit codes: 0 = everything verified; 1 = at least one check failed.
@@ -55,10 +55,15 @@ fi
 
 section "3/4 Frameworks (built artifacts, git-ignored)"
 
-for NAME in Libbox Mobilecore; do
+NAME=Libbox
+{
     FRAMEWORK="${REPO_ROOT}/ios/Frameworks/${NAME}.xcframework"
     if [ -d "${FRAMEWORK}" ]; then
         PLIST_OK=1
+        if ! find "${FRAMEWORK}" -name Mobilecore.objc.h -print -quit | grep -q .; then
+            echo "Combined Mobilecore header missing — rebuild with ios/scripts/build-libbox.sh"
+            FAILED=1
+        fi
         for fw in "${FRAMEWORK}"/ios-*/*.framework; do
             [ -f "${fw}/Info.plist" ] || PLIST_OK=0
         done
@@ -79,7 +84,7 @@ NOT VERIFIED (explicit boundary, not a silent pass):
 EOF
         FAILED=1
     fi
-done
+}
 
 # --- 4/4 Xcode ----------------------------------------------------------------
 

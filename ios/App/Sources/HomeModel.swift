@@ -1,5 +1,5 @@
 import Foundation
-import Mobilecore
+import Libbox
 import SakamotoKit
 
 // Home model: owns the two control planes (NE transport + Libbox command
@@ -20,6 +20,7 @@ import SakamotoKit
 // tunnel that was already up.
 
 import NetworkExtension
+import WidgetKit
 
 /// Display carrier for one probe round. The classification itself runs in
 /// Go (MobilecoreClassifyProbe); this struct only carries the rendered
@@ -52,6 +53,12 @@ final class HomeModel: ObservableObject {
     private var groupsTask: Task<Void, Never>?
     private var lifecycleTask: Task<Void, Never>?
     private var observationStarted = false
+    private var lastSurface: SystemSurfaceSnapshot?
+    private var measuredNode = ""
+    private var measuredLatency: Int32?
+    private var measuredAt: Date?
+    private var verifiedAt: Date?
+    private var verificationPhase: SessionPhase?
 
     init(
         tunnel: TunnelControlling,
@@ -192,6 +199,7 @@ final class HomeModel: ObservableObject {
         groupsTask = Task { [weak self] in
             for await snapshots in stream {
                 self?.groups = snapshots
+                self?.publishSurface()
             }
         }
     }
@@ -206,6 +214,7 @@ final class HomeModel: ObservableObject {
         do {
             try await commanding.setClashMode(mode)
             routingMode = mode
+            publishSurface()
             notice = Notice(kind: .info, text: "Mode: \(mode.rawValue)")
         } catch {
             notice = Notice(kind: .error, text: "mode \(mode.rawValue) unavailable — regenerate the config and reconnect")
@@ -228,6 +237,7 @@ final class HomeModel: ObservableObject {
             // mode must surface loudly, never a silent no-op.
             try await commanding.setClashMode(nextMode)
             routingMode = nextMode
+            publishSurface()
             notice = Notice(kind: .info, text: "Mode: \(nextMode.rawValue)")
         } catch {
             notice = Notice(
@@ -286,6 +296,7 @@ final class HomeModel: ObservableObject {
                 path: MobilecoreProbePathOf(routePassed, false, false),
                 error: MobilecoreProbeErrorOf(routePassed, false, false)
             )
+            self.verifiedAt = Date()
             self.refoldPhase()
         }
     }
@@ -296,6 +307,36 @@ final class HomeModel: ObservableObject {
         phase = SessionPhase(
             raw: MobilecoreSessionPhase(serviceState.rawValue, probe.state, conflict)
         ) ?? (serviceState.running ? .tunRunning : .disconnected)
+        publishSurface()
+    }
+
+    private func publishSurface() {
+        let selection = groups.lazy.compactMap { group -> NodeSnapshot? in
+            guard let tag = group.selectedTag else { return nil }
+            return group.items.first { $0.tag == tag }
+        }.first
+        let node = selection?.tag ?? ""
+        let latency = selection?.status == .reachable ? selection?.latencyMS : nil
+        if node != measuredNode || latency != measuredLatency {
+            measuredNode = node; measuredLatency = latency
+            measuredAt = latency == nil ? nil : Date()
+        }
+        // A mode/group repaint must not renew the age of a network probe.
+        if verificationPhase != phase || verifiedAt == nil {
+            verificationPhase = phase
+            verifiedAt = Date()
+        }
+        let snapshot = SystemSurfaceSnapshot(serviceState: serviceState, phase: phase,
+            selectedNode: node, routingMode: routingMode?.rawValue ?? "", latencyMS: latency,
+            measuredAt: measuredAt, updatedAt: verifiedAt ?? Date())
+        if let previous = lastSurface,
+           previous.serviceState == snapshot.serviceState && previous.phase == snapshot.phase &&
+           previous.selectedNode == snapshot.selectedNode && previous.routingMode == snapshot.routingMode &&
+           previous.latencyMS == snapshot.latencyMS && previous.measuredAt == snapshot.measuredAt &&
+           previous.updatedAt == snapshot.updatedAt { return }
+        lastSurface = snapshot
+        SystemSurfaceStore.write(snapshot)
+        SystemSurfaceReload.reload()
     }
 
     deinit {

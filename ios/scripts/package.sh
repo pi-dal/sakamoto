@@ -29,12 +29,10 @@ if [ "${MODE}" = export ]; then
     exit 0
 fi
 
-for name in Libbox Mobilecore; do
-    [ -d "${REPO_ROOT}/ios/Frameworks/${name}.xcframework" ] || {
-        echo "Missing ${name}.xcframework: run mise run ios:build first" >&2
-        exit 1
-    }
-done
+[ -d "${REPO_ROOT}/ios/Frameworks/Libbox.xcframework" ] || {
+    echo "Missing combined Libbox.xcframework: run mise run ios:build first" >&2
+    exit 1
+}
 cd "${REPO_ROOT}/ios"
 xcodegen generate
 

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Lane pages: strings for HomeFragment, ConfigFragment, DataFragment, SettingsFragment. -->
+<resources>
+    <!-- Home: in-place recovery for a failed connection attempt. -->
+    <string name="ux_pages_retry">Try again</string>
+    <string name="ux_pages_home_no_groups">Choose a node from your saved groups</string>
+
+    <!-- Config: human phrasing for what the import buttons actually bring in. -->
+    <string name="ux_pages_tunnel_package_detail">Archive from the computer: tunnel config, sources and rules. Disconnect before importing.</string>
+    <string name="ux_pages_advanced_detail">Advanced · edit the generated tunnel file</string>
+
+    <!-- Data: consistent closed-connection wording. -->
+    <string name="ux_pages_connection_closed">Closed</string>
+
+    <!-- Settings: section grouping without a repeated runtime readout. -->
+    <string name="ux_pages_settings_section_diagnostics">Diagnostics</string>
+</resources>

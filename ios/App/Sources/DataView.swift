@@ -111,6 +111,7 @@ struct DataView: View {
     @StateObject private var model: DataModel
     @State private var showConnectionDetails = false
     @State private var confirmClose = false
+    @State private var showAvailability = false
 
     init(commanding: CoreCommanding?) {
         _model = StateObject(wrappedValue: DataModel(commanding: commanding))
@@ -123,7 +124,12 @@ struct DataView: View {
             logsSection
         }
         .navigationTitle("Data")
-        .listStyle(.insetGrouped)
+        .sakamotoRootPage()
+        .alert("Data unavailable", isPresented: $showAvailability) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(model.unavailableReason ?? "Waiting for traffic measurements")
+        }
         .task { model.activate() }
         .sheet(isPresented: $showConnectionDetails, onDismiss: { model.selectedConnID = nil }) {
             NavigationStack {
@@ -143,43 +149,35 @@ struct DataView: View {
 
     private var trafficSection: some View {
         Section {
-            if let reason = model.unavailableReason {
-                Text(reason)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            } else if let traffic = model.traffic {
-                HStack {
-                    Text("Traffic")
-                    Spacer()
-                    Text("↑ \(formatBytes(traffic.uplink)) (\(formatBytes(traffic.uplinkTotal)))  ↓ \(formatBytes(traffic.downlink)) (\(formatBytes(traffic.downlinkTotal)))")
-                        .font(.footnote.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-                HStack {
-                    Text("Connections")
-                    Spacer()
-                    Text("\(traffic.connectionsIn) in / \(traffic.connectionsOut) out")
-                        .font(.footnote.monospacedDigit())
-                        .foregroundStyle(.secondary)
+            if model.unavailableReason != nil || model.traffic == nil {
+                Button { showAvailability = true } label: {
+                    HStack {
+                        Text("Status").foregroundStyle(.primary)
+                        Spacer()
+                        Text("Unavailable").foregroundStyle(.secondary)
+                    }
                 }
             }
+            trafficRow("Upload", model.unavailableReason == nil ? model.traffic.map { formatBytes($0.uplink) } : nil)
+            trafficRow("Download", model.unavailableReason == nil ? model.traffic.map { formatBytes($0.downlink) } : nil)
+            trafficRow("Uploaded", model.unavailableReason == nil ? model.traffic.map { formatBytes($0.uplinkTotal) } : nil)
+            trafficRow("Downloaded", model.unavailableReason == nil ? model.traffic.map { formatBytes($0.downlinkTotal) } : nil)
+            trafficRow("Connections", model.unavailableReason == nil ? model.traffic.map { "\($0.connectionsIn) in / \($0.connectionsOut) out" } : nil)
             if let notice = model.notice {
                 Text(notice.text)
                     .font(.footnote)
                     .foregroundStyle(notice.kind == .error ? Color.red : Color.secondary)
             }
         } header: {
-            Text("Live")
-        } footer: {
-            Text("Rate (total) per interval, as reported by the core over the command channel.")
+            Text("Traffic")
         }
     }
 
     @ViewBuilder
     private var connectionsSection: some View {
         Section {
-            if model.channelActive && model.connections.isEmpty {
-                Text("No connections reported yet.")
+            if model.connections.isEmpty {
+                Text("No recent connections")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -214,7 +212,17 @@ struct DataView: View {
                     .foregroundStyle(.secondary)
             }
         } header: {
-            Text("Recent connections (select for details)")
+            Text("Recent connections")
+        }
+    }
+
+    private func trafficRow(_ title: String, _ value: String?) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text(value ?? "—")
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -259,8 +267,8 @@ struct DataView: View {
 
     private var logsSection: some View {
         Section {
-            if model.channelActive && model.logs.isEmpty {
-                Text("No core logs yet.")
+            if model.logs.isEmpty {
+                Text("No core logs")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

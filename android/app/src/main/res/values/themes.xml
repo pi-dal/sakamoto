@@ -20,6 +20,11 @@
         <item name="android:windowLightNavigationBar" tools:targetApi="27">?attr/isLightTheme</item>
         <item name="android:windowActionModeOverlay">true</item>
     </style>
+    <style name="Text.Sakamoto.AppBarTitle" parent="TextAppearance.Material3.TitleLarge">
+        <item name="android:textSize">18sp</item>
+        <item name="android:textColor">@color/on_surface</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+    </style>
     <style name="Text.Sakamoto.Body" parent="TextAppearance.Material3.BodyLarge">
         <item name="android:textSize">16sp</item>
         <item name="android:textColor">@color/on_surface</item>
@@ -79,5 +84,21 @@
         <item name="android:minHeight">48dp</item>
         <item name="android:textSize">16sp</item>
         <item name="cornerRadius">12dp</item>
+    </style>
+    <!-- Bottom tabs: selection is colour, not a pill; icons and labels always shown. -->
+    <style name="Widget.Sakamoto.BottomNav" parent="Widget.Material3.BottomNavigationView">
+        <!-- Telegram-slim tab row; the surrounding bar owns the nav-bar inset. -->
+        <item name="android:minHeight">64dp</item>
+        <item name="itemPaddingTop">8dp</item>
+        <item name="itemPaddingBottom">8dp</item>
+        <item name="elevation">0dp</item>
+        <item name="itemActiveIndicatorStyle">@style/Widget.Sakamoto.BottomNav.Indicator</item>
+        <item name="itemIconTint">@color/ux_shell_nav_item</item>
+        <item name="itemTextColor">@color/ux_shell_nav_item</item>
+        <item name="itemHorizontalTranslationEnabled">false</item>
+        <item name="labelVisibilityMode">labeled</item>
+    </style>
+    <style name="Widget.Sakamoto.BottomNav.Indicator" parent="Widget.Material3.BottomNavigationView.ActiveIndicator">
+        <item name="android:color">@android:color/transparent</item>
     </style>
 </resources>

@@ -35,7 +35,15 @@ class GroupedPage(val context: Context) {
         text = value
         setTextColor(context.getColor(R.color.on_surface))
     }
-    fun section(title: CharSequence): LinearLayout {
+    fun section(title: CharSequence = ""): LinearLayout {
+        if (title.isEmpty()) {
+            content.addView(View(context), LinearLayout.LayoutParams(-1, dp(12)))
+            return LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                setBackgroundColor(context.getColor(R.color.surface))
+                content.addView(this, LinearLayout.LayoutParams(-1, -2))
+            }
+        }
         content.addView(text(title, com.google.android.material.R.style.TextAppearance_Material3_TitleSmall).apply {
             setTextColor(context.getColor(R.color.primary))
             setPadding(dp(20), dp(24), dp(20), dp(8))
@@ -58,7 +66,7 @@ class GroupedPage(val context: Context) {
         group.addView(this, LinearLayout.LayoutParams(-1, -2))
     }
     fun divider(group: LinearLayout) {
-        group.addView(View(context).apply { setBackgroundColor(context.getColor(R.color.divider)) }, LinearLayout.LayoutParams(-1, dp(1)).apply { marginStart = dp(20) })
+        group.addView(View(context).apply { setBackgroundColor(context.getColor(R.color.divider)) }, LinearLayout.LayoutParams(-1, dp(1)).apply { marginStart = dp(20); marginEnd = dp(20) })
     }
     fun row(group: LinearLayout, title: CharSequence, detail: CharSequence = "", icon: Int = 0, navigates: Boolean = true, action: (() -> Unit)? = null): Row {
         if (group.childCount > 0) divider(group)
@@ -66,6 +74,56 @@ class GroupedPage(val context: Context) {
         group.addView(row, LinearLayout.LayoutParams(-1, -2))
         return row
     }
+    /** Telegram settings-cell layout: one label with an optional value at the end. */
+    fun setting(group: LinearLayout, title: CharSequence, value: CharSequence = "", icon: Int = 0, action: (() -> Unit)? = null): SettingRow {
+        if (group.childCount > 0) divider(group)
+        return SettingRow(context, title, value, icon, action).also {
+            group.addView(it, LinearLayout.LayoutParams(-1, -2))
+        }
+    }
+
+    class SettingRow(context: Context, title: CharSequence, initialValue: CharSequence, icon: Int, action: (() -> Unit)?) : LinearLayout(context) {
+        val label = TextView(context)
+        val value = TextView(context)
+        init {
+            val density = resources.displayMetrics.density
+            fun dp(n: Int) = (n * density).toInt()
+            orientation = HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = dp(50)
+            setPaddingRelative(dp(21), dp(10), dp(21), dp(10))
+            if (icon != 0) addView(ImageView(context).apply {
+                setImageResource(icon)
+                imageTintList = android.content.res.ColorStateList.valueOf(context.getColor(R.color.on_surface_variant))
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }, LayoutParams(dp(24), dp(24)).apply { marginEnd = dp(20) })
+            label.text = title
+            label.setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyLarge)
+            label.setTextColor(context.getColor(R.color.on_surface))
+            label.maxLines = 2
+            addView(label, LayoutParams(0, -2, 1f))
+            value.setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyLarge)
+            value.setTextColor(context.getColor(R.color.on_surface_variant))
+            value.gravity = Gravity.END
+            value.maxWidth = dp(168)
+            value.maxLines = 2
+            value.ellipsize = android.text.TextUtils.TruncateAt.END
+            addView(value, LayoutParams(-2, -2).apply { marginStart = dp(16) })
+            detail(initialValue)
+            if (action != null) {
+                val attr = android.util.TypedValue()
+                context.theme.resolveAttribute(android.R.attr.selectableItemBackground, attr, true)
+                foreground = AppCompatResources.getDrawable(context, attr.resourceId)
+                isFocusable = true
+                setOnClickListener { action() }
+            }
+        }
+        fun detail(text: CharSequence) {
+            value.text = text
+            value.visibility = if (text.isEmpty()) View.GONE else View.VISIBLE
+        }
+    }
+
     fun toggle(group: LinearLayout, title: CharSequence, checked: Boolean): MaterialSwitch {
         val row = row(group, title)
         val control = MaterialSwitch(context).apply {
@@ -131,7 +189,8 @@ class GroupedPage(val context: Context) {
         init {
             orientation = HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            minimumHeight = dp(if (detail.isEmpty()) 56 else 72)
+            // Telegram settings rows: 64dp without detail, one extra label line with it.
+            minimumHeight = dp(if (detail.isEmpty()) 64 else 72)
             setPaddingRelative(dp(20), dp(12), dp(12), dp(12))
             leading.setImageResource(icon)
             leading.imageTintList = android.content.res.ColorStateList.valueOf(context.getColor(R.color.on_surface_variant))
@@ -141,8 +200,17 @@ class GroupedPage(val context: Context) {
             val labels = LinearLayout(context).apply { orientation = VERTICAL }
             label.setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyLarge)
             label.setTextColor(context.getColor(R.color.on_surface)); label.text = title
+            // List grammar keeps rows one line tall; overflow clips instead of reflowing.
+            label.setSingleLine(true)
+            label.ellipsize = android.text.TextUtils.TruncateAt.END
             value.setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodySmall)
             value.setTextColor(context.getColor(R.color.on_surface_variant)); value.text = detail
+            // Only rows with a destination can abbreviate details. Terminal
+            // diagnostics and error rows must expose their complete content.
+            if (action != null && navigates) {
+                value.ellipsize = android.text.TextUtils.TruncateAt.END
+                value.maxLines = 2
+            }
             value.visibility = if (detail.isEmpty()) View.GONE else View.VISIBLE
             labels.addView(label, LayoutParams(-1, -2))
             labels.addView(value, LayoutParams(-1, -2).apply { topMargin = dp(4) })

@@ -1,6 +1,6 @@
 import Foundation
 import SwiftUI
-import Mobilecore
+import Libbox
 import SakamotoKit
 
 // App-side owner of the iCloud sync feature (Settings → Sync sources to

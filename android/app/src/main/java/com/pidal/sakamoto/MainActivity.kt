@@ -1,6 +1,7 @@
 package com.pidal.sakamoto
 
 import android.os.Bundle
+import android.view.View
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
@@ -13,31 +14,49 @@ import com.pidal.sakamoto.ui.DataFragment
 import com.pidal.sakamoto.ui.HomeFragment
 import com.pidal.sakamoto.ui.SettingsFragment
 
-/** Four retained top-level destinations, with a real child-page back stack. */
+/** Four retained top-level destinations with a real child-page back stack.
+ * Telegram Android shell: surface app bar and floating compact
+ * bottom tabs that only exist on top-level pages (child pages take the full
+ * height with a back affordance), and a tab bar that steps aside for the
+ * keyboard so editor input keeps the full height.
+ */
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private var selectedTab = R.id.nav_home
+    private var imeVisible = false
+    private var navInset = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
-        ViewCompat.setOnApplyWindowInsetsListener(binding.root) { view, insets ->
+        binding.bottomBar.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> updateBottomBar() }
+        ViewCompat.setOnApplyWindowInsetsListener(binding.root) { _, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
-            val keyboard = insets.getInsets(WindowInsetsCompat.Type.ime())
-            view.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, keyboard.bottom))
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+            imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime()) && ime.bottom > 0
+            // Status bar and cutout pad the chrome, not the page surface, so
+            // content still reads as one sheet under the bar.
+            binding.topBarContainer.setPadding(bars.left, bars.top, bars.right, 0)
+            binding.fragmentContainer.setPadding(bars.left, 0, bars.right, 0)
+            val density = resources.displayMetrics.density
+            binding.bottomBar.setPadding(bars.left + (16 * density).toInt(), (8 * density).toInt(),
+                bars.right + (16 * density).toInt(), (8 * density).toInt() + if (imeVisible) 0 else bars.bottom)
+            binding.root.setPadding(0, 0, 0, if (imeVisible) ime.bottom else 0)
+            navInset = bars.bottom
+            updateBottomBar()
             WindowInsetsCompat.CONSUMED
         }
         ViewCompat.requestApplyInsets(binding.root)
         selectedTab = savedInstanceState?.getInt("selectedTab", R.id.nav_home) ?: R.id.nav_home
         binding.topAppBar.setNavigationOnClickListener { onBackPressedDispatcher.onBackPressed() }
-        binding.bottomNav.setOnItemSelectedListener {
+        binding.bottomNav.setOnItemSelectedListener { id ->
             val editor = supportFragmentManager.primaryNavigationFragment as? com.pidal.sakamoto.ui.EditorFragment
             if (editor != null && editor.hasUnsavedChanges()) {
-                editor.confirmLeaving { binding.bottomNav.selectedItemId = it.itemId }
+                editor.confirmLeaving { selectTab(id) }
                 false
-            } else { selectTab(it.itemId); true }
+            } else { selectTab(id); true }
         }
         binding.bottomNav.setOnItemReselectedListener {
             val editor = supportFragmentManager.primaryNavigationFragment as? com.pidal.sakamoto.ui.EditorFragment
@@ -73,6 +92,7 @@ class MainActivity : AppCompatActivity() {
         if (manager.isStateSaved) return
         manager.popBackStackImmediate(null, androidx.fragment.app.FragmentManager.POP_BACK_STACK_INCLUSIVE)
         selectedTab = id
+        binding.bottomNav.selectedItemId = id
         val tag = "tab-$id"
         val target = manager.findFragmentByTag(tag) ?: when (id) {
             R.id.nav_config -> ConfigFragment()
@@ -107,6 +127,10 @@ class MainActivity : AppCompatActivity() {
     private fun updateChrome() {
         val manager = supportFragmentManager
         val child = manager.backStackEntryCount > 0
+        val topBackground = getColor(if (child) R.color.surface else R.color.surface_variant)
+        binding.topBarContainer.setBackgroundColor(topBackground)
+        binding.topAppBar.setBackgroundColor(topBackground)
+        binding.bottomNav.selectedItemId = selectedTab
         binding.topAppBar.title = if (child) manager.getBackStackEntryAt(manager.backStackEntryCount - 1).name else when (selectedTab) {
             R.id.nav_config -> getString(R.string.tab_config)
             R.id.nav_data -> getString(R.string.tab_data)
@@ -115,6 +139,22 @@ class MainActivity : AppCompatActivity() {
         }
         binding.topAppBar.navigationIcon = if (child) androidx.appcompat.content.res.AppCompatResources.getDrawable(this, androidx.appcompat.R.drawable.abc_ic_ab_back_material) else null
         binding.topAppBar.navigationContentDescription = getString(R.string.navigate_back)
+        updateBottomBar()
+    }
+
+    /** Telegram grammar: tabs only on top-level pages, and never over the keyboard.
+     * Without the tab bar, pages pad themselves above the gesture area. */
+    private fun updateBottomBar() {
+        val child = supportFragmentManager.backStackEntryCount > 0
+        binding.bottomBar.visibility = if (imeVisible || child) View.GONE else View.VISIBLE
+        binding.fragmentContainer.setPadding(
+            binding.fragmentContainer.paddingLeft, 0, binding.fragmentContainer.paddingRight,
+            when {
+                imeVisible -> 0
+                child -> navInset
+                else -> binding.bottomBar.height
+            }
+        )
     }
 
     override fun onSaveInstanceState(outState: Bundle) {

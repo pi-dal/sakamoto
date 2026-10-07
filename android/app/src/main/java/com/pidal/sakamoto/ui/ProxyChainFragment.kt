@@ -27,7 +27,15 @@ class ProxyChainFragment : androidx.fragment.app.Fragment() {
         val group = page.section(getString(R.string.proxy_exit_effective))
         for (exit in exits) {
             val tag = exit.getString("tag")
-            page.row(group, tag, "${exit.optString("type")} · ${exit.optString("detour").ifEmpty { getString(R.string.proxy_direct_dial) }}", R.drawable.ic_node) {
+            val credentials = if (exit.optString("username").isNotEmpty() || exit.optString("password").isNotEmpty())
+                getString(R.string.ux_editing_exit_auth) else getString(R.string.ux_editing_exit_plain)
+            val detail = listOf(
+                exit.optString("type"),
+                exit.optString("server") + ":" + exit.optInt("server_port"),
+                credentials,
+                exit.optString("detour").ifEmpty { getString(R.string.proxy_direct_dial) },
+            ).joinToString(" · ")
+            page.row(group, tag, detail, R.drawable.ic_node) {
                 (requireActivity() as MainActivity).openChild(EditorFragment().apply {
                     arguments = Bundle().apply { putString("kind", "outbound"); putString("tag", tag) }
                 }, getString(R.string.profile_edit_title))

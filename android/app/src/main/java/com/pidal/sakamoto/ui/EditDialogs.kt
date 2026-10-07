@@ -43,11 +43,18 @@ object EditDialogs {
     }
 
     fun choice(context: Context, title: String, options: List<String>, current: String, save: (String) -> Unit) {
-        MaterialAlertDialogBuilder(context).setTitle(title).setSingleChoiceItems(options.toTypedArray(), options.indexOf(current)) { dialog, index ->
-            try { save(options[index]); dialog.dismiss() }
-            catch (error: Exception) {
-                MaterialAlertDialogBuilder(context).setTitle(R.string.edit_failed).setMessage(error.message ?: context.getString(R.string.invalid_value)).setPositiveButton(android.R.string.ok, null).show()
-            }
-        }.setNegativeButton(android.R.string.cancel, null).show()
+        choice(context, title, options.associateWith { it }, current, save)
+    }
+
+    /** Choice with readable labels; the map keys are the stored values. */
+    fun choice(context: Context, title: String, labels: Map<String, String>, current: String, save: (String) -> Unit) {
+        val values = labels.keys.toList()
+        MaterialAlertDialogBuilder(context).setTitle(title)
+            .setSingleChoiceItems(values.map { labels[it].orEmpty() }.toTypedArray(), values.indexOf(current)) { dialog, index ->
+                try { save(values[index]); dialog.dismiss() }
+                catch (error: Exception) {
+                    MaterialAlertDialogBuilder(context).setTitle(R.string.edit_failed).setMessage(error.message ?: context.getString(R.string.invalid_value)).setPositiveButton(android.R.string.ok, null).show()
+                }
+            }.setNegativeButton(android.R.string.cancel, null).show()
     }
 }
