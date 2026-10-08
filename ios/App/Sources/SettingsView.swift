@@ -340,15 +340,22 @@ struct SettingsView: View {
     private var iCloudSyncSection: some View {
         Section {
             Button { showSyncDirectoryPicker = true } label: {
-                HStack {
-                    Label("Sync folder", systemImage: "folder")
-                    Spacer()
-                    Text(sync.directoryLabel).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
+                HStack(spacing: 12) {
+                    Image(systemName: "folder").foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Sync folder").font(.subheadline).foregroundStyle(.primary)
+                        Text(sync.directoryLabel)
+                            .font(.subheadline).foregroundStyle(.secondary)
+                            .lineLimit(1).truncationMode(.middle)
+                        Text(sync.directoryLocation).font(.caption).foregroundStyle(.tertiary).lineLimit(1)
+                    }.frame(maxWidth: .infinity, alignment: .leading)
                     Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
                 }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Sync folder, \(sync.directoryLabel), \(sync.directoryLocation)")
             }.disabled(sync.syncing)
         } header: { Text("Destination") } footer: {
-            Text("For Mac sync, select iCloud Drive → sakamoto, or the custom folder selected in the TUI. The app's own iCloud folder is separate.")
+            Text("Choose the same folder as your Mac: iCloud Drive → sakamoto.")
         }
         Section {
             Toggle("Sync sources to iCloud", isOn: Binding(
@@ -364,11 +371,6 @@ struct SettingsView: View {
                 }
             ))
             if sync.settings.enabled {
-                LabeledRow("Nodes", "nodes.txt")
-                Toggle("Include configuration source", isOn: Binding(
-                    get: { sync.settings.includesConf },
-                    set: { sync.setIncludeConf($0) }
-                ))
                 Button {
                     sync.syncNow()
                 } label: {
@@ -395,7 +397,11 @@ struct SettingsView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
-                DisclosureGroup("Advanced source paths") {
+                DisclosureGroup("Sync options") {
+                    Toggle("Include rule configuration", isOn: Binding(
+                        get: { sync.settings.includesConf },
+                        set: { sync.setIncludeConf($0) }
+                    ))
                     Text("Additional source paths")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -419,7 +425,7 @@ struct SettingsView: View {
         } header: {
             Text("Sync sources")
         } footer: {
-            Text("Sync transfers source files. It does not choose or apply the running VPN configuration. Generated configs, keys and logs stay local.")
+            Text("Nodes, subscriptions and rules are synced. Keys and generated configuration stay on this device.")
         }
     }
 

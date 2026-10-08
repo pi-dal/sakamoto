@@ -24,8 +24,9 @@ type Options struct {
 	NodesFile  string // optional share-link file
 	AllowHosts string // comma-separated manual-node host allowlist
 	Cfg        *config.Config
-	OutDir     string // output directory (defaults to the active runtime)
-	Quiet      bool   // suppress stdout so generation does not disrupt the TUI
+	OutDir     string       // output directory (defaults to the active runtime)
+	Quiet      bool         // suppress stdout so generation does not disrupt the TUI
+	HTTPClient *http.Client // optional platform-specific fetching policy
 }
 
 func Run(o Options) error {
@@ -65,7 +66,10 @@ func Run(o Options) error {
 		return err
 	}
 
-	hc := &http.Client{Timeout: 30 * time.Second} // Honors HTTP(S)_PROXY from the environment.
+	hc := o.HTTPClient
+	if hc == nil {
+		hc = &http.Client{Timeout: 30 * time.Second}
+	} // Honors HTTP(S)_PROXY from the environment.
 
 	p, err := parseConf(o.ConfPath, hc)
 	if err != nil {

@@ -5,9 +5,11 @@ package mobilegen
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/pi-dal/sakamoto/internal/config"
@@ -24,6 +26,11 @@ import (
 // it never executes system setup or invokes an external sing-box binary.
 // The caller performs Libbox semantic validation before committing the result.
 func GenerateProfileJSON(bundleJSON, settingsJSON string) (string, error) {
+	return GenerateProfileWithFetcherJSON(bundleJSON, settingsJSON, nil)
+}
+
+// GenerateProfileWithFetcherJSON uses the platform source-fetching adapter.
+func GenerateProfileWithFetcherJSON(bundleJSON, settingsJSON string, fetcher SourceFetcher) (string, error) {
 	if len(bundleJSON) > sourcesync.MaxBytes {
 		return "", fmt.Errorf("source bundle exceeds 32 MiB")
 	}
@@ -143,7 +150,7 @@ func GenerateProfileJSON(bundleJSON, settingsJSON string) (string, error) {
 	cfg.ConfPath = filepath.Join(work, "sources", filepath.FromSlash(main))
 	cfg.NodesFile = filepath.Join(work, "sources", "nodes.txt")
 	out := filepath.Join(work, "runtime")
-	if err := gen.Run(gen.Options{ConfPath: cfg.ConfPath, NodesFile: cfg.NodesFile, Cfg: cfg, OutDir: out, Quiet: true}); err != nil {
+	if err := gen.Run(gen.Options{ConfPath: cfg.ConfPath, NodesFile: cfg.NodesFile, Cfg: cfg, OutDir: out, Quiet: true, HTTPClient: sourceClient(fetcher)}); err != nil {
 		return "", fmt.Errorf("generation failed: %s", sanitizeGenerationError(err))
 	}
 	raw, err := os.ReadFile(filepath.Join(out, "config.json"))
@@ -241,11 +248,20 @@ func GenerateProfileJSON(bundleJSON, settingsJSON string) (string, error) {
 	return string(encoded), err
 }
 
+var generationURL = regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9+.-]*://[^\s"']+`)
+
 func sanitizeGenerationError(err error) string {
-	// Source URLs can contain credentials. Keep failure stage, not raw inputs.
-	text := err.Error()
-	if strings.Contains(text, "://") {
-		return "a remote source could not be fetched or parsed"
+	// Preserve stage/status/reason. URL paths, query tokens and credentials
+	// never reach the UI, even when embedded in a nested network error.
+	text := generationURL.ReplaceAllStringFunc(err.Error(), func(raw string) string {
+		parsed, e := url.Parse(raw)
+		if e != nil || parsed.Hostname() == "" {
+			return "[remote source]"
+		}
+		return parsed.Hostname()
+	})
+	if len(text) > 1200 {
+		text = text[:1200]
 	}
 	return text
 }

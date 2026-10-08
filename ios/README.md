@@ -215,7 +215,19 @@ host semantics. On device:
   immutable App Group rule snapshot directories and pass Libbox semantic
   validation before replacing the previous saved runtime. Failed generation
   keeps the old runtime. Node-only profiles can generate without a `.conf`.
-- **Apply**: merges Keychain Tailscale authentication at start and activates
+- **Apply**: the main Config page has one Apply changes action that generates
+  changed sources, validates and activates the candidate. Single profiles do
+  not need a picker. Rule-source choice, generation without connecting, JSON
+  edits and import diagnostics are available under Advanced. File imports
+  detect `.sakamoto`, JSON, `.conf` and `nodes.txt` rather than offering a
+  separate menu entry for every format.
+- **Remote generation**: iOS supplies a URLSession fetcher to Mobilegen so
+  importing and generation use Apple's system networking/proxy configuration.
+  Each request is bounded, transient failures retry once, and permanent HTTP
+  failures keep their stage, host and status in sanitized diagnostics. HTML
+  login/challenge pages are rejected as source data. Missing rules never get
+  silently omitted from a generated candidate.
+- **Activation**: merges Keychain Tailscale authentication at start and activates
   the selected snapshot. It starts a stopped tunnel or reloads a running one;
   queued startup is not marked applied until the provider confirms Running.
   Source sync never auto-connects or publishes generated configs/credentials.

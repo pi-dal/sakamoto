@@ -362,7 +362,6 @@ struct ConfigView: View {
     @State private var showImportOptions = false
     @State private var showURLImport = false
     @State private var showEditor = false
-    @State private var confirmApply = false
     @State private var showScanner = false
     @State private var showURLKind = false
     @State private var pendingImport: ImportPayload?
@@ -377,44 +376,35 @@ struct ConfigView: View {
     var body: some View {
         List {
             Section {
-                Picker("Configuration", selection: Binding(
-                    get: { model.store.selectedProfileID ?? "" },
-                    set: { id in
-                        do { try model.store.selectProfile(id); model.draft = model.store.content; model.importError = nil }
-                        catch { model.importError = error.localizedDescription }
+                if model.store.profiles.count > 1 {
+                    Picker("Configuration", selection: Binding(
+                        get: { model.store.selectedProfileID ?? "" },
+                        set: { id in
+                            do { try model.store.selectProfile(id); model.draft = model.store.content; model.importError = nil }
+                            catch { model.importError = error.localizedDescription }
+                        }
+                    )) {
+                        ForEach(model.store.profiles) { profile in Text(profile.name).tag(profile.id) }
                     }
-                )) {
-                    Text("None").tag("")
-                    ForEach(model.store.profiles) { profile in Text(profile.name).tag(profile.id) }
-                }
-                .pickerStyle(.menu)
-                .sakamotoInspectTag("ConfigurationPicker")
-                if !model.store.confSources.isEmpty {
-                    Picker("Rule source", selection: Binding(get: { model.store.sourceBundle.mainConf }, set: { name in
-                        do { try model.store.selectConfSource(name); model.importError = nil }
-                        catch { model.importError = TunnelDiagnostics.sanitized(error.localizedDescription) }
-                    })) {
-                        Text("Choose rule source").tag("")
-                        ForEach(model.store.confSources, id: \.self) { Text($0).tag($0) }
-                    }.pickerStyle(.menu)
-                }
-                if let failure = TunnelDiagnostics.latest() {
-                    Text("\(failure.stage): \(failure.message)").font(.footnote).foregroundStyle(.primary)
+                    .pickerStyle(.menu)
+                    .sakamotoInspectTag("ConfigurationPicker")
+                } else {
+                    LabeledRow("Configuration", model.store.selectedProfile?.name ?? "No sources yet")
                 }
                 if model.store.selectedProfile?.sourcesChanged == true {
-                    Text("Sources changed. Generate the configuration, then Apply.").font(.footnote).foregroundStyle(.secondary)
+                    Text("Changes are ready to apply.").font(.footnote).foregroundStyle(.secondary)
                 }
-
+                if model.store.sourceBundle.mainConf.isEmpty && !model.store.confSources.isEmpty {
+                    NavigationLink("Choose a rule source") { advancedConfiguration }
+                }
             }
             Section {
-                Button { showImportOptions = true } label: { Label("Import configuration", systemImage: "square.and.arrow.down") }
+                Button { showImportOptions = true } label: { Label("Add sources", systemImage: "plus") }
                     .sakamotoInspectTag("ConfigurationImport")
                     .disabled(model.importing)
                 if let clipboardOfferContent {
                     clipboardOfferRow(content: clipboardOfferContent)
                 }
-                Button { pendingImport = nil; showScanner = true } label: { Label("Scan QR code", systemImage: "qrcode.viewfinder") }
-                    .disabled(model.importing)
                 if let payloadError { Text(payloadError).font(.footnote).foregroundStyle(.primary) }
                 if let error = model.importError {
                     Text(error).font(.footnote).foregroundStyle(.primary)
@@ -439,12 +429,6 @@ struct ConfigView: View {
                         Text("\(model.store.nodesSources.nodes.count) nodes").foregroundStyle(.secondary)
                     }
                 }
-                NavigationLink("Import details") {
-                    List { importSection }
-                        .listStyle(.insetGrouped)
-                        .navigationTitle("Import details")
-                        .navigationBarTitleDisplayMode(.inline)
-                }
             }
             Section {
                 NavigationLink {
@@ -452,26 +436,24 @@ struct ConfigView: View {
                 } label: {
                     Label("Sync sources", systemImage: "arrow.triangle.2.circlepath")
                 }
-            } footer: { Text("Import adds files to this device. Sync keeps source files aligned with your Mac or cloud storage.") }
-            Section("Apply changes") {
-                LabeledRow("Config state", model.store.configState.rawValue)
-                Button("Generate configuration") {
-                    Task {
-                        do { try await model.store.generateFromSources(); model.draft = model.store.content; model.importError = nil }
-                        catch { model.importError = TunnelDiagnostics.sanitized(error.localizedDescription) }
+            } footer: { Text("Keep sources aligned with your Mac or cloud storage.") }
+            Section {
+                Button {
+                    Task { await model.regenerateAndApply() }
+                } label: {
+                    HStack {
+                        Text(model.store.applying ? "Applying…" : "Apply changes")
+                        if model.store.applying { Spacer(); ProgressView() }
                     }
                 }
-                .disabled(!model.store.canGenerate)
-                if model.store.generating { ProgressView("Generating configuration") }
-                Button("Generate & apply configuration") { confirmApply = true }
-                    .sakamotoInspectTag("ConfigurationApply")
-                    .disabled(model.store.generating || (model.store.configState == .clean) || (!model.store.canConnect && !model.store.canGenerate))
-                Button("Edit generated configuration…") { model.draft = model.store.content; showEditor = true }
+                .sakamotoInspectTag("ConfigurationApply")
+                .disabled(model.store.applying || model.store.generating || model.store.configState == .clean || (!model.store.canConnect && !model.store.canGenerate))
                 if let lastAction = model.store.lastAction {
-                    DisclosureGroup("Last action") {
-                        Text(lastAction).font(.footnote).foregroundStyle(.secondary)
-                    }
+                    Text(lastAction).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
                 }
+            } footer: { Text("Builds the configuration and starts or reloads the VPN. Active connections may be interrupted.") }
+            Section {
+                NavigationLink("Advanced") { advancedConfiguration }
             }
         }
         .navigationTitle("Config")
@@ -550,18 +532,12 @@ struct ConfigView: View {
                 }
             }
         }
-        .confirmationDialog("Import configuration", isPresented: $showImportOptions, titleVisibility: .visible) {
-            Button("Complete tunnel package (.sakamoto) from Files") { model.importNodesFile = false; model.showFileImporter = true }
-            Button("Rule configuration (.conf) from URL") { showURLImport = true }
-            Button("Rule configuration (.conf) from Files") { model.importNodesFile = false; model.showFileImporter = true }
-            Button("Node list (nodes.txt) from Files") { model.importNodesFile = true; model.showFileImporter = true }
-            Button("VPN configuration (JSON) from Files") { model.importNodesFile = false; model.showFileImporter = true }
+        .confirmationDialog("Add sources", isPresented: $showImportOptions, titleVisibility: .visible) {
+            Button("From Files…") { model.importNodesFile = false; model.showFileImporter = true }
+            Button("From URL…") { showURLImport = true }
+            Button("Scan QR code") { pendingImport = nil; showScanner = true }
             Button("Cancel", role: .cancel) {}
         }
-        .confirmationDialog("Apply saved configuration?", isPresented: $confirmApply, titleVisibility: .visible) {
-            Button("Apply & Reconnect") { Task { await model.regenerateAndApply() } }
-            Button("Cancel", role: .cancel) {}
-        } message: { Text("Sources are generated and validated on this device before the tunnel starts or reloads. Active connections may be interrupted.") }
         .sheet(isPresented: $model.showAddPolicy) { addPolicySheet }
         .sheet(isPresented: $model.showAddNode) { addNodeSheet }
         .sheet(isPresented: $model.showAddSubscription) { addSubscriptionSheet }
@@ -989,20 +965,40 @@ struct ConfigView: View {
         .presentationDetents([.medium])
     }
 
-    // MARK: Generate / Apply
-
-    private var generateSection: some View {
-        Section {
-            Button("Regenerate + Reconnect") {
-                confirmApply = true
+    private var advancedConfiguration: some View {
+        List {
+            if !model.store.confSources.isEmpty {
+                Section("Rules") {
+                    Picker("Rule source", selection: Binding(get: { model.store.sourceBundle.mainConf }, set: { name in
+                        do { try model.store.selectConfSource(name); model.importError = nil }
+                        catch { model.importError = TunnelDiagnostics.sanitized(error.localizedDescription) }
+                    })) {
+                        Text("Choose rule source").tag("")
+                        ForEach(model.store.confSources, id: \.self) { Text($0).tag($0) }
+                    }.pickerStyle(.menu)
+                }
             }
-            .disabled(model.store.configState == .clean)
-        } header: {
-            Text("Generate / Apply")
-        } footer: {
-            Text("Generate fetches subscriptions, combines sources and compiles rule sets on this device. Libbox validates the candidate before saving. Apply starts or reloads the VPN.")
+            Section {
+                Button("Generate without connecting") {
+                    Task {
+                        do { try await model.store.generateFromSources(); model.draft = model.store.content; model.importError = nil }
+                        catch { model.importError = TunnelDiagnostics.sanitized(error.localizedDescription) }
+                    }
+                }.disabled(!model.store.canGenerate || model.store.applying)
+                Button("Edit configuration JSON…") { model.draft = model.store.content; showEditor = true }
+                NavigationLink("Import details") { List { importSection }.navigationTitle("Import details") }
+            }
+            Section("Diagnostics") {
+                LabeledRow("Config state", model.store.configState.rawValue)
+                if let failure = TunnelDiagnostics.latest() { Text("\(failure.stage): \(failure.message)").font(.footnote) }
+                if let error = model.importError { Text(error).font(.footnote) }
+            }
         }
+        .navigationTitle("Advanced")
+        .navigationBarTitleDisplayMode(.inline)
     }
+
+    // MARK: Generate / Apply
 
     // MARK: Advanced (raw generated config)
 

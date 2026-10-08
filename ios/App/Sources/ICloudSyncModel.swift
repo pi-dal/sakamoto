@@ -35,7 +35,8 @@ final class ICloudSyncModel: ObservableObject {
     @Published private(set) var notice: String?
     /// Additional source paths as an editable single string (one per line).
     @Published var additionalPathsDraft: String = ""
-    @Published private(set) var directoryLabel = "App iCloud container / Documents / sakamoto"
+    @Published private(set) var directoryLabel = "sakamoto"
+    @Published private(set) var directoryLocation = "App iCloud folder"
     private static let bookmarkKey = "sakamoto.icloud.sync.directory.bookmark"
     private var selectedDirectory: URL?
 
@@ -53,9 +54,11 @@ final class ICloudSyncModel: ObservableObject {
             var stale = false
             if let url = try? URL(resolvingBookmarkData: bookmark, options: [], relativeTo: nil, bookmarkDataIsStale: &stale), !stale {
                 selectedDirectory = url
-                directoryLabel = "Selected folder: \(url.lastPathComponent)"
+                directoryLabel = url.lastPathComponent
+                directoryLocation = "Selected folder"
             } else {
-                directoryLabel = "Selected folder needs authorization again"
+                directoryLabel = "Choose folder again"
+                directoryLocation = "Folder access needs authorization"
             }
         }
         let restored: ICloudSyncSettings
@@ -100,7 +103,8 @@ final class ICloudSyncModel: ObservableObject {
             let bookmark = try url.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
             defaults.set(bookmark, forKey: Self.bookmarkKey)
             selectedDirectory = url
-            directoryLabel = "Selected folder: \(url.lastPathComponent)"
+            directoryLabel = url.lastPathComponent
+            directoryLocation = "Selected folder"
             notice = "Folder selected. Choose the same sakamoto folder as the TUI iCloud directory."
         } catch { notice = "Could not save access to this folder. Please select it again." }
     }

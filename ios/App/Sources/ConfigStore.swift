@@ -32,8 +32,9 @@ final class ConfigStore: ObservableObject {
     @Published private(set) var profileError: String?
     func reportProfileError(_ error: Error) { profileError = TunnelDiagnostics.sanitized(error.localizedDescription) }
     var selectedProfile: TunnelProfile? { profiles.first { $0.id == selectedProfileID } }
+    @Published private(set) var applying = false
     @Published private(set) var generating = false
-    var canConnect: Bool { !generating && selectedProfile != nil && selectedProfile?.sourcesChanged == false && !content.isEmpty }
+    var canConnect: Bool { !applying && !generating && selectedProfile != nil && selectedProfile?.sourcesChanged == false && !content.isEmpty }
     var canGenerate: Bool { !generating && (!nodesSources.nodes.isEmpty || !nodesSources.subscriptions.isEmpty) }
 
     /// The last saved config — what Connect and Regenerate+Reconnect use.
@@ -293,7 +294,7 @@ final class ConfigStore: ObservableObject {
         defer { generating = false }
         let raw = try await Task.detached(priority: .userInitiated) {
             var error: NSError?
-            let result = MobilegenGenerateProfileJSON(bundleJSON, settingsJSON, &error)
+            let result = MobilegenGenerateProfileWithFetcherJSON(bundleJSON, settingsJSON, NativeSourceFetcher(), &error)
             if let error { throw error }
             return result
         }.value
@@ -481,9 +482,12 @@ final class ConfigStore: ObservableObject {
     /// authentication and activate it. Startup needs provider confirmation;
     /// a running provider applies via reload with rollback on failure.
     func regenerateAndApply(tunnel: TunnelControlling) async {
+        guard !applying else { return }
+        applying = true
+        defer { applying = false }
         if selectedProfile?.sourcesChanged == true || content.isEmpty {
             do { try await generateFromSources() }
-            catch { transition(.regenerateFailed); lastAction = "generation failed: " + TunnelDiagnostics.sanitized(error.localizedDescription); return }
+            catch { transition(.regenerateFailed); lastAction = TunnelDiagnostics.sanitized(error.localizedDescription); return }
         }
         let profileID = selectedProfileID
         let configBefore = content
