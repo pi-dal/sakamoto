@@ -69,7 +69,7 @@ struct SakamotoApp: App {
                 .tabItem { Label("Home", systemImage: "house") }
                 .tag(0)
                 NavigationStack {
-                    ConfigView(model: configModel)
+                    ConfigView(model: configModel, sync: iCloudSyncModel, s3: s3SyncModel, settings: settingsModel)
                 }
                 .tabItem { Label("Config", systemImage: "slider.horizontal.3") }
                 .tag(1)

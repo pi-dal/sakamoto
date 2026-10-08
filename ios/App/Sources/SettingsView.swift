@@ -94,11 +94,15 @@ final class SettingsModel: ObservableObject {
         }
     }
 
+    func setExperiment(_ enabled: Bool) {
+        apply("Experiment \(enabled ? "on" : "off")") { try SettingsOverrides.setExperiment(enabled, in: $0) }
+    }
+
     private func apply(_ label: String, _ transform: (String) throws -> String) {
         do {
             let next = try transform(store.content)
             store.save(next)
-            notice = Notice(kind: .info, text: "\(label) saved — regenerate + reconnect to apply")
+            notice = Notice(kind: .info, text: "\(label) saved — apply configuration to take effect")
             refreshSemantics()
         } catch {
             notice = Notice(kind: .error, text: "\(label): \(error.localizedDescription)")
@@ -162,6 +166,7 @@ struct SettingsView: View {
     @ObservedObject var sync: ICloudSyncModel
     @ObservedObject var s3: S3SyncModel
     let commanding: LibboxCoreCommanding?
+    var sourcesOnly = false
 
     @State private var confirmSyncEnable = false
     @State private var showSyncDirectoryPicker = false
@@ -170,6 +175,7 @@ struct SettingsView: View {
 
     var body: some View {
         List {
+            if !sourcesOnly {
             Section("Connections") {
                 NavigationLink("Tunnel settings") {
                     List { runtimeSection; editableSection; applySection }
@@ -193,6 +199,19 @@ struct SettingsView: View {
                     TailscaleView(store: model.store, tunnel: model.tunnel, commanding: commanding)
                 }
             }
+            Section("Experiments") {
+                Toggle("Experiment", isOn: Binding(
+                    get: { SettingsOverrides.experimentEnabled(in: model.store.content) },
+                    set: { model.setExperiment($0) }
+                ))
+                .disabled(SettingsOverrides.experimentProxy(in: model.store.content) == nil)
+                Text(SettingsOverrides.experimentProxy(in: model.store.content) == nil
+                     ? "Import a generated VPN configuration with a proxy route to enable Experiment."
+                     : "On: unmatched traffic uses the proxy. Off: unmatched traffic goes direct. Apply configuration to take effect.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                if let notice = model.notice { Text(notice.text).font(.footnote).foregroundStyle(.secondary) }
+            }
+            }
             Section("Source sync") {
                 NavigationLink("iCloud Sync") {
                     List { iCloudSyncSection }
@@ -207,6 +226,7 @@ struct SettingsView: View {
                 }
                 NavigationLink("S3 Sync") { S3SettingsView(model: s3) }
             }
+            if !sourcesOnly {
             Section("Advanced") {
                 NavigationLink("Host-owned configuration") {
                     List { hostOwnedSection }.listStyle(.insetGrouped).navigationTitle("Host configuration")
@@ -214,12 +234,14 @@ struct SettingsView: View {
                 }
             }
             aboutSection
+            }
         }
         .fileImporter(isPresented: $showSyncDirectoryPicker, allowedContentTypes: [.folder]) { result in
             if case .success(let url) = result { sync.selectDirectory(url) }
         }
-        .navigationTitle("Settings")
+        .navigationTitle(sourcesOnly ? "Sync sources" : "Settings")
         .sakamotoRootPage()
+        .onChange(of: model.store.content) { _ in model.refreshSemantics() }
         .task {
             model.activate()
             sync.activate()
@@ -285,9 +307,9 @@ struct SettingsView: View {
                 ))
             }
         } header: {
-            Text("Config (applied by Regenerate + Reconnect)")
+            Text("Saved configuration")
         } footer: {
-            Text("Edits are validated merges into the saved config. They take effect after Regenerate + Reconnect; the tunnel keeps the previous config until then.")
+            Text("Changes are saved on this device. Apply configuration & reconnect when you are ready.")
         }
     }
 
@@ -295,7 +317,7 @@ struct SettingsView: View {
     private var hostOwnedSection: some View {
         Section {
             if let semantics = model.semantics {
-                row("Unmatched policy (route final)", semantics.routeFinal ?? "—")
+                row("Saved unmatched route", semantics.routeFinal ?? "—")
                 row("TUN stack", semantics.tunStack ?? "—")
                 row("Strict routing", semantics.strictRoute.map { $0 ? "On" : "Off" } ?? "—")
             }
@@ -317,7 +339,7 @@ struct SettingsView: View {
                 Text(model.store.configState.rawValue)
                     .foregroundStyle(model.store.configState == .clean ? Color.green : Color.orange)
             }
-            Button("Regenerate + Reconnect") {
+            Button("Apply configuration & reconnect") {
                 confirmApply = true
             }
             .sakamotoGlassButton(prominent: true)
@@ -325,13 +347,21 @@ struct SettingsView: View {
         }
     }
 
+    @ViewBuilder
     private var iCloudSyncSection: some View {
         Section {
-            Text(sync.directoryLabel).font(.footnote).foregroundStyle(.secondary)
-            Button("Choose TUI iCloud folder…") { showSyncDirectoryPicker = true }
-                .disabled(sync.syncing)
-            Text("Choose iCloud Drive / sakamoto, or the folder shown as iCloud directory in the TUI. Files sync directly inside the selected folder.")
-                .font(.footnote).foregroundStyle(.secondary)
+            Button { showSyncDirectoryPicker = true } label: {
+                HStack {
+                    Label("Sync folder", systemImage: "folder")
+                    Spacer()
+                    Text(sync.directoryLabel).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
+                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                }
+            }.disabled(sync.syncing)
+        } header: { Text("Destination") } footer: {
+            Text("For Mac sync, select iCloud Drive → sakamoto, or the custom folder selected in the TUI. The app's own iCloud folder is separate.")
+        }
+        Section {
             Toggle("Sync sources to iCloud", isOn: Binding(
                 get: { sync.settings.enabled },
                 set: { enabled in
@@ -345,7 +375,8 @@ struct SettingsView: View {
                 }
             ))
             if sync.settings.enabled {
-                Toggle("Include conf & rule includes", isOn: Binding(
+                LabeledRow("Nodes", "nodes.txt")
+                Toggle("Include configuration source", isOn: Binding(
                     get: { sync.settings.includesConf },
                     set: { sync.setIncludeConf($0) }
                 ))
@@ -357,7 +388,6 @@ struct SettingsView: View {
                         if sync.syncing { Spacer(); ProgressView() }
                     }
                 }
-                .sakamotoGlassButton()
                 .disabled(sync.syncing)
             }
             HStack {
@@ -376,7 +406,7 @@ struct SettingsView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
-                VStack(alignment: .leading, spacing: 4) {
+                DisclosureGroup("Advanced source paths") {
                     Text("Additional source paths")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -398,9 +428,9 @@ struct SettingsView: View {
                 .font(.footnote)
                 .foregroundStyle(sync.status.isConflict ? Color.red : Color.secondary)
         } header: {
-            Text("iCloud Sync")
+            Text("Sync sources")
         } footer: {
-            Text("Generated configs, keys and logs stay local. The app container and the TUI's iCloud Drive folder are separate locations. Select the TUI folder above to share nodes.txt between devices; a device without nodes can download that file on its first sync.")
+            Text("Sync transfers source files. It does not choose or apply the running VPN configuration. Generated configs, keys and logs stay local.")
         }
     }
 

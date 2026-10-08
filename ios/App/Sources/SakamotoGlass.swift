@@ -12,8 +12,8 @@ extension View {
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
             .background(Color(uiColor: .systemGroupedBackground))
-            .navigationBarTitleDisplayMode(.large)
-            .toolbarBackground(.hidden, for: .navigationBar)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.visible, for: .navigationBar)
     }
 
     @ViewBuilder

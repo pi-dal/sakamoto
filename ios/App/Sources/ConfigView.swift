@@ -178,10 +178,19 @@ final class ConfigModel: ObservableObject {
                 importError = Self.failureMessage("content exceeds the 16 MiB limit", source: url.lastPathComponent)
                 return
             }
-            let summary = try importContent(
-                String(decoding: data, as: UTF8.self),
-                displaySource: url.lastPathComponent
-            )
+            let content = String(decoding: data, as: UTF8.self)
+            if content.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("{") {
+                var error: NSError?
+                _ = MobilecoreValidateConfigJSON(content, &error)
+                if let error { throw error }
+                _ = LibboxCheckConfig(content, &error)
+                if let error { throw error }
+                store.save(content)
+                draft = store.content
+                importError = nil
+                return
+            }
+            let summary = try importContent(content, displaySource: url.lastPathComponent)
             importError = nil
             importReport = summary
         } catch {
@@ -340,6 +349,9 @@ final class ConfigModel: ObservableObject {
 
 struct ConfigView: View {
     @ObservedObject var model: ConfigModel
+    @ObservedObject var sync: ICloudSyncModel
+    @ObservedObject var s3: S3SyncModel
+    @ObservedObject var settings: SettingsModel
     @Environment(\.scenePhase) private var scenePhase
     @State private var showImportOptions = false
     @State private var showURLImport = false
@@ -358,11 +370,15 @@ struct ConfigView: View {
 
     var body: some View {
         List {
-            Section {
+            Section("Current configuration") {
+                LabeledRow("VPN configuration", model.store.content.isEmpty ? "Not imported" : "Saved on this device")
                 if let imported = model.store.importedSource {
-                    LabeledRow("Configuration", imported.displaySource)
+                    LabeledRow("Rule source", imported.displaySource)
                 }
-                Button("Import configuration…") { showImportOptions = true }
+                LabeledRow("Pending changes", model.store.configState == .clean ? "None" : "Apply required")
+            }
+            Section {
+                Button { showImportOptions = true } label: { Label("Import configuration", systemImage: "square.and.arrow.down") }
                     .disabled(model.importing)
                 if let clipboardOfferContent {
                     clipboardOfferRow(content: clipboardOfferContent)
@@ -376,7 +392,7 @@ struct ConfigView: View {
                 .frame(minHeight: 44)
                 .accessibilityLabel("Import from clipboard")
                 .disabled(model.importing)
-                Button("Scan QR code") { pendingImport = nil; showScanner = true }
+                Button { pendingImport = nil; showScanner = true } label: { Label("Scan QR code", systemImage: "qrcode.viewfinder") }
                     .disabled(model.importing)
                 if let payloadError { Text(payloadError).font(.footnote).foregroundStyle(.red) }
                 if let error = model.importError {
@@ -384,17 +400,23 @@ struct ConfigView: View {
                 }
             }
             Section("Manage") {
-                NavigationLink("Policy") {
+                NavigationLink {
                     List { policySection }
                         .listStyle(.insetGrouped)
                         .navigationTitle("Policy")
                         .navigationBarTitleDisplayMode(.inline)
-                }
-                NavigationLink("Nodes & sources") {
+                } label: { Label("Routing rules", systemImage: "arrow.triangle.branch") }
+                NavigationLink {
                     List { nodesSourcesSection }
                         .listStyle(.insetGrouped)
                         .navigationTitle("Nodes & sources")
                         .navigationBarTitleDisplayMode(.inline)
+                } label: {
+                    HStack {
+                        Label("Nodes & sources", systemImage: "network")
+                        Spacer()
+                        Text("\(model.store.nodesSources.nodes.count) nodes").foregroundStyle(.secondary)
+                    }
                 }
                 NavigationLink("Import details") {
                     List { importSection }
@@ -403,6 +425,13 @@ struct ConfigView: View {
                         .navigationBarTitleDisplayMode(.inline)
                 }
             }
+            Section {
+                NavigationLink {
+                    SettingsView(model: settings, sync: sync, s3: s3, commanding: nil, sourcesOnly: true)
+                } label: {
+                    Label("Sync sources", systemImage: "arrow.triangle.2.circlepath")
+                }
+            } footer: { Text("Import adds files to this device. Sync keeps source files aligned with your Mac or cloud storage.") }
             Section("Apply changes") {
                 LabeledRow("Config state", model.store.configState.rawValue)
                 Button("Apply saved configuration") { confirmApply = true }
@@ -492,8 +521,10 @@ struct ConfigView: View {
             }
         }
         .confirmationDialog("Import configuration", isPresented: $showImportOptions, titleVisibility: .visible) {
-            Button("From URL…") { showURLImport = true }
-            Button("From Files…") { model.importNodesFile = false; model.showFileImporter = true }
+            Button("Rule configuration (.conf) from URL") { showURLImport = true }
+            Button("Rule configuration (.conf) from Files") { model.importNodesFile = false; model.showFileImporter = true }
+            Button("Node list (nodes.txt) from Files") { model.importNodesFile = true; model.showFileImporter = true }
+            Button("VPN configuration (JSON) from Files") { model.importNodesFile = false; model.showFileImporter = true }
             Button("Cancel", role: .cancel) {}
         }
         .confirmationDialog("Apply saved configuration?", isPresented: $confirmApply, titleVisibility: .visible) {
@@ -969,7 +1000,7 @@ struct ConfigView: View {
     }
 }
 
-private struct LabeledRow: View {
+struct LabeledRow: View {
     let label: String
     let value: String
 

@@ -86,7 +86,12 @@ final class HomeModel: ObservableObject {
 
     func connect() async {
         guard !busy else { return }
+        guard !store.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            notice = Notice(kind: .warning, text: "Import a VPN configuration in Config before connecting.")
+            return
+        }
         busy = true
+        notice = nil
         defer { busy = false }
         // Requested-but-unconfirmed: Starting until the provider confirms.
         serviceState = .starting
@@ -136,6 +141,8 @@ final class HomeModel: ObservableObject {
             serviceState = snapshot.serviceState
             if let detail = snapshot.detail, !detail.isEmpty {
                 notice = Notice(kind: .warning, text: detail)
+            } else if notice?.kind == .progress && serviceState != .starting && serviceState != .stopping {
+                notice = nil
             }
         } catch {
             // The provider handle cannot be reached at all.
@@ -157,6 +164,8 @@ final class HomeModel: ObservableObject {
                 self.serviceState = observation.serviceState
                 if let detail = observation.detail, !detail.isEmpty {
                     self.notice = Notice(kind: .warning, text: detail)
+                } else if self.notice?.kind == .progress && self.serviceState != .starting && self.serviceState != .stopping {
+                    self.notice = nil
                 }
                 self.syncCommandChannel()
                 self.refoldPhase(conflict: observation.conflict)

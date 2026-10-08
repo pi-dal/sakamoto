@@ -26,7 +26,7 @@ struct HomeView: View {
 
             Section {
                 HStack {
-                    Text("Probe")
+                    Text("Connection check")
                     Spacer()
                     Text(model.probe.state)
                         .foregroundStyle(probeColor)
@@ -40,19 +40,23 @@ struct HomeView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
-                Button("Run probe") {
+                Button("Check connection") {
                     Task { await model.runProbe() }
                 }
-                .sakamotoGlassButton()
+                .buttonStyle(.borderless)
                 .disabled(model.phase != .tunRunning && model.phase != .reachable && model.phase != .unverified)
             } header: {
                 Text("Network")
 
             }
 
-            commandChannelSection
-
             groupsSection
+            Section {
+                DisclosureGroup("Connection details") {
+                    LabeledRow("Command channel", model.commandChannelActive ? "Connected" : "Unavailable")
+                    LabeledRow("Service", model.serviceState.rawValue)
+                }
+            }
         }
         .navigationTitle("Home")
         .sakamotoRootPage()
@@ -78,8 +82,7 @@ struct HomeView: View {
                 .foregroundStyle(phaseColor)
             Spacer()
         }
-        .padding(12)
-        .sakamotoGlassCard()
+        .accessibilityLabel("VPN status: \(model.phase.rawValue)")
     }
 
     private var connectButton: some View {
@@ -95,8 +98,9 @@ struct HomeView: View {
             Text(model.phase == .disconnected || model.phase == .unavailable ? "Connect" : "Disconnect")
                 .frame(maxWidth: .infinity)
         }
-        .sakamotoGlassButton(prominent: true)
-        .disabled(model.busy)
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+        .disabled(model.busy || model.store.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
     private var modeButton: some View {
@@ -110,7 +114,7 @@ struct HomeView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .sakamotoGlassButton()
+        .buttonStyle(.plain)
         .disabled(!model.commandChannelActive)
     }
 
@@ -135,7 +139,7 @@ struct HomeView: View {
     private var groupsSection: some View {
         Section {
             if model.groups.isEmpty {
-                Text("Connect to view groups")
+                Text(model.store.content.isEmpty ? "Import a VPN configuration in Config to get started." : "Connect to view nodes and groups")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -162,7 +166,7 @@ struct HomeView: View {
                 }
             }
         } header: {
-            Text("Groups")
+            Text("Nodes & groups")
         }
     }
 

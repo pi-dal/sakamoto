@@ -112,6 +112,36 @@ public enum SettingsOverrides {
     /// vocabulary both ends render.
     public static let allowedLogLevels = ["error", "warn", "info", "debug"]
 
+    /// Matches the host experiment.ProxyOutbound contract: use the explicit
+    /// rs-proxy rule, including a configured chain exit. Never guess a tag.
+    public static func experimentProxy(in configJSON: String) -> String? {
+        guard let root = try? parseRoot(configJSON),
+              let route = root["route"] as? [String: Any],
+              let rules = route["rules"] as? [[String: Any]] else { return nil }
+        return rules.first(where: {
+            ($0["rule_set"] as? [String]) == ["rs-proxy"] && !($0["outbound"] as? String ?? "").isEmpty
+        })?["outbound"] as? String
+    }
+
+    public static func experimentEnabled(in configJSON: String) -> Bool {
+        guard let proxy = experimentProxy(in: configJSON) else { return false }
+        return ConfigSemanticsReader.read(configJSON)?.routeFinal == proxy
+    }
+
+    public static func setExperiment(_ enabled: Bool, in configJSON: String) throws -> String {
+        var root = try parseRoot(configJSON)
+        guard let proxy = experimentProxy(in: configJSON),
+              let outbounds = root["outbounds"] as? [[String: Any]],
+              outbounds.contains(where: { ($0["tag"] as? String) == proxy }),
+              outbounds.contains(where: { ($0["tag"] as? String) == "direct" && ($0["type"] as? String) == "direct" }),
+              var route = root["route"] as? [String: Any] else {
+            throw SettingsOverrideError.invalidConfig("import a configuration with explicit proxy and direct routes first")
+        }
+        route["final"] = enabled ? proxy : "direct"
+        root["route"] = route
+        return try serialize(root)
+    }
+
     public static func setLogLevel(_ level: String, in configJSON: String) throws -> String {
         let normalized = level.lowercased()
         guard allowedLogLevels.contains(normalized) else {
