@@ -73,6 +73,11 @@ description = "Archive a signed device app using IOS_DEVELOPMENT_TEAM"
 tools.xcodegen = "2.46.0"
 run = "bash ios/scripts/package.sh archive"
 
+[tasks."ios:store-archive"]
+description = "Prepare an archive with entitlements for App Store Connect distribution export"
+tools.xcodegen = "2.46.0"
+run = "bash ios/scripts/package.sh store-archive"
+
 [tasks."ios:ipa"]
 description = "Export a signed archive using IOS_EXPORT_OPTIONS_PLIST"
 run = "bash ios/scripts/package.sh export"

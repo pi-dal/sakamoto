@@ -281,9 +281,28 @@ IOS_EXPORT_OPTIONS_PLIST=/absolute/path/ExportOptions.plist mise run ios:ipa
 
 Outputs: `ios/build/Sakamoto.xcarchive` and `ios/build/ipa/*.ipa`.
 Use an export-options plist matching your distribution method and profiles
-(App Store Connect, development, or ad hoc). Certificates and provisioning
-profiles must already be installed. The packaging commands do not create
-Apple capabilities or upload to App Store Connect. Build output and the
+(App Store Connect, development, or ad hoc). By default certificates and profiles
+must already be installed. Set `IOS_ALLOW_PROVISIONING_UPDATES=1` to let Xcode
+use your signed-in Apple account for automatic provisioning.
+
+For an App Store Connect Team without registered devices, prepare the archive
+without a development profile, then export with distribution signing:
+
+```bash
+mise run ios:store-archive
+IOS_ALLOW_PROVISIONING_UPDATES=1 \
+IOS_EXPORT_OPTIONS_PLIST=/absolute/path/ExportOptions.plist mise run ios:ipa
+```
+
+The store archive has an ad-hoc signature preserving each target's declared
+entitlements; it is not installable or distributable until export succeeds.
+Export options use `method: app-store-connect`, `teamID`, automatic signing and
+`destination: export` (IPA) or `destination: upload` (App Store Connect upload).
+Set `testFlightInternalTestingOnly: true` for an internal-only TestFlight build.
+Always verify the exported app and extensions retain NetworkExtension, App Group
+and app-only production iCloud entitlements. The registered Widgets bundle ID is
+`com.pidal.sakamoto.WidgetExtension`; the previous `.Widgets` identifier was
+unavailable during registration. The provisioned Team is `6Y2YB464VU`. Build output and the
 optional `ios/ExportOptions.local.plist` are ignored by git. No signed IPA
 is uploaded by CI until signing credentials are configured separately.
 

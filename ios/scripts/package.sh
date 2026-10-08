@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Package simulator output, or archive/export a signed device build.
-# Frameworks must be built first. Credentials/profiles are never generated here.
+# Frameworks must be built first. Automatic provisioning is opt-in.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -10,9 +10,14 @@ mkdir -p "${OUTPUT_DIR}"
 OUTPUT_DIR="$(cd "${OUTPUT_DIR}" && pwd)"
 
 case "${MODE}" in
-    simulator|archive|export) ;;
-    *) echo "usage: package.sh simulator|archive|export" >&2; exit 2 ;;
+    simulator|archive|store-archive|export) ;;
+    *) echo "usage: package.sh simulator|archive|store-archive|export" >&2; exit 2 ;;
 esac
+
+PROVISIONING_ARGS=()
+if [ "${IOS_ALLOW_PROVISIONING_UPDATES:-0}" = 1 ]; then
+    PROVISIONING_ARGS+=(-allowProvisioningUpdates)
+fi
 
 # Fail before an expensive build when device-signing input is absent.
 if [ "${MODE}" = archive ]; then
@@ -25,7 +30,7 @@ if [ "${MODE}" = export ]; then
     xcodebuild -exportArchive \
         -archivePath "${OUTPUT_DIR}/Sakamoto.xcarchive" \
         -exportPath "${OUTPUT_DIR}/ipa" \
-        -exportOptionsPlist "${IOS_EXPORT_OPTIONS_PLIST}"
+        -exportOptionsPlist "${IOS_EXPORT_OPTIONS_PLIST}" "${PROVISIONING_ARGS[@]}"
     exit 0
 fi
 
@@ -55,10 +60,27 @@ with p.open("rb") as f:
 p.with_suffix(".zip.sha256").write_text(digest + "  " + p.name + "\n")
 PY
     echo "Simulator app: ${OUTPUT_DIR}/Sakamoto-simulator.zip (not installable on iPhone)"
+elif [ "${MODE}" = store-archive ]; then
+    # Teams without registered devices cannot create development profiles.
+    # Preserve the required entitlements with an ad-hoc archive signature so
+    # App Store Connect export requests full distribution profiles, rather
+    # than silently exporting a bundle without VPN/App Group/iCloud access.
+    xcodebuild -project Sakamoto.xcodeproj -scheme Sakamoto \
+        -destination 'generic/platform=iOS' -configuration Release \
+        -archivePath "${OUTPUT_DIR}/Sakamoto.xcarchive" \
+        CODE_SIGNING_ALLOWED=NO archive
+    APP="${OUTPUT_DIR}/Sakamoto.xcarchive/Products/Applications/Sakamoto.app"
+    codesign --force --sign - --entitlements Extension/SakamotoPacketTunnel.entitlements \
+        "${APP}/PlugIns/SakamotoPacketTunnel.appex"
+    codesign --force --sign - --entitlements Widgets/SakamotoWidgets.entitlements \
+        "${APP}/PlugIns/SakamotoWidgets.appex"
+    codesign --force --sign - --entitlements App/Sakamoto.entitlements "${APP}"
+    echo "Archive prepared for distribution export: ${OUTPUT_DIR}/Sakamoto.xcarchive"
+    echo "Ad-hoc archive signature is not a distribution signature; run ios:ipa."
 else
     xcodebuild -project Sakamoto.xcodeproj -scheme Sakamoto \
         -destination 'generic/platform=iOS' -configuration Release \
         -archivePath "${OUTPUT_DIR}/Sakamoto.xcarchive" \
-        DEVELOPMENT_TEAM="${IOS_DEVELOPMENT_TEAM}" archive
+        DEVELOPMENT_TEAM="${IOS_DEVELOPMENT_TEAM}" "${PROVISIONING_ARGS[@]}" archive
     echo "Signed archive: ${OUTPUT_DIR}/Sakamoto.xcarchive"
 fi

@@ -75,6 +75,15 @@ targets:
         SakamotoAppGroupIdentifier: group.com.pidal.sakamoto
         SakamotoProviderBundleIdentifier: com.pidal.sakamoto.PacketTunnel
         UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         # iCloud Drive visibility for the sync container (matches
         # App/Sakamoto.entitlements + UbiquityICloudContainer — replace the
         # placeholder id in all three places together).
@@ -130,7 +139,7 @@ targets:
       - sdk: AppIntents.framework
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.pidal.sakamoto.Widgets
+        PRODUCT_BUNDLE_IDENTIFIER: com.pidal.sakamoto.WidgetExtension
         CODE_SIGN_ENTITLEMENTS: Widgets/SakamotoWidgets.entitlements
         APPLICATION_EXTENSION_API_ONLY: YES
         SKIP_INSTALL: YES
