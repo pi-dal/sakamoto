@@ -108,6 +108,57 @@ public enum TailscaleEndpointProvisioning {
         )
     }
 
+    /// First-use Tailscale profile: tailnet routes/MagicDNS use the endpoint;
+    /// other traffic uses direct. Proxy source generation is independent.
+    public static func standaloneConfiguration(options: TailscaleEndpointOptions) throws -> String {
+        let base = """
+        {"log":{"level":"info","timestamp":true},"dns":{"servers":[{"type":"udp","tag":"direct-dns","server":"1.1.1.1"}],"final":"direct-dns"},"inbounds":[{"type":"tun","tag":"tun-in","address":["172.19.0.1/30","fdfe:dcba:9876::1/126"],"auto_route":true,"stack":"mixed"}],"outbounds":[{"type":"direct","tag":"direct"}],"route":{"rules":[{"action":"sniff"},{"protocol":"dns","action":"hijack-dns"}],"final":"direct","auto_detect_interface":true,"default_domain_resolver":{"server":"direct-dns"}}}
+        """
+        return try enable(options: options, in: base)
+    }
+
+    /// Install the endpoint's dynamic tailnet route and MagicDNS resolver.
+    /// Reserved DNS tag ownership avoids collisions with existing resolvers.
+    public static func withConnectivity(in configJSON: String) throws -> String {
+        guard var root = try JSONSerialization.jsonObject(with: configData(configJSON)) as? [String: Any],
+              let endpoints = root["endpoints"] as? [[String: Any]],
+              endpoints.contains(where: { $0["type"] as? String == "tailscale" }) else { return configJSON }
+        var route = root["route"] as? [String: Any] ?? [:]
+        var routeRules = route["rules"] as? [[String: Any]] ?? []
+        var dns = root["dns"] as? [String: Any] ?? [:]
+        var servers = dns["servers"] as? [[String: Any]] ?? []
+        var dnsRules = dns["rules"] as? [[String: Any]] ?? []
+        if servers.isEmpty {
+            // A valid imported config may omit DNS entirely. MagicDNS must
+            // not become the sole resolver for ordinary Internet domains.
+            servers.append(["type":"udp", "tag":"sakamoto-direct-dns", "server":"1.1.1.1"])
+            if dns["final"] == nil { dns["final"] = "sakamoto-direct-dns" }
+            if route["default_domain_resolver"] == nil { route["default_domain_resolver"] = ["server":"sakamoto-direct-dns"] }
+        }
+        for endpoint in endpoints where endpoint["type"] as? String == "tailscale" {
+            guard let tag = endpoint["tag"] as? String else { continue }
+            let dnsTag = "sakamoto-tailnet-dns-" + tag
+            if let existing = servers.first(where: { $0["tag"] as? String == dnsTag }) {
+                guard existing["type"] as? String == "tailscale", existing["endpoint"] as? String == tag else { throw TailscaleEndpointError.tagCollision(dnsTag) }
+            } else {
+                servers.append(["type":"tailscale", "tag":dnsTag, "endpoint":tag, "accept_search_domain":true])
+            }
+            if !dnsRules.contains(where: { $0["server"] as? String == dnsTag }) {
+                dnsRules.insert(["preferred_by":[dnsTag], "action":"route", "server":dnsTag], at: 0)
+            }
+            if !routeRules.contains(where: { $0["preferred_by"] as? [String] == [tag] && $0["outbound"] as? String == tag }) {
+                // Sniff/DNS interception keep priority; endpoint preferred
+                // routes precede the generic private-address direct bypass.
+                let at = routeRules.firstIndex(where: { $0["action"] as? String != "sniff" && $0["action"] as? String != "hijack-dns" }) ?? routeRules.endIndex
+                routeRules.insert(["preferred_by":[tag],"action":"route","outbound":tag], at: at)
+            }
+        }
+        dns["servers"] = servers; dns["rules"] = dnsRules
+        route["rules"] = routeRules
+        root["dns"] = dns; root["route"] = route
+        return try serialize(root)
+    }
+
     /// Enable (append a minimal legal endpoint) or update the existing one
     /// with `options`. Idempotent for an already-identical endpoint. Never
     /// touches `auth_key`: that stays Keychain-only until the start-time
@@ -164,7 +215,7 @@ public enum TailscaleEndpointProvisioning {
             endpoints.append(endpoint)
         }
         root["endpoints"] = endpoints
-        return try serialize(root)
+        return try withConnectivity(in: serialize(root))
     }
 
     /// Remove all tailscale endpoints. Unchanged input returns as-is
@@ -187,6 +238,23 @@ public enum TailscaleEndpointProvisioning {
         let remaining = endpoints.filter { ($0["type"] as? String) != "tailscale" }
         if remaining.count == endpoints.count {
             return configJSON
+        }
+        let removed = Set(endpoints.filter { $0["type"] as? String == "tailscale" }.compactMap { $0["tag"] as? String })
+        if var route = root["route"] as? [String: Any], let rules = route["rules"] as? [[String: Any]] {
+            route["rules"] = rules.filter { rule in
+                guard let tag = rule["outbound"] as? String else { return true }
+                return !(removed.contains(tag) && rule["preferred_by"] as? [String] == [tag])
+            }
+            root["route"] = route
+        }
+        if var dns = root["dns"] as? [String: Any], let servers = dns["servers"] as? [[String: Any]] {
+            let owned = Set(servers.filter { server in
+                guard let tag = server["tag"] as? String, let endpoint = server["endpoint"] as? String else { return false }
+                return removed.contains(endpoint) && tag == "sakamoto-tailnet-dns-" + endpoint && server["type"] as? String == "tailscale"
+            }.compactMap { $0["tag"] as? String })
+            dns["servers"] = servers.filter { !owned.contains($0["tag"] as? String ?? "") }
+            if let rules = dns["rules"] as? [[String: Any]] { dns["rules"] = rules.filter { !owned.contains($0["server"] as? String ?? "") } }
+            root["dns"] = dns
         }
         if remaining.isEmpty {
             root.removeValue(forKey: "endpoints")

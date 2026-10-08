@@ -90,6 +90,7 @@ struct SakamotoApp: App {
             }
             .sakamotoInspector()
             .tint(.primary)
+            .toggleStyle(SakamotoSwitchStyle())
             .onOpenURL { url in
                 if url.scheme == "sakamoto", url.host == "home" { selectedTab = 0 }
             }

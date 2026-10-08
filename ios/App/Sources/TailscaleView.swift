@@ -16,7 +16,7 @@ import SakamotoKit
 // (Keychain → start-time injection), not a UI login call.
 
 struct TailscaleView: View {
-    let store: ConfigStore
+    @ObservedObject var store: ConfigStore
     let tunnel: TunnelControlling
     let commanding: LibboxCoreCommanding?
 
@@ -58,6 +58,7 @@ struct TailscaleView: View {
             loadDrafts()
         }
         .onDisappear { controller.cancel() }
+        .onChange(of: store.selectedProfileID) { _ in draftsLoaded = false; provisionNotice = nil; loadDrafts() }
         .confirmationDialog("Log out of tailnet?", isPresented: Binding(
             get: { pendingLogout != nil }, set: { if !$0 { pendingLogout = nil } }
         ), titleVisibility: .visible) {
@@ -121,21 +122,27 @@ struct TailscaleView: View {
                 set: { value in if value { setEnabled(true) } else { confirmDisable = true } }
             ))
             if enabled {
-                TextField("Hostname (optional; device name by default)", text: $hostnameDraft)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                Toggle("Accept tailnet subnet routes", isOn: $acceptRoutesDraft)
-                TextField("Exit node (optional; name or IP)", text: $exitNodeDraft)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                Toggle("Route LAN access via exit node", isOn: $allowLANDraft)
-                Button("Save endpoint settings") {
-                    applyOptions()
+                DisclosureGroup("Endpoint options") {
+                    TextField("Hostname (optional)", text: $hostnameDraft)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                    Toggle("Accept tailnet subnet routes", isOn: $acceptRoutesDraft)
+                    TextField("Exit node (name or IP)", text: $exitNodeDraft)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                    Toggle("Route LAN access via exit node", isOn: $allowLANDraft)
+                    Button("Save endpoint settings") { applyOptions() }
+                    Text("Saved settings apply on reconnect. Exit-node changes below apply immediately.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
-                Text("Runtime exit-node changes on this page override the saved exit node until the next reconnect.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
             }
+            if store.configState != .clean && (store.canConnect || store.canGenerate) {
+                Button(store.applying ? "Applying…" : "Apply & connect") {
+                    Task { await store.regenerateAndApply(tunnel: tunnel) }
+                }.disabled(store.applying || store.generating)
+            }
+            if let action = store.lastAction { Text(action).font(.footnote).foregroundStyle(.secondary) }
             if let notice = provisionNotice {
                 Text(notice.text)
                     .font(.footnote)
@@ -144,7 +151,7 @@ struct TailscaleView: View {
         } header: {
             Text("Endpoint configuration")
         } footer: {
-            Text("Writes a minimal, legal tailscale endpoint (endpoints[].type == \"tailscale\") into the saved config. It is an endpoint inside the tunnel process — not a proxy outbound; Home's groups never list tailnet peers. Saving marks the config modified: run Regenerate + Reconnect in Config/Settings to apply.")
+            Text("Enable, then Apply & connect. Once the VPN is running, sign in using the login link below or a stored auth key.")
         }
     }
 
@@ -161,14 +168,11 @@ struct TailscaleView: View {
 
     private func setEnabled(_ enabled: Bool) {
         do {
-            let next = enabled
-                ? try TailscaleEndpointProvisioning.enable(options: currentOptions(), in: store.content)
-                : try TailscaleEndpointProvisioning.disable(in: store.content)
-            store.save(next)
+            try store.setTailscaleEnabled(enabled, options: currentOptions())
             provisionNotice = Notice(
                 kind: .info,
                 text: enabled
-                    ? "Endpoint added — regenerate + reconnect to apply"
+                    ? "Endpoint added — Apply & connect to sign in"
                     : "Endpoint removed — regenerate + reconnect to apply"
             )
         } catch {
@@ -178,8 +182,7 @@ struct TailscaleView: View {
 
     private func applyOptions() {
         do {
-            let next = try TailscaleEndpointProvisioning.enable(options: currentOptions(), in: store.content)
-            store.save(next)
+            try store.setTailscaleEnabled(true, options: currentOptions())
             provisionNotice = Notice(kind: .info, text: "Endpoint settings saved — regenerate + reconnect to apply")
         } catch {
             provisionNotice = Notice(kind: .error, text: error.localizedDescription)

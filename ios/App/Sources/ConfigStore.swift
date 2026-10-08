@@ -249,6 +249,30 @@ final class ConfigStore: ObservableObject {
         return settings
     }
 
+    func setTailscaleEnabled(_ enabled: Bool, options: TailscaleEndpointOptions) throws {
+        let empty = content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let next: String
+        if enabled {
+            next = empty
+                ? try TailscaleEndpointProvisioning.standaloneConfiguration(options: options)
+                : try TailscaleEndpointProvisioning.enable(options: options, in: content)
+        } else { next = try TailscaleEndpointProvisioning.disable(in: content) }
+        var candidate = selectedProfile ?? TunnelProfile(name: "Tailscale", config: next)
+        candidate.config = next
+        _ = try prepare(candidate)
+        if selectedProfile == nil {
+            // Keep source ownership intact; enabling is a runtime edit.
+            candidate.sourceBundleJSON = String(decoding: try JSONEncoder().encode(sourceBundle), as: UTF8.self)
+            try installProfile(candidate)
+        } else {
+            save(next)
+            if empty && sourceBundle.files.isEmpty, let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) {
+                profiles[index].sourcesChanged = false
+                persistProfiles()
+            }
+        }
+    }
+
     func saveExperimentSettings(_ settings: ExperimentSettings) throws {
         try settings.validate()
         guard let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) else { throw TunnelProfile.InvalidProfile("Import a configuration first") }
@@ -320,7 +344,7 @@ final class ConfigStore: ObservableObject {
             }
             if let endpoints = old["endpoints"] { next["endpoints"] = endpoints }
             if let log = old["log"] { next["log"] = log }
-            candidate.config = String(decoding: try JSONSerialization.data(withJSONObject: next, options: [.sortedKeys]), as: UTF8.self)
+            candidate.config = try TailscaleEndpointProvisioning.withConnectivity(in: String(decoding: try JSONSerialization.data(withJSONObject: next, options: [.sortedKeys]), as: UTF8.self))
             if let semantics = ConfigSemanticsReader.read(contentBefore) {
                 candidate.config = try SettingsOverrides.setBlockQUIC(semantics.blockQUIC, in: candidate.config)
                 candidate.config = try SettingsOverrides.setBlockSTUN(semantics.blockSTUN, in: candidate.config)

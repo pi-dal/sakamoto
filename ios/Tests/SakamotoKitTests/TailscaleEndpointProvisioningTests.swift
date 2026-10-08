@@ -101,6 +101,33 @@ final class TailscaleEndpointProvisioningTests: XCTestCase {
         }
     }
 
+    func testStandaloneUsesDynamicTailnetRouteAndMagicDNS() throws {
+        let config = try TailscaleEndpointProvisioning.standaloneConfiguration(options: TailscaleEndpointOptions())
+        let root = try XCTUnwrap(JSONValueFactory.parse(config))
+        XCTAssertEqual(root["route"]?["final"]?.stringValue, "direct")
+        let rules = try XCTUnwrap(root["route"]?["rules"]?.arrayValue)
+        XCTAssertEqual(rules.last?["preferred_by"]?.arrayValue?.first?.stringValue, "tailscale-in")
+        XCTAssertEqual(rules.last?["outbound"]?.stringValue, "tailscale-in")
+        let servers = try XCTUnwrap(root["dns"]?["servers"]?.arrayValue)
+        XCTAssertEqual(servers.last?["endpoint"]?.stringValue, "tailscale-in")
+        XCTAssertEqual(servers.last?["accept_search_domain"]?.boolValue, true)
+        XCTAssertEqual(try TailscaleEndpointProvisioning.withConnectivity(in: config), config, "connectivity must be idempotent")
+        let disabled = try TailscaleEndpointProvisioning.disable(in: config)
+        let clean = try XCTUnwrap(JSONValueFactory.parse(disabled))
+        XCTAssertEqual(clean["dns"]?["servers"]?.arrayValue?.count, 1)
+        XCTAssertEqual(clean["route"]?["rules"]?.arrayValue?.count, 2)
+        XCTAssertEqual(clean["dns"]?["final"]?.stringValue, "direct-dns")
+    }
+
+    func testEnableDoesNotOverwriteCollidingDNSResolver() {
+        let config = """
+        {"dns":{"servers":[{"type":"udp","tag":"sakamoto-tailnet-dns-tailscale-in","server":"8.8.8.8"}]},"outbounds":[{"type":"direct","tag":"direct"}]}
+        """
+        XCTAssertThrowsError(try TailscaleEndpointProvisioning.enable(options: TailscaleEndpointOptions(), in: config)) { error in
+            XCTAssertEqual(error as? TailscaleEndpointError, .tagCollision("sakamoto-tailnet-dns-tailscale-in"))
+        }
+    }
+
     func testAuthKeyInjectionInterplay() throws {
         // The full on-device chain: enable the endpoint, then the start-time
         // injection can attach the Keychain key. The injection WITHOUT an

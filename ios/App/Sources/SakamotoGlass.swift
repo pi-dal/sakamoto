@@ -1,5 +1,15 @@
 import SwiftUI
 
+/// Keep native switch thumbs visible when the app's monochrome tint becomes
+/// white in Dark Mode. This style affects switches, not navigation/buttons.
+struct SakamotoSwitchStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Toggle(configuration)
+            .toggleStyle(.switch)
+            .tint(Color(red: 0.27, green: 0.40, blue: 0.64))
+    }
+}
+
 /// Native platform surface styling shared by the iOS app.
 ///
 /// Liquid Glass is available only on iOS 26. Older supported releases keep the
