@@ -84,7 +84,48 @@ final class ICloudSyncTests: XCTestCase {
     }
 
     private func cloudPath(_ name: String) -> String {
-        cloudRoot.appendingPathComponent("sakamoto", isDirectory: true).path + "/" + name
+        cloudRoot.appendingPathComponent("Documents/sakamoto", isDirectory: true).path + "/" + name
+    }
+
+    func testFirstSyncDownloadsNodesWithoutLocalPayloadFromSelectedTUIDirectory() async throws {
+        let cloud = InMemoryFilesystem()
+        try cloud.writeAtomic(Data("node-a".utf8), toPath: "/tui/nodes.txt")
+        let store = makeStore(settings: enabled(), cloud: cloud)
+        let outcome = await store.syncNow(staging: [], directoryURL: URL(fileURLWithPath: "/tui"), downloadNames: ["nodes.txt"])
+        XCTAssertEqual(outcome.downloads.map(\.name), ["nodes.txt"])
+        XCTAssertEqual(outcome.downloads.first?.data, Data("node-a".utf8))
+        XCTAssertFalse(cloud.fileExists(atPath: "/tui/sakamoto/nodes.txt"))
+    }
+
+    func testInvalidDownloadedNodesDoNotAdvanceBaselineOrWriteOtherSources() async throws {
+        let cloud = InMemoryFilesystem()
+        let local = InMemoryFilesystem()
+        try cloud.writeAtomic(Data("invalid".utf8), toPath: "/tui/nodes.txt")
+        let store = makeStore(settings: enabled(), local: local, cloud: cloud)
+        let result = await store.syncNow(staging: [entry("policy.json", "local")], directoryURL: URL(fileURLWithPath: "/tui"), downloadNames: ["nodes.txt"], validateDownload: { _, _ in throw NodeFileImport.Failure("invalid") })
+        XCTAssertTrue(result.downloads.isEmpty)
+        let scopedState = "/local/directories/" + ICloudSyncStore.digest(Data("/tui".utf8)) + "/icloud-state.json"
+        XCTAssertFalse(local.fileExists(atPath: scopedState))
+        XCTAssertFalse(cloud.fileExists(atPath: "/tui/policy.json"))
+    }
+
+    func testSelectedFolderConflictDoesNotOverwriteNodes() async throws {
+        let cloud = InMemoryFilesystem()
+        try cloud.writeAtomic(Data("remote".utf8), toPath: "/tui/nodes.txt")
+        let store = makeStore(settings: enabled(), cloud: cloud)
+        let result = await store.syncNow(staging: [entry("nodes.txt", "local")], directoryURL: URL(fileURLWithPath: "/tui"))
+        XCTAssertTrue(result.status.isConflict)
+        XCTAssertEqual(try cloud.contents(atPath: "/tui/nodes.txt"), Data("remote".utf8))
+    }
+
+    func testChangingDirectoryDoesNotReusePreviousBaseline() async throws {
+        let cloud = InMemoryFilesystem()
+        let store = makeStore(settings: enabled(), cloud: cloud)
+        _ = await store.syncNow(staging: [entry("nodes.txt", "baseline")], directoryURL: URL(fileURLWithPath: "/one"))
+        try cloud.writeAtomic(Data("baseline".utf8), toPath: "/two/nodes.txt")
+        let result = await store.syncNow(staging: [entry("nodes.txt", "local-change")], directoryURL: URL(fileURLWithPath: "/two"))
+        XCTAssertTrue(result.status.isConflict)
+        XCTAssertEqual(try cloud.contents(atPath: "/two/nodes.txt"), Data("baseline".utf8))
     }
 
     // MARK: Path policy (ValidSourceName port)

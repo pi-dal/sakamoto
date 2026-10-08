@@ -37,6 +37,8 @@ final class ConfigModel: ObservableObject {
     @Published var importError: String?
     @Published var importReport: ImportSummary?
     @Published var showFileImporter = false
+    @Published var importNodesFile = false
+    @Published var nodeImportNotice: String?
     /// Structural-check failure from the advanced editor (never contains
     /// config content — bridge messages are generic).
     @Published var editorError: String?
@@ -157,7 +159,21 @@ final class ConfigModel: ObservableObject {
         do {
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            let data = try Data(contentsOf: url)
+            var coordinationError: NSError?
+            var readResult: Result<Data, Error>?
+            NSFileCoordinator().coordinate(readingItemAt: url, options: .withoutChanges, error: &coordinationError) { target in
+                readResult = Result { try Data(contentsOf: target) }
+            }
+            if let coordinationError { throw coordinationError }
+            guard let readResult else { throw ImportError(reason: "the content could not be read") }
+            let data = try readResult.get()
+            if importNodesFile || url.lastPathComponent.lowercased() == "nodes.txt" {
+                let nodes = try NodeFileImport.parse(data, validate: Self.validateNode)
+                store.commitNodesSources(NodeFileImport.merging(nodes, into: store.nodesSources))
+                nodeImportNotice = "Imported \(nodes.count) node links. Existing nodes and sources were kept."
+                importError = nil
+                return
+            }
             guard data.count <= Self.maxImportBytes else {
                 importError = Self.failureMessage("content exceeds the 16 MiB limit", source: url.lastPathComponent)
                 return
@@ -171,6 +187,14 @@ final class ConfigModel: ObservableObject {
         } catch {
             importError = Self.failureMessage(Self.reason(of: error), source: url.lastPathComponent)
         }
+    }
+
+    nonisolated static func validateNode(_ link: String) throws -> StagedNode {
+        var error: NSError?
+        guard let info = MobilecoreParseShareLink(link, &error), error == nil else {
+            throw ImportError(reason: "invalid node link")
+        }
+        return StagedNode(rawLink: link, tag: info.tag, type: info.type, server: info.server)
     }
 
     /// Parse → report → commit. Throwing keeps the last-known-good import
@@ -469,7 +493,7 @@ struct ConfigView: View {
         }
         .confirmationDialog("Import configuration", isPresented: $showImportOptions, titleVisibility: .visible) {
             Button("From URL…") { showURLImport = true }
-            Button("From Files…") { model.showFileImporter = true }
+            Button("From Files…") { model.importNodesFile = false; model.showFileImporter = true }
             Button("Cancel", role: .cancel) {}
         }
         .confirmationDialog("Apply saved configuration?", isPresented: $confirmApply, titleVisibility: .visible) {
@@ -794,6 +818,9 @@ struct ConfigView: View {
                     model.pendingSubscriptionDeletion = model.store.nodesSources.subscriptions[index]
                 }
             }
+            Button("Import nodes.txt from Files…") { model.importNodesFile = true; model.showFileImporter = true }
+            if let notice = model.nodeImportNotice { Text(notice).font(.footnote).foregroundStyle(.secondary) }
+            if let error = model.importError { Text(error).font(.footnote).foregroundStyle(.red) }
             Button("Add node (share link)…") { model.showAddNode = true }
             Button("Add subscription source…") { model.showAddSubscription = true }
         } header: {

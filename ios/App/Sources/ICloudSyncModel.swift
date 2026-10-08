@@ -35,6 +35,9 @@ final class ICloudSyncModel: ObservableObject {
     @Published private(set) var notice: String?
     /// Additional source paths as an editable single string (one per line).
     @Published var additionalPathsDraft: String = ""
+    @Published private(set) var directoryLabel = "App iCloud container / Documents / sakamoto"
+    private static let bookmarkKey = "sakamoto.icloud.sync.directory.bookmark"
+    private var selectedDirectory: URL?
 
     private let store: ConfigStore
     private let syncStore: ICloudSyncStore
@@ -46,6 +49,15 @@ final class ICloudSyncModel: ObservableObject {
          clock: ICloudSyncClock = ICloudSystemClock()) {
         self.store = store
         self.defaults = defaults
+        if let bookmark = defaults.data(forKey: Self.bookmarkKey) {
+            var stale = false
+            if let url = try? URL(resolvingBookmarkData: bookmark, options: [], relativeTo: nil, bookmarkDataIsStale: &stale), !stale {
+                selectedDirectory = url
+                directoryLabel = "Selected folder: \(url.lastPathComponent)"
+            } else {
+                directoryLabel = "Selected folder needs authorization again"
+            }
+        }
         let restored: ICloudSyncSettings
         if let data = defaults.data(forKey: Self.settingsKey),
            let decoded = ICloudSyncSettings.decode(data) {
@@ -78,6 +90,19 @@ final class ICloudSyncModel: ObservableObject {
         let dir = base.appendingPathComponent("sakamoto-sync", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.path
+    }
+
+    func selectDirectory(_ url: URL) {
+        guard !syncing else { return }
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let bookmark = try url.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
+            defaults.set(bookmark, forKey: Self.bookmarkKey)
+            selectedDirectory = url
+            directoryLabel = "Selected folder: \(url.lastPathComponent)"
+            notice = "Folder selected. Choose the same sakamoto folder as the TUI iCloud directory."
+        } catch { notice = "Could not save access to this folder. Please select it again." }
     }
 
     func activate() {
@@ -206,9 +231,26 @@ final class ICloudSyncModel: ObservableObject {
         notice = nil
         Task {
             defer { syncing = false }
+            let directory = selectedDirectory
+            if defaults.data(forKey: Self.bookmarkKey) != nil && directory == nil {
+                notice = "Please choose the TUI iCloud folder again to restore access."
+                return
+            }
+            let scoped = directory?.startAccessingSecurityScopedResource() ?? false
+            guard directory == nil || scoped else {
+                notice = "Cannot access the selected folder. Please choose it again."
+                return
+            }
+            defer { if scoped { directory?.stopAccessingSecurityScopedResource() } }
             let (payload, skipped) = buildPayload()
-            let outcome = await syncStore.syncNow(staging: payload.entries)
-            let effectiveSkipped = skipped + outcome.skipped
+            let outcome = await syncStore.syncNow(
+                staging: payload.entries, directoryURL: directory,
+                downloadNames: ["nodes.txt"],
+                validateDownload: { name, data in
+                    if name == "nodes.txt" { _ = try NodeFileImport.parse(data, validate: ConfigModel.validateNode) }
+                }
+            )
+            let effectiveSkipped = skipped.filter { name in !outcome.downloads.contains(where: { $0.name == name }) } + outcome.skipped
             adopt(outcome.downloads)
             status = outcome.status
             if case .failed(_, let message) = outcome.status {
@@ -226,25 +268,14 @@ final class ICloudSyncModel: ObservableObject {
         for download in downloads {
             switch download.name {
             case "nodes.txt":
-                let links = String(decoding: download.data, as: UTF8.self)
-                    .split(whereSeparator: { $0.isNewline })
-                    .map { $0.trimmingCharacters(in: .whitespaces) }
-                    .filter { !$0.isEmpty }
-                var book = NodesSourcesBook()
-                for link in links {
-                    var bridgeError: NSError?
-                    guard let info = MobilecoreParseShareLink(link, &bridgeError) else { continue }
-                    book = book.adding(node: StagedNode(
-                        rawLink: link,
-                        tag: info.tag,
-                        type: info.type,
-                        server: info.server,
-                    ))
+                guard let nodes = try? NodeFileImport.parse(download.data, validate: ConfigModel.validateNode) else {
+                    notice = "Synced nodes failed validation; current nodes were kept."
+                    continue
                 }
                 // Synced nodes are authoritative for the nodes half;
                 // subscription metadata stays device-local unless its own
                 // file downloads below.
-                let next = NodesSourcesBook(nodes: book.nodes, subscriptions: store.nodesSources.subscriptions)
+                let next = NodesSourcesBook(nodes: nodes, subscriptions: store.nodesSources.subscriptions)
                 store.commitNodesSources(next)
 
             case "policy.json":

@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import Libbox
 import SakamotoKit
 
@@ -163,6 +164,7 @@ struct SettingsView: View {
     let commanding: LibboxCoreCommanding?
 
     @State private var confirmSyncEnable = false
+    @State private var showSyncDirectoryPicker = false
     @State private var confirmApply = false
     @State private var showModes = false
 
@@ -212,6 +214,9 @@ struct SettingsView: View {
                 }
             }
             aboutSection
+        }
+        .fileImporter(isPresented: $showSyncDirectoryPicker, allowedContentTypes: [.folder]) { result in
+            if case .success(let url) = result { sync.selectDirectory(url) }
         }
         .navigationTitle("Settings")
         .sakamotoRootPage()
@@ -322,6 +327,11 @@ struct SettingsView: View {
 
     private var iCloudSyncSection: some View {
         Section {
+            Text(sync.directoryLabel).font(.footnote).foregroundStyle(.secondary)
+            Button("Choose TUI iCloud folder…") { showSyncDirectoryPicker = true }
+                .disabled(sync.syncing)
+            Text("Choose iCloud Drive / sakamoto, or the folder shown as iCloud directory in the TUI. Files sync directly inside the selected folder.")
+                .font(.footnote).foregroundStyle(.secondary)
             Toggle("Sync sources to iCloud", isOn: Binding(
                 get: { sync.settings.enabled },
                 set: { enabled in
@@ -390,7 +400,7 @@ struct SettingsView: View {
         } header: {
             Text("iCloud Sync")
         } footer: {
-            Text("Off by default and never required: generated config.json, .srs, keys, Keychain content and logs stay local. The container id (iCloud.com.pidal.sakamoto) is a placeholder until a real Team signs the app — sync reports unavailable until then.")
+            Text("Generated configs, keys and logs stay local. The app container and the TUI's iCloud Drive folder are separate locations. Select the TUI folder above to share nodes.txt between devices; a device without nodes can download that file on its first sync.")
         }
     }
 

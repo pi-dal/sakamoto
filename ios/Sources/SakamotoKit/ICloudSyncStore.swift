@@ -122,7 +122,12 @@ public actor ICloudSyncStore {
 
     /// Run one sync pass over the staged entries. See the file header for
     /// the conflict rules; this is the ONLY method that touches iCloud.
-    public func syncNow(staging: [ICloudSyncPayload.Entry]) -> ICloudSyncOutcome {
+    public func syncNow(
+        staging: [ICloudSyncPayload.Entry],
+        directoryURL: URL? = nil,
+        downloadNames: [String] = [],
+        validateDownload: @Sendable (String, Data) throws -> Void = { _, _ in }
+    ) -> ICloudSyncOutcome {
         guard settings.enabled else {
             lastStatus = .disabled
             return ICloudSyncOutcome(status: .disabled, updates: [], downloads: [], skipped: [])
@@ -130,7 +135,7 @@ public actor ICloudSyncStore {
 
         // --- resolve the container -----------------------------------------
 
-        let containerURL = container.containerURL()
+        let containerURL = directoryURL ?? container.containerURL()
         guard let containerURL else {
             let status = ICloudSyncStatus.unavailable(
                 "no iCloud account signed in or container not entitled",
@@ -139,7 +144,9 @@ public actor ICloudSyncStore {
             return ICloudSyncOutcome(status: status, updates: [], downloads: [], skipped: [])
         }
         let directoryName = settings.directoryName.isEmpty ? "sakamoto" : settings.directoryName
-        let cloudRoot = containerURL.appendingPathComponent(directoryName, isDirectory: true).path
+        let cloudRoot = directoryURL?.path ?? containerURL
+            .appendingPathComponent("Documents", isDirectory: true)
+            .appendingPathComponent(directoryName, isDirectory: true).path
 
         // --- validate + resolve names ---------------------------------------
 
@@ -154,10 +161,14 @@ public actor ICloudSyncStore {
             }
             pairs.append(Pair(name: entry.name, data: entry.data, cloudPath: cloudRoot + "/" + entry.name))
         }
+        for name in downloadNames where !staging.contains(where: { $0.name == name }) {
+            guard ICloudSyncPaths.isValidSourceName(name) else { return fail(ICloudSyncError.forbiddenSourceName(name)) }
+            pairs.append(Pair(name: name, data: nil, cloudPath: cloudRoot + "/" + name))
+        }
         // Additional source paths must name staged entries; anything else is
         // reported as skipped — the pass never invents files.
         for additional in settings.additionalSourcePaths {
-            if !staging.contains(where: { $0.name == additional }) {
+            if !staging.contains(where: { $0.name == additional }) && !downloadNames.contains(additional) {
                 skipped.append(additional)
             }
         }
@@ -167,7 +178,10 @@ public actor ICloudSyncStore {
 
         // --- load baseline ---------------------------------------------------
 
-        let statePath = localDirectory + "/" + Self.stateFileName
+        // A baseline belongs to one remote directory. Switching folders must
+        // never reuse another directory's hash to choose an automatic upload.
+        let scope = Self.digest(Data(cloudRoot.utf8))
+        let statePath = localDirectory + "/directories/" + scope + "/" + Self.stateFileName
         let state: [String: String]
         do {
             state = try Self.loadState(from: statePath, filesystem: localFilesystem)
@@ -206,7 +220,20 @@ public actor ICloudSyncStore {
                 return fail(ICloudSyncError.filesystem("cannot read cloud copy of \(pair.name): \(error)"))
             }
 
-            let localDigest = Self.digest(pair.data)
+            if let remote {
+                guard remote.count <= ICloudSyncLimits.maxSourceBytes else { return fail(ICloudSyncError.sourceTooLarge(pair.name)) }
+                do { try validateDownload(pair.name, remote) }
+                catch { return fail(ICloudSyncError.filesystem("invalid cloud source \(pair.name); current data kept")) }
+            }
+            guard let localData = pair.data else {
+                if state[pair.name] != nil { return fail(ICloudSyncError.deletedLocally(pair.name)) }
+                if let remote {
+                    plan.downloads.append(Action(name: pair.name, data: remote, message: "downloaded from iCloud: \(pair.name)"))
+                    plan.baselines[pair.name] = Self.digest(remote)
+                }
+                continue
+            }
+            let localDigest = Self.digest(localData)
 
             guard let remote else {
                 if state[pair.name] != nil {
@@ -216,7 +243,7 @@ public actor ICloudSyncStore {
                     return fail(ICloudSyncError.deletedInCloud(pair.name))
                 }
                 // One-sided first use → upload.
-                plan.uploads.append(Action(name: pair.name, data: pair.data, message: "uploaded: \(pair.name)"))
+                plan.uploads.append(Action(name: pair.name, data: localData, message: "uploaded: \(pair.name)"))
                 plan.baselines[pair.name] = localDigest
                 continue
             }
@@ -237,7 +264,7 @@ public actor ICloudSyncStore {
             }
             if let previous = state[pair.name], previous == remoteDigest {
                 // Local moved ahead of our baseline → upload.
-                plan.uploads.append(Action(name: pair.name, data: pair.data, message: "uploaded update: \(pair.name)"))
+                plan.uploads.append(Action(name: pair.name, data: localData, message: "uploaded update: \(pair.name)"))
                 plan.baselines[pair.name] = localDigest
                 continue
             }
@@ -318,7 +345,7 @@ public actor ICloudSyncStore {
 
     private struct Pair {
         var name: String
-        var data: Data
+        var data: Data?
         var cloudPath: String
     }
 

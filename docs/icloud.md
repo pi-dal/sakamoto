@@ -1,5 +1,27 @@
 # Optional macOS iCloud Drive sync
 
+## Sharing nodes with iOS
+
+The TUI default directory is `iCloud Drive/sakamoto` (macOS:
+`~/Library/Mobile Documents/com~apple~CloudDocs/sakamoto`). The iOS app's own
+iCloud document container is a separate location; it cannot automatically access
+the global Drive folder without Files authorization.
+
+On iOS, open Settings → iCloud Sync → Choose TUI iCloud folder and select that
+same `sakamoto` folder in iCloud Drive, or the custom directory configured in the
+TUI. Sync uses the selected folder directly, without adding another `sakamoto`
+subdirectory. Access is saved as a security-scoped bookmark; reselect the folder
+if authorization expires. Each directory has a separate conflict baseline.
+An empty device can download `nodes.txt` on first sync. Differing existing local
+and cloud nodes without a shared baseline remain a conflict and are not overwritten.
+
+For a one-time import, use Config → Nodes & sources → Import nodes.txt from Files.
+Imports accept UTF-8 share links, blank lines and `#` comments, deduplicate links,
+and add nodes while preserving existing nodes and subscription sources. A malformed
+line rejects the entire import. Importing stages source nodes; generation of a
+running sing-box configuration still follows the host generation workflow.
+
+
 Generated state stays local. Once source sync is explicitly enabled, sakamoto can sync manual node links **and the actual local rule conf with its relative conf includes**:
 
 ```yaml
