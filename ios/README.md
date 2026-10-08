@@ -22,7 +22,7 @@ tunnel process; this is not a CLI probe and not an external-daemon count).
 | Home Screen widgets (small/medium/large) | `Widgets/SakamotoWidgets.swift`; interactive on iOS 17+, opens the app to execute VPN actions |
 | Shortcuts / Siri | Connect, Disconnect, Toggle and Get VPN status in `Shared/SystemSurfaceIntents.swift` |
 | Control Center control | Native VPN toggle on iOS 18+, shared saved-profile operation |
-| Device build / VPN entitlement grant | **blocked on a real signing Team** (see below) — not faked |
+| App Store Connect signing | distribution export verified with Team `6Y2YB464VU`, NetworkExtension, shared App Group and production iCloud entitlements; device VPN behavior still needs runtime verification |
 
 ## Widgets, Shortcuts and Control Center
 
@@ -324,14 +324,19 @@ is uploaded by CI until signing credentials are configured separately.
   - device build: blocked on Team + capabilities — a documented blocker, not
     a pass.
 
-## Next minimal manual steps
+## Device verification steps
 
-1. Set `DEVELOPMENT_TEAM` in `ios/project.yml`; replace the placeholder
-   bundle IDs / app group if desired; `xcodegen generate`.
-2. Register an App ID with the NetworkExtension **and iCloud Documents**
-   capabilities for both bundle IDs, create the app group, and the iCloud
-   container `iCloud.com.pidal.sakamoto` (or replace the placeholder in all
-   three places listed above); let Xcode refresh provisioning.
+The paid Team `6Y2YB464VU` now owns the App, PacketTunnel and WidgetExtension
+identifiers, the shared App Group and the app-only iCloud container. Distribution
+export has verified these grants. The empty default development Team keeps
+simulator builds independent of a local Apple account.
+
+1. Set `IOS_DEVELOPMENT_TEAM=6Y2YB464VU` for a development archive, with a
+   registered test device and matching development profiles; refresh provisioning
+   with `IOS_ALLOW_PROVISIONING_UPDATES=1` if necessary.
+2. Install the TestFlight build or the development build. App and tunnel require
+   NetworkExtension and the shared App Group; iCloud Documents belongs only to
+   the app, while Widgets uses the App Group.
 3. Run on device; paste a generated sing-box config (or one produced by
    `sakamoto` on the host) in Config → Save → Regenerate + Reconnect.
 4. Optional: store a Tailscale auth key (Tailscale tab) — or leave it empty
