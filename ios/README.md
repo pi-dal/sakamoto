@@ -24,6 +24,29 @@ tunnel process; this is not a CLI probe and not an external-daemon count).
 | Control Center control | Native VPN toggle on iOS 18+, shared saved-profile operation |
 | App Store Connect signing | distribution export verified with Team `6Y2YB464VU`, NetworkExtension, shared App Group and production iCloud entitlements; device VPN behavior still needs runtime verification |
 
+## SimAgentationPlus simulator debugging
+
+With a simulator already booted, run from the repository root:
+
+```sh
+mise run ios:inspect
+# Select a specific already-booted simulator:
+IOS_SIMULATOR_UDID=<simulator-UDID> mise run ios:inspect
+```
+
+This builds `project.sim-agentation.yml` as the separate
+`SakamotoInspector.xcodeproj`, using SimAgentationPlus **0.2.2** and iOS 17.
+Only the App target links the SDK; PacketTunnel and Widget targets do not.
+The inspector starts on the window root in Debug simulators. Home, Config,
+Data and Settings carry source tags, with finer tags for connection, routing,
+configuration selection/import/apply and Experiment. The normal `project.yml`
+continues to target iOS 16 with **no SDK dependency**; use it for every release.
+
+Open the existing SimAgentation host at `http://127.0.0.1:38470` to annotate.
+Verify the running SDK with `curl http://127.0.0.1:38471/snapshot`; it reports
+`com.pidal.sakamoto` and visible tags with Swift file/line locations. Snapshot
+content can include private UI data; keep it local and do not publish it.
+
 ## Widgets, Shortcuts and Control Center
 
 Connect once in the app to create and authorize its VPN profile. System actions
@@ -81,6 +104,32 @@ and the app's About page.
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
+## Experiment
+
+Settings → Experiment exposes the TUI traffic policy controls: unmatched
+`off` / `on` / `auto`, direct failure threshold (1–20) and CF region auto-proxy.
+It also provides automatic fallback, recovery-round threshold, editable ordered
+selector priorities, manual recovery tests and review/removal of learned routes.
+Settings belong to the selected profile and activate with Apply or Connect.
+Complete `.sakamoto` exports carry host Experiment settings and fallback chains.
+
+The PacketTunnel process owns monitoring, so UI backgrounding does not stop it.
+It subscribes to real Libbox connection events, error logs, groups and Clash mode.
+Automatic learning uses the shared Go `mobileexperiment` evidence tracker:
+correlated unmatched TCP failures, spaced attempts and recent health of the
+selected proxy are required. Explicit DIRECT/REJECT rules retain priority.
+CF learning needs an explicit core regional-block signal; generic 403s and
+challenge pages do not count. HTTPS response content is not intercepted, so the
+feature cannot observe every regional-block page seen by a browser.
+
+Fallback rounds use only fresh URL-test results, preserve manual selections and
+require consecutive healthy rounds before recovery to a higher priority. Pending
+profile edits pause automatic changes. Rule insertion is checked with Libbox;
+a rejected reload restores the old runtime. Only committed learned domains are
+restored on a cold start. Runtime domains/status remain private App Group files
+per profile, outside source sync. Real-device VPN and background behavior require
+hardware verification; simulator integration tests do not establish connectivity.
+
 ## Built-in Tailscale: real capabilities
 
 sing-box v1.14.2's Apple builder compiles `protocol/tailscale` (embedded
@@ -137,7 +186,7 @@ reachable; one failed probe stays Unverified; selected ≠ reachable; mode
 changes are the Rule → Global → Direct cycle; unavailable modes surface
 "regenerate the config and reconnect" instead of silently no-oping.
 
-## Config tab: what is real on device, what stays host-owned
+## Config sources, generation and Apply
 
 `pkg/mobileconf` is the platform-independent parser (stdlib only, no
 sing-box imports). The app and extension link the combined static
@@ -152,18 +201,26 @@ host semantics. On device:
   pending include/RULE-SET references (masked) and unsupported-section
   notes ([URL Rewrite]/[MITM]/[Script]). A failed fetch/parse keeps the
   last-known-good import (`ConfigStore.commitImport` is the only writer).
-- **Policy**: match/action validated by `MobilecoreNormalizePolicyRule`
-  (both host validation layers), staged on device; the host folds them into
-  rules during Regenerate.
+- **Policy**: match/action validated by `MobilecoreNormalizePolicyRule`,
+  staged on device and compiled during Generate.
 - **Nodes & sources**: share links validated by `MobilecoreParseShareLink`
   (credential-free summary, leak-tested), stored nodes.txt-compatible;
-  subscription METADATA only, rendered "Pending — fetched on the host".
+  subscription metadata is staged and fetched/decoded during Generate.
   Raw links and URLs render masked until revealed and never enter action
   strings or logs.
-- **Generate/Apply**: `MobilecoreValidateConfigJSON` (structural, in-process)
-  → Keychain auth-key injection → provider reload. The .srs compilation and
-  `sing-box check` stay on the sakamoto host; Regenerate + Reconnect
-  collapse into one provider reload on iOS and the UI says so.
+- **Generate**: `pkg/mobilegen` reuses `internal/gen` to fetch subscriptions
+  and remote rule lists, merge `.conf` includes, nodes and policy, and compile
+  binary rule sets in-process. It is bound into the same Libbox archive;
+  `mobilecore` remains a pure validation/vocabulary package. Candidates use
+  immutable App Group rule snapshot directories and pass Libbox semantic
+  validation before replacing the previous saved runtime. Failed generation
+  keeps the old runtime. Node-only profiles can generate without a `.conf`.
+- **Apply**: merges Keychain Tailscale authentication at start and activates
+  the selected snapshot. It starts a stopped tunnel or reloads a running one;
+  queued startup is not marked applied until the provider confirms Running.
+  Source sync never auto-connects or publishes generated configs/credentials.
+  iCloud discovery preserves runtime-relative names and local dependencies;
+  multiple root confs require explicit selection in Config.
 
 Reports cross the gomobile boundary as one JSON string (`[]string` struct
 fields and returns are silently skipped by gomobile bind — a silent drop

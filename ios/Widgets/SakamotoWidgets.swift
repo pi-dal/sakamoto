@@ -124,7 +124,7 @@ private struct VPNWidgetView: View {
                 Image(systemName: "power").frame(minWidth: 44, minHeight: 44)
             }
             .buttonStyle(.bordered)
-            .tint(snapshot.serviceState == .running ? .green : .secondary)
+            .tint(.primary)
             .disabled(busy)
             .accessibilityLabel(snapshot.serviceState == .running ? "Disconnect VPN" : "Connect VPN")
         } else {

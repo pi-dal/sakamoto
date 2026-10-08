@@ -79,7 +79,12 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
     public func ping() async throws -> TunnelStateSnapshot {
         try await loadProviderPreferences()
         let service = Self.serviceState(for: manager.connection.status)
-        if service != .running { return TunnelStateSnapshot(serviceState: service, detail: nil) }
+        if service != .running {
+            let failure = TunnelDiagnostics.latest()
+            let systemError: Error? = service == .stopped || service == .unavailable ? await lastDisconnectError() : nil
+            let detail = failure.map { "\($0.stage): \($0.message)" } ?? systemError.map { "System VPN: \(TunnelDiagnostics.sanitized($0.localizedDescription))" }
+            return TunnelStateSnapshot(serviceState: service, detail: detail)
+        }
         let response = try await send(.ping)
         guard response.ok else {
             throw TunnelControllerError.providerReported(response.error ?? "ping failed")
@@ -92,10 +97,42 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
 
     public func reload(configContent: String) async throws {
         try await loadProviderPreferences()
-        let response = try await send(.reloadConfig(content: configContent))
+        var options = TunnelStartOptions(providerConfiguration: (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration ?? [:]) ?? TunnelStartOptions(configContent: configContent)
+        options.configContent = configContent
+        try await reload(options: options)
+    }
+
+    public func reload(options: TunnelStartOptions) async throws {
+        try await loadProviderPreferences()
+        let previous = manager.protocolConfiguration
+        // Persist the same configuration for subsequent cold starts, but
+        // restore the old preferences if the live provider rejects it.
+        manager.protocolConfiguration = Self.makeProviderProtocol(bundleIdentifier: providerBundleIdentifier, options: options)
+        try await savePreferences()
+        try await reloadPreferences()
+        let response: TunnelResponse
+        do {
+            response = try await send(.reloadProfile(options: options))
+            if !response.ok { throw TunnelControllerError.providerReported(response.error ?? "reloadConfig failed") }
+        } catch {
+            manager.protocolConfiguration = previous
+            try await savePreferences()
+            try await reloadPreferences()
+            throw error
+        }
         guard response.ok else {
             throw TunnelControllerError.providerReported(response.error ?? "reloadConfig failed")
         }
+    }
+
+    public func recoverExperiment() async throws {
+        let response = try await send(.recoverExperiment)
+        guard response.ok else { throw TunnelControllerError.providerReported(response.error ?? "Recovery failed") }
+    }
+
+    public func removeLearnedDomain(_ domain: String) async throws {
+        let response = try await send(.removeLearnedDomain(domain))
+        guard response.ok else { throw TunnelControllerError.providerReported(response.error ?? "Removal failed") }
     }
 
     public func observations() -> AsyncStream<TunnelObservation> {
@@ -158,9 +195,19 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
 
     // MARK: Internals
 
+    private func lastDisconnectError() async -> Error? {
+        if #available(iOS 16.0, macOS 13.0, *) {
+            return await withCheckedContinuation { continuation in
+                manager.connection.fetchLastDisconnectError { continuation.resume(returning: $0) }
+            }
+        }
+        return nil
+    }
+
     private func currentObservation() -> TunnelObservation {
         let state = Self.serviceState(for: manager.connection.status)
-        return TunnelObservation(serviceState: state, conflict: false, detail: nil)
+        let failure = state == .stopped || state == .unavailable ? TunnelDiagnostics.latest() : nil
+        return TunnelObservation(serviceState: state, conflict: false, detail: failure.map { "\($0.stage): \($0.message)" })
     }
 
     private func loadProviderPreferences() async throws {

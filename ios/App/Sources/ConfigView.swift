@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 import UniformTypeIdentifiers
 import Libbox
 import SakamotoKit
@@ -21,11 +22,10 @@ import SakamotoKit
 //   * The saved generated config is structurally checked in-process
 //     (mobilecore.ValidateConfigJSON) before a provider reload.
 //
-// What stays HOST-owned, and the UI says so: .srs rule-set compilation,
-// `sing-box check` semantic validation, include/RULE-SET fetching, and
-// subscription body decoding. The generator (internal/gen) runs on the
-// sakamoto host; the iOS Regenerate + Reconnect action collapses into one
-// provider reload with the Keychain auth key injected at start time.
+// Generation reuses the host pipeline on device through Mobilegen, including
+// subscription decoding, remote rule fetching and binary rule compilation.
+// Libbox performs semantic validation before the store commits a candidate.
+// Apply starts or reloads the VPN with Keychain authentication.
 
 @MainActor
 final class ConfigModel: ObservableObject {
@@ -85,18 +85,19 @@ final class ConfigModel: ObservableObject {
 
     let store: ConfigStore
     private let tunnel: TunnelControlling
+    private var storeUpdates: AnyCancellable?
 
     init(tunnel: TunnelControlling, store: ConfigStore) {
         self.tunnel = tunnel
         self.store = store
         self.draft = store.content
+        storeUpdates = store.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
     }
 
     /// Any saved change marks the config `modified` (NeedsRegenerate).
     func saveDraft() {
-        // Structural check first: a truncated paste must fail loudly here,
-        // not at provider reload. The semantic `sing-box check` stays on the
-        // host and the section footer says so.
+        // Structural check before saving an advanced edit. Apply additionally
+        // performs Libbox semantic validation before reloading the provider.
         var bridgeError: NSError?
         _ = MobilecoreValidateConfigJSON(draft, &bridgeError)
         if let bridgeError {
@@ -167,6 +168,12 @@ final class ConfigModel: ObservableObject {
             if let coordinationError { throw coordinationError }
             guard let readResult else { throw ImportError(reason: "the content could not be read") }
             let data = try readResult.get()
+            if url.pathExtension.lowercased() == "sakamoto" {
+                try store.installProfile(TunnelProfile.decodePackage(data))
+                draft = store.content
+                importError = nil
+                return
+            }
             if importNodesFile || url.lastPathComponent.lowercased() == "nodes.txt" {
                 let nodes = try NodeFileImport.parse(data, validate: Self.validateNode)
                 store.commitNodesSources(NodeFileImport.merging(nodes, into: store.nodesSources))
@@ -183,9 +190,7 @@ final class ConfigModel: ObservableObject {
                 var error: NSError?
                 _ = MobilecoreValidateConfigJSON(content, &error)
                 if let error { throw error }
-                _ = LibboxCheckConfig(content, &error)
-                if let error { throw error }
-                store.save(content)
+                try store.installProfile(TunnelProfile(name: url.deletingPathExtension().lastPathComponent, config: content))
                 draft = store.content
                 importError = nil
                 return
@@ -237,6 +242,7 @@ final class ConfigModel: ObservableObject {
     /// Stable phrasing for fetch/read errors — never the raw localized
     /// description, which may embed the full URL with query tokens.
     static func reason(of error: any Error) -> String {
+        if let profileError = error as? TunnelProfile.InvalidProfile { return profileError.localizedDescription }
         if let importError = error as? ImportError {
             return importError.reason // bridge text already masks URLs
         }
@@ -325,7 +331,7 @@ final class ConfigModel: ObservableObject {
         }
         guard let parsed = URL(string: url), let scheme = parsed.scheme?.lowercased(),
               scheme == "https" || scheme == "http" else {
-            subscriptionFormError = "subscriptions need an HTTP(S) URL; fetching runs on the host"
+            subscriptionFormError = "subscriptions need an HTTP(S) URL"
             return
         }
         guard StagedSubscription.formats.contains(newSubscriptionFormat) else {
@@ -370,33 +376,48 @@ struct ConfigView: View {
 
     var body: some View {
         List {
-            Section("Current configuration") {
-                LabeledRow("VPN configuration", model.store.content.isEmpty ? "Not imported" : "Saved on this device")
-                if let imported = model.store.importedSource {
-                    LabeledRow("Rule source", imported.displaySource)
+            Section {
+                Picker("Configuration", selection: Binding(
+                    get: { model.store.selectedProfileID ?? "" },
+                    set: { id in
+                        do { try model.store.selectProfile(id); model.draft = model.store.content; model.importError = nil }
+                        catch { model.importError = error.localizedDescription }
+                    }
+                )) {
+                    Text("None").tag("")
+                    ForEach(model.store.profiles) { profile in Text(profile.name).tag(profile.id) }
                 }
-                LabeledRow("Pending changes", model.store.configState == .clean ? "None" : "Apply required")
+                .pickerStyle(.menu)
+                .sakamotoInspectTag("ConfigurationPicker")
+                if !model.store.confSources.isEmpty {
+                    Picker("Rule source", selection: Binding(get: { model.store.sourceBundle.mainConf }, set: { name in
+                        do { try model.store.selectConfSource(name); model.importError = nil }
+                        catch { model.importError = TunnelDiagnostics.sanitized(error.localizedDescription) }
+                    })) {
+                        Text("Choose rule source").tag("")
+                        ForEach(model.store.confSources, id: \.self) { Text($0).tag($0) }
+                    }.pickerStyle(.menu)
+                }
+                if let failure = TunnelDiagnostics.latest() {
+                    Text("\(failure.stage): \(failure.message)").font(.footnote).foregroundStyle(.primary)
+                }
+                if model.store.selectedProfile?.sourcesChanged == true {
+                    Text("Sources changed. Generate the configuration, then Apply.").font(.footnote).foregroundStyle(.secondary)
+                }
+
             }
             Section {
                 Button { showImportOptions = true } label: { Label("Import configuration", systemImage: "square.and.arrow.down") }
+                    .sakamotoInspectTag("ConfigurationImport")
                     .disabled(model.importing)
                 if let clipboardOfferContent {
                     clipboardOfferRow(content: clipboardOfferContent)
                 }
-                PasteButton(payloadType: String.self) { strings in
-                    guard let text = strings.first else { return }
-                    consumeClipboardOffer()
-                    receiveImport(text)
-                }
-                .controlSize(.large)
-                .frame(minHeight: 44)
-                .accessibilityLabel("Import from clipboard")
-                .disabled(model.importing)
                 Button { pendingImport = nil; showScanner = true } label: { Label("Scan QR code", systemImage: "qrcode.viewfinder") }
                     .disabled(model.importing)
-                if let payloadError { Text(payloadError).font(.footnote).foregroundStyle(.red) }
+                if let payloadError { Text(payloadError).font(.footnote).foregroundStyle(.primary) }
                 if let error = model.importError {
-                    Text(error).font(.footnote).foregroundStyle(.red)
+                    Text(error).font(.footnote).foregroundStyle(.primary)
                 }
             }
             Section("Manage") {
@@ -434,9 +455,18 @@ struct ConfigView: View {
             } footer: { Text("Import adds files to this device. Sync keeps source files aligned with your Mac or cloud storage.") }
             Section("Apply changes") {
                 LabeledRow("Config state", model.store.configState.rawValue)
-                Button("Apply saved configuration") { confirmApply = true }
-                    .disabled(model.store.configState == .clean)
-                Button("Edit generated configuration…") { showEditor = true }
+                Button("Generate configuration") {
+                    Task {
+                        do { try await model.store.generateFromSources(); model.draft = model.store.content; model.importError = nil }
+                        catch { model.importError = TunnelDiagnostics.sanitized(error.localizedDescription) }
+                    }
+                }
+                .disabled(!model.store.canGenerate)
+                if model.store.generating { ProgressView("Generating configuration") }
+                Button("Generate & apply configuration") { confirmApply = true }
+                    .sakamotoInspectTag("ConfigurationApply")
+                    .disabled(model.store.generating || (model.store.configState == .clean) || (!model.store.canConnect && !model.store.canGenerate))
+                Button("Edit generated configuration…") { model.draft = model.store.content; showEditor = true }
                 if let lastAction = model.store.lastAction {
                     DisclosureGroup("Last action") {
                         Text(lastAction).font(.footnote).foregroundStyle(.secondary)
@@ -479,7 +509,7 @@ struct ConfigView: View {
         }
         .fileImporter(
             isPresented: $model.showFileImporter,
-            allowedContentTypes: [UTType(filenameExtension: "conf") ?? .data, .plainText, .json],
+            allowedContentTypes: [.data, .plainText, .json],
             allowsMultipleSelection: false
         ) { result in
             if case .success(let urls) = result, let url = urls.first {
@@ -491,7 +521,7 @@ struct ConfigView: View {
                 Form {
                     TextField("Shadowrocket .conf URL", text: $model.importURLText)
                         .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    if let error = model.importError { Text(error).font(.footnote).foregroundStyle(.red) }
+                    if let error = model.importError { Text(error).font(.footnote).foregroundStyle(.primary) }
                 }
                 .navigationTitle("Import from URL")
                 .toolbar {
@@ -509,7 +539,7 @@ struct ConfigView: View {
                 Form {
                     TextEditor(text: $model.draft).font(.footnote.monospaced()).frame(minHeight: 300)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    if let error = model.editorError { Text(error).foregroundStyle(.red) }
+                    if let error = model.editorError { Text(error).foregroundStyle(.primary) }
                 }
                 .navigationTitle("Generated config")
                 .toolbar {
@@ -521,6 +551,7 @@ struct ConfigView: View {
             }
         }
         .confirmationDialog("Import configuration", isPresented: $showImportOptions, titleVisibility: .visible) {
+            Button("Complete tunnel package (.sakamoto) from Files") { model.importNodesFile = false; model.showFileImporter = true }
             Button("Rule configuration (.conf) from URL") { showURLImport = true }
             Button("Rule configuration (.conf) from Files") { model.importNodesFile = false; model.showFileImporter = true }
             Button("Node list (nodes.txt) from Files") { model.importNodesFile = true; model.showFileImporter = true }
@@ -530,7 +561,7 @@ struct ConfigView: View {
         .confirmationDialog("Apply saved configuration?", isPresented: $confirmApply, titleVisibility: .visible) {
             Button("Apply & Reconnect") { Task { await model.regenerateAndApply() } }
             Button("Cancel", role: .cancel) {}
-        } message: { Text("The tunnel will reload and active connections may be interrupted. Source generation must be completed on the host first.") }
+        } message: { Text("Sources are generated and validated on this device before the tunnel starts or reloads. Active connections may be interrupted.") }
         .sheet(isPresented: $model.showAddPolicy) { addPolicySheet }
         .sheet(isPresented: $model.showAddNode) { addNodeSheet }
         .sheet(isPresented: $model.showAddSubscription) { addSubscriptionSheet }
@@ -672,16 +703,14 @@ struct ConfigView: View {
                 var error: NSError?
                 _ = MobilecoreValidateConfigJSON(candidate.text, &error)
                 if let error { throw error }
-                _ = LibboxCheckConfig(candidate.text, &error)
-                if let error { throw error }
-                model.store.save(candidate.text)
+                try model.store.installProfile(TunnelProfile(name: "Clipboard configuration", config: candidate.text))
                 model.draft = model.store.content
             } else {
                 model.importReport = try model.importContent(candidate.text, displaySource: "Clipboard or QR code")
                 model.importError = nil
             }
             payloadError = nil
-        } catch { payloadError = "Invalid configuration. The saved configuration was kept." }
+        } catch { payloadError = TunnelDiagnostics.sanitized(error.localizedDescription) + " The saved configuration was kept." }
     }
 
     // MARK: State
@@ -692,7 +721,7 @@ struct ConfigView: View {
                 Text("Config state")
                 Spacer()
                 Text(model.store.configState.rawValue)
-                    .foregroundStyle(model.store.configState == .clean ? Color.green : Color.orange)
+                    .foregroundStyle(model.store.configState == .clean ? Color.primary : Color.secondary)
             }
             if let lastAction = model.store.lastAction {
                 Text(lastAction)
@@ -724,7 +753,7 @@ struct ConfigView: View {
             if let error = model.importError {
                 Text(error)
                     .font(.footnote)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(.primary)
             }
             if let report = model.importReport {
                 importReportRows(report)
@@ -733,7 +762,7 @@ struct ConfigView: View {
         } header: {
             Text("Import config")
         } footer: {
-            Text("The .conf is parsed in-process with the host's parser. Relative includes and remote RULE-SETs are staged as pending references — the sakamoto host merges and fetches them during Regenerate. A failed import keeps the last working import.")
+            Text("Rules use the shared parser. Generate combines local includes, fetches remote rule lists and compiles the runtime on this device. Missing local includes keep the previous configuration.")
         }
     }
 
@@ -751,7 +780,7 @@ struct ConfigView: View {
             }
             ForEach(report.includesPending, id: \.self) { Text("Include pending: \(SecretMasking.maskSource($0))").font(.footnote) }
             ForEach(report.ruleSetsPending, id: \.self) { Text("RULE-SET pending: \(SecretMasking.maskSource($0))").font(.footnote) }
-            ForEach(report.unsupported, id: \.self) { Text($0).font(.footnote).foregroundStyle(.orange) }
+            ForEach(report.unsupported, id: \.self) { Text($0).font(.footnote).foregroundStyle(.secondary) }
         }
     }
 
@@ -787,7 +816,7 @@ struct ConfigView: View {
         } header: {
             Text("Policy")
         } footer: {
-            Text("Hostname (exact), *.suffix, keyword:, cidr: and http(s) URLs (host only) with proxy / direct / reject — validated with the host's rules. The host folds these in during Regenerate; reconnect applies them.")
+            Text("Hostname (exact), *.suffix, keyword:, cidr: and http(s) URLs (host only) with proxy / direct / reject — validated with the host's rules. Generate includes these rules; Apply activates them.")
         }
     }
 
@@ -802,7 +831,7 @@ struct ConfigView: View {
                 }
                 .pickerStyle(.segmented)
                 if let error = model.policyFormError {
-                    Text(error).font(.footnote).foregroundStyle(.red)
+                    Text(error).font(.footnote).foregroundStyle(.primary)
                 }
             }
             .navigationTitle("Add policy rule")
@@ -851,13 +880,13 @@ struct ConfigView: View {
             }
             Button("Import nodes.txt from Files…") { model.importNodesFile = true; model.showFileImporter = true }
             if let notice = model.nodeImportNotice { Text(notice).font(.footnote).foregroundStyle(.secondary) }
-            if let error = model.importError { Text(error).font(.footnote).foregroundStyle(.red) }
+            if let error = model.importError { Text(error).font(.footnote).foregroundStyle(.primary) }
             Button("Add node (share link)…") { model.showAddNode = true }
             Button("Add subscription source…") { model.showAddSubscription = true }
         } header: {
             Text("Nodes & sources")
         } footer: {
-            Text("Links and subscription URLs are masked until revealed and never appear in logs. Subscription bodies are fetched and decoded on the sakamoto host during Regenerate — staged sources stay pending here, never fake nodes.")
+            Text("Links and subscription URLs are masked until revealed and never appear in logs. Generate fetches and decodes subscriptions on this device; Apply activates the generated nodes.")
         }
     }
 
@@ -893,9 +922,9 @@ struct ConfigView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Text("Pending — fetched on the host")
+                Text("Fetched when generating")
                     .font(.caption2)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(.secondary)
             }
             Spacer()
             Text(subscription.format).font(.caption).foregroundStyle(.secondary)
@@ -916,7 +945,7 @@ struct ConfigView: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                 if let error = model.nodeFormError {
-                    Text(error).font(.footnote).foregroundStyle(.red)
+                    Text(error).font(.footnote).foregroundStyle(.primary)
                 }
             }
             .navigationTitle("Add manual node")
@@ -944,7 +973,7 @@ struct ConfigView: View {
                     ForEach(StagedSubscription.formats, id: \.self) { Text($0).tag($0) }
                 }
                 if let error = model.subscriptionFormError {
-                    Text(error).font(.footnote).foregroundStyle(.red)
+                    Text(error).font(.footnote).foregroundStyle(.primary)
                 }
             }
             .navigationTitle("Add subscription source")
@@ -971,7 +1000,7 @@ struct ConfigView: View {
         } header: {
             Text("Generate / Apply")
         } footer: {
-            Text("Generation (.srs rule sets, sing-box check) runs on the sakamoto host — this screen validates the saved config structurally, injects the Tailscale auth key from the Keychain at start, and reloads the provider. Regenerate on the host after staging imports, policy or nodes here.")
+            Text("Generate fetches subscriptions, combines sources and compiles rule sets on this device. Libbox validates the candidate before saving. Apply starts or reloads the VPN.")
         }
     }
 
@@ -980,21 +1009,21 @@ struct ConfigView: View {
     private var advancedSection: some View {
         Section {
             if let error = model.editorError {
-                Text(error).font(.footnote).foregroundStyle(.red)
+                Text(error).font(.footnote).foregroundStyle(.primary)
             }
-            Button("Edit generated configuration…") { showEditor = true }
+            Button("Edit generated configuration…") { model.draft = model.store.content; showEditor = true }
         } header: {
             Text("sing-box config (advanced)")
         } footer: {
-            Text("Endpoints/outbounds JSON produced by the host generator. The Tailscale auth key is injected from the Keychain at start time and is never stored in this text. Saving runs the structural check; semantic validation stays on the host.")
+            Text("Endpoints/outbounds JSON produced by the host generator. The Tailscale auth key is injected from the Keychain at start time and is never stored in this text. Saving runs a structural check; Apply also validates with Libbox.")
         }
     }
 
     private func actionColor(_ action: String) -> Color {
         switch action {
         case "proxy": return .blue
-        case "direct": return .green
-        case "reject": return .red
+        case "direct": return .primary
+        case "reject": return .primary
         default: return .secondary
         }
     }

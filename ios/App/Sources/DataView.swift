@@ -166,7 +166,7 @@ struct DataView: View {
             if let notice = model.notice {
                 Text(notice.text)
                     .font(.footnote)
-                    .foregroundStyle(notice.kind == .error ? Color.red : Color.secondary)
+                    .foregroundStyle(notice.kind == .error ? Color.primary : Color.secondary)
             }
         } header: {
             Text("Traffic")

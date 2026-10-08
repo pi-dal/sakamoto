@@ -65,25 +65,30 @@ struct SakamotoApp: App {
             TabView(selection: $selectedTab) {
                 NavigationStack {
                     HomeView(model: homeModel)
+                        .sakamotoInspectTag("HomeView")
                 }
                 .tabItem { Label("Home", systemImage: "house") }
                 .tag(0)
                 NavigationStack {
                     ConfigView(model: configModel, sync: iCloudSyncModel, s3: s3SyncModel, settings: settingsModel)
+                        .sakamotoInspectTag("ConfigView")
                 }
                 .tabItem { Label("Config", systemImage: "slider.horizontal.3") }
                 .tag(1)
                 NavigationStack {
                     DataView(commanding: commanding)
+                        .sakamotoInspectTag("DataView")
                 }
                 .tabItem { Label("Data", systemImage: "chart.bar") }
                 .tag(2)
                 NavigationStack {
                     SettingsView(model: settingsModel, sync: iCloudSyncModel, s3: s3SyncModel, commanding: commanding)
+                        .sakamotoInspectTag("SettingsView")
                 }
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag(3)
             }
+            .sakamotoInspector()
             .tint(.primary)
             .onOpenURL { url in
                 if url.scheme == "sakamoto", url.host == "home" { selectedTab = 0 }

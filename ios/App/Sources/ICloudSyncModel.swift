@@ -168,49 +168,12 @@ final class ICloudSyncModel: ObservableObject {
     /// ConfigStore staging state. Empty payloads are skipped with a note —
     /// an empty device must not seed the cloud with empty files.
     func buildPayload() -> (payload: ICloudSyncPayload, skipped: [String]) {
-        var entries: [ICloudSyncPayload.Entry] = []
-        var skipped: [String] = []
-
-        let nodesText = store.nodesSources.nodesText
-        if nodesText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            if settings.additionalSourcePaths.contains("nodes.txt") { skipped.append("nodes.txt") }
-        } else {
-            entries.append(.init(name: "nodes.txt", data: Data(nodesText.utf8)))
+        let bundle = store.sourceBundle
+        let entries: [ICloudSyncPayload.Entry] = bundle.files.sorted(by: { $0.key < $1.key }).compactMap { name, body in
+            if name.lowercased().hasSuffix(".conf") && !settings.includesConf { return nil }
+            return .init(name: name, data: Data(body.utf8))
         }
-
-        if let policyData = try? store.policy.encoded(), !store.policy.rules.isEmpty {
-            entries.append(.init(name: "policy.json", data: policyData))
-        } else if settings.additionalSourcePaths.contains("policy.json") {
-            skipped.append("policy.json")
-        }
-
-        if !store.nodesSources.subscriptions.isEmpty,
-           let data = try? JSONEncoder().encode(store.nodesSources.subscriptions) {
-            entries.append(.init(name: "subscriptions.json", data: data))
-        } else if settings.additionalSourcePaths.contains("subscriptions.json") {
-            skipped.append("subscriptions.json")
-        }
-
-        // Rule conf + relative includes (consent-gated). iOS keeps only the
-        // imported main conf; remote HTTP(S) includes stay importer-managed
-        // and their URLs are NOT uploaded (docs/icloud.md). If the imported
-        // conf references local relative includes, they are reported as
-        // pending so the user knows the cloud copy is not self-contained.
-        if settings.includesConf, let imported = store.importedSource,
-           !Self.isRemoteURL(imported.displaySource) {
-            let baseName = (imported.displaySource as NSString).lastPathComponent
-            if baseName.lowercased().hasSuffix(".conf") {
-                entries.append(.init(name: "conf/" + baseName, data: Data(imported.content.utf8)))
-            } else {
-                skipped.append("conf (imported source has no .conf name)")
-            }
-            if let content = imported.content.data(using: .utf8),
-               let includes = try? ICloudSyncConf.localIncludes(ofConfContent: content),
-               !includes.isEmpty {
-                skipped.append("conf includes pending on this device: " + includes.joined(separator: ", "))
-            }
-        }
-
+        let skipped = settings.additionalSourcePaths.filter { bundle.files[$0] == nil }
         return (ICloudSyncPayload(entries: entries), skipped)
     }
 
@@ -227,6 +190,7 @@ final class ICloudSyncModel: ObservableObject {
             notice = "Sync is disabled — enable it first."
             return
         }
+        store.ensureSourceProfile()
         syncing = true
         notice = nil
         Task {
@@ -242,16 +206,43 @@ final class ICloudSyncModel: ObservableObject {
                 return
             }
             defer { if scoped { directory?.stopAccessingSecurityScopedResource() } }
+            let nodesBefore = store.nodesSources
+            let policyBefore = store.policy
+            let importBefore = store.importedSource
+            let profileBefore = store.selectedProfileID
+            let sourceBefore = store.selectedProfile?.sourceBundleJSON
             let (payload, skipped) = buildPayload()
             let outcome = await syncStore.syncNow(
                 staging: payload.entries, directoryURL: directory,
-                downloadNames: ["nodes.txt"],
+                downloadNames: ["nodes.txt", "policy.json", "subscriptions.json"],
+                sourceScope: profileBefore ?? "unassigned",
+                mainConf: settings.includesConf ? store.sourceBundle.mainConf : "",
+                discoverConf: settings.includesConf,
                 validateDownload: { name, data in
-                    if name == "nodes.txt" { _ = try NodeFileImport.parse(data, validate: ConfigModel.validateNode) }
+                    switch name {
+                    case "nodes.txt":
+                        if !String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { _ = try NodeFileImport.parse(data, validate: ConfigModel.validateNode) }
+                    case "policy.json", "subscriptions.json": try ConfigStore.validateStructuredSource(name: name, data: data)
+                    default:
+                        if name.lowercased().hasSuffix(".conf") {
+                            var error: NSError?
+                            _ = MobilecoreParseConfContentJSON(String(decoding: data, as: UTF8.self), &error)
+                            if let error { throw error }
+                        }
+                    }
+                },
+                sourcesAreCurrent: { @MainActor [store] in
+                    store.nodesSources == nodesBefore && store.policy == policyBefore && store.importedSource == importBefore && store.selectedProfileID == profileBefore && store.selectedProfile?.sourceBundleJSON == sourceBefore
                 }
             )
             let effectiveSkipped = skipped.filter { name in !outcome.downloads.contains(where: { $0.name == name }) } + outcome.skipped
-            adopt(outcome.downloads)
+            guard store.nodesSources == nodesBefore, store.policy == policyBefore, store.importedSource == importBefore,
+                  store.selectedProfileID == profileBefore, store.selectedProfile?.sourceBundleJSON == sourceBefore else {
+                notice = "Local sources changed during sync. Retry without editing; downloads were not adopted."
+                return
+            }
+            do { try adopt(outcome.downloads, discoveredMain: outcome.discoveredMainConf) }
+            catch { notice = "Downloaded sources could not be adopted: " + TunnelDiagnostics.sanitized(error.localizedDescription); return }
             status = outcome.status
             if case .failed(_, let message) = outcome.status {
                 notice = message
@@ -264,48 +255,11 @@ final class ICloudSyncModel: ObservableObject {
     }
 
     /// Apply downloads through the exact validation path manual imports use.
-    private func adopt(_ downloads: [ICloudSyncOutcome.Download]) {
-        for download in downloads {
-            switch download.name {
-            case "nodes.txt":
-                guard let nodes = try? NodeFileImport.parse(download.data, validate: ConfigModel.validateNode) else {
-                    notice = "Synced nodes failed validation; current nodes were kept."
-                    continue
-                }
-                // Synced nodes are authoritative for the nodes half;
-                // subscription metadata stays device-local unless its own
-                // file downloads below.
-                let next = NodesSourcesBook(nodes: nodes, subscriptions: store.nodesSources.subscriptions)
-                store.commitNodesSources(next)
-
-            case "policy.json":
-                if let book = PolicyBook.decode(download.data) {
-                    store.commitPolicy(book)
-                }
-
-            case "subscriptions.json":
-                if let list = try? JSONDecoder().decode([StagedSubscription].self, from: download.data) {
-                    let next = NodesSourcesBook(nodes: store.nodesSources.nodes, subscriptions: list)
-                    store.commitNodesSources(next)
-                }
-
-            case let name where name.hasPrefix("conf/") && name.hasSuffix(".conf"):
-                let content = String(decoding: download.data, as: UTF8.self)
-                var bridgeError: NSError?
-                _ = MobilecoreParseConfContentJSON(content, &bridgeError)
-                guard bridgeError == nil else {
-                    notice = "synced conf \(name) failed validation; kept the current import"
-                    continue
-                }
-                store.commitImport(ImportedSource(
-                    displaySource: name,
-                    content: content,
-                    importedAt: Date(),
-                ))
-
-            default:
-                continue
-            }
-        }
+    private func adopt(_ downloads: [ICloudSyncOutcome.Download], discoveredMain: String? = nil) throws {
+        guard !downloads.isEmpty || discoveredMain != nil else { return }
+        var bundle = store.sourceBundle
+        if let discoveredMain { bundle.mainConf = discoveredMain }
+        for download in downloads { bundle.files[download.name] = String(decoding: download.data, as: UTF8.self) }
+        try store.adoptSourceBundle(bundle)
     }
 }

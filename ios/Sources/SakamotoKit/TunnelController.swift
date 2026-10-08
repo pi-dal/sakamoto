@@ -65,6 +65,15 @@ public protocol TunnelControlling: AnyObject, Sendable {
     /// Monotonic stream of tunnel observations. The stream ends when the
     /// controller is deinitialized.
     func observations() -> AsyncStream<TunnelObservation>
+    func reload(options: TunnelStartOptions) async throws
+    func recoverExperiment() async throws
+    func removeLearnedDomain(_ domain: String) async throws
+}
+
+public extension TunnelControlling {
+    func reload(options: TunnelStartOptions) async throws { try await reload(configContent: options.configContent) }
+    func recoverExperiment() async throws { throw TunnelProfile.InvalidProfile("Experiment recovery is unavailable on this transport") }
+    func removeLearnedDomain(_ domain: String) async throws { throw TunnelProfile.InvalidProfile("Learned routes are unavailable on this transport") }
 }
 
 /// One proxy group as seen through the Libbox command channel, already

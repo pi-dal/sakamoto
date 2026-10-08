@@ -1,25 +1,13 @@
 import SwiftUI
+import Combine
 import UniformTypeIdentifiers
 import Libbox
 import SakamotoKit
 
-// Settings tab: the TUI's Settings semantics, adapted to the iOS trust
-// boundary (the config GENERATOR runs on the sakamoto host — the app only
-// owns the generated config JSON and the runtime command channel):
-//
-//   - Runtime (command channel): routing mode (Rule/Global/Direct cycle,
-//     the `m` key). Live state; failures are notices, never no-ops.
-//   - Editable here (validated config-JSON merges, applied by
-//     Regenerate+Reconnect through the ConfigStore): log level,
-//     Block QUIC (UDP 443), Block STUN — the same knobs the TUI edits,
-//     with the same value vocabularies.
-//   - Host-owned (read-only here, values read from the config): route
-//     final (unmatched policy), TUN stack, strict route; plus the
-//     sidecar-owned fallback chain and chain SOCKS exit, which live in the
-//     host's sakamoto.yaml and cannot be edited on device at all.
-//
-// Every edit lands in the shared ConfigStore → NeedsRegenerate → the user
-// runs Regenerate+Reconnect (or the button below). Nothing applies silently.
+// Settings edits share ConfigStore with Home and Config. Runtime mode uses
+// the live command channel; saved changes wait for Apply. Experiment learning
+// and fallback monitoring run in the VPN extension, including in background.
+// Source generation preserves device endpoint identity and runtime overrides.
 
 @MainActor
 final class SettingsModel: ObservableObject {
@@ -34,12 +22,16 @@ final class SettingsModel: ObservableObject {
     @Published private(set) var channelActive = false
 
     private var tasks: [Task<Void, Never>] = []
+    private var storeUpdates: AnyCancellable?
 
     init(store: ConfigStore, tunnel: TunnelControlling, commanding: CoreCommanding?) {
         self.store = store
         self.tunnel = tunnel
         self.commanding = commanding
         refreshSemantics()
+        storeUpdates = store.objectWillChange.sink { [weak self] _ in
+            Task { @MainActor [weak self] in self?.refreshSemantics() }
+        }
     }
 
     func activate() {
@@ -60,7 +52,7 @@ final class SettingsModel: ObservableObject {
     func refreshSemantics() {
         if store.content.isEmpty {
             semantics = nil
-            parseError = "no saved config yet — import or generate one on the host"
+            parseError = "no saved configuration — add sources and Generate in Config"
             return
         }
         guard let parsed = ConfigSemanticsReader.read(store.content) else {
@@ -192,24 +184,20 @@ struct SettingsView: View {
                             Button("Apply & Reconnect") { Task { await model.regenerateAndApply() } }
                             Button("Cancel", role: .cancel) {}
                         } message: {
-                            Text("Reloading the tunnel can interrupt active connections. Host-side generation is not performed on this device.")
+                            Text("Reloading the tunnel can interrupt active connections. Sources are generated and validated on this device before applying.")
                         }
                 }
                 NavigationLink("Tailscale") {
                     TailscaleView(store: model.store, tunnel: model.tunnel, commanding: commanding)
                 }
             }
-            Section("Experiments") {
-                Toggle("Experiment", isOn: Binding(
-                    get: { SettingsOverrides.experimentEnabled(in: model.store.content) },
-                    set: { model.setExperiment($0) }
-                ))
-                .disabled(SettingsOverrides.experimentProxy(in: model.store.content) == nil)
-                Text(SettingsOverrides.experimentProxy(in: model.store.content) == nil
-                     ? "Import a generated VPN configuration with a proxy route to enable Experiment."
-                     : "On: unmatched traffic uses the proxy. Off: unmatched traffic goes direct. Apply configuration to take effect.")
-                    .font(.footnote).foregroundStyle(.secondary)
-                if let notice = model.notice { Text(notice.text).font(.footnote).foregroundStyle(.secondary) }
+            Section {
+                NavigationLink {
+                    ExperimentView(model: model)
+                } label: {
+                    Label("Experiment", systemImage: "flask")
+                }
+                .sakamotoInspectTag("ExperimentEntry")
             }
             }
             Section("Source sync") {
@@ -228,8 +216,8 @@ struct SettingsView: View {
             }
             if !sourcesOnly {
             Section("Advanced") {
-                NavigationLink("Host-owned configuration") {
-                    List { hostOwnedSection }.listStyle(.insetGrouped).navigationTitle("Host configuration")
+                NavigationLink("Configuration details") {
+                    List { hostOwnedSection }.listStyle(.insetGrouped).navigationTitle("Configuration details")
                         .navigationBarTitleDisplayMode(.inline)
                 }
             }
@@ -266,12 +254,12 @@ struct SettingsView: View {
                 Text("Command channel")
                 Spacer()
                 Text(model.channelActive ? "Connected" : "Unavailable")
-                    .foregroundStyle(model.channelActive ? Color.green : Color.secondary)
+                    .foregroundStyle(model.channelActive ? Color.primary : Color.secondary)
             }
             if let notice = model.notice {
                 Text(notice.text)
                     .font(.footnote)
-                    .foregroundStyle(notice.kind == .error ? Color.red : Color.secondary)
+                    .foregroundStyle(notice.kind == .error ? Color.primary : Color.secondary)
             }
         } header: {
             Text("Runtime")
@@ -286,7 +274,7 @@ struct SettingsView: View {
             if let error = model.parseError {
                 Text(error)
                     .font(.footnote)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(.primary)
             }
             if let semantics = model.semantics {
                 Picker("Log level", selection: Binding(
@@ -321,13 +309,13 @@ struct SettingsView: View {
                 row("TUN stack", semantics.tunStack ?? "—")
                 row("Strict routing", semantics.strictRoute.map { $0 ? "On" : "Off" } ?? "—")
             }
-            row("Automatic fallback", "host sidecar (sakamoto.yaml)")
-            row("Chain SOCKS exit", "host daemon")
-            row("Subscriptions / nodes", "host sidecar")
+            row("Automatic fallback", "Settings → Experiment")
+            row("Chain SOCKS exit", "Imported configuration")
+            row("Subscriptions / nodes", "Config → Nodes & sources")
         } header: {
             Text("Host-owned semantics (read-only here)")
         } footer: {
-            Text("These live in the host generator and its sakamoto.yaml sidecar; edit them on the sakamoto host, then re-import the regenerated config.")
+            Text("Sources are generated on this device. Imported advanced routing and chain intent should be reviewed before regeneration.")
         }
     }
 
@@ -337,11 +325,12 @@ struct SettingsView: View {
                 Text("Config state")
                 Spacer()
                 Text(model.store.configState.rawValue)
-                    .foregroundStyle(model.store.configState == .clean ? Color.green : Color.orange)
+                    .foregroundStyle(model.store.configState == .clean ? Color.primary : Color.secondary)
             }
             Button("Apply configuration & reconnect") {
                 confirmApply = true
             }
+            .disabled(model.store.generating || (!model.store.canConnect && !model.store.canGenerate))
             .sakamotoGlassButton(prominent: true)
             .disabled(model.store.configState == .clean)
         }
@@ -401,7 +390,7 @@ struct SettingsView: View {
                 if case .conflict(_, let names) = sync.status {
                     Text("Conflict — not overwritten: " + names.joined(separator: ", "))
                         .font(.footnote)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(.primary)
                     Text("Both sides changed without a shared baseline. Keep the copy you want staged here, then sync again.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -426,7 +415,7 @@ struct SettingsView: View {
             }
             Text(sync.status.summary)
                 .font(.footnote)
-                .foregroundStyle(sync.status.isConflict ? Color.red : Color.secondary)
+                .foregroundStyle(sync.status.isConflict ? Color.primary : Color.secondary)
         } header: {
             Text("Sync sources")
         } footer: {

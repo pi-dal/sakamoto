@@ -59,6 +59,11 @@ tools.xcodegen = "2.46.0"
 tools.sing-box = "1.14.2"
 run = "ios/scripts/verify.sh"
 
+[tasks."ios:inspect"]
+description = "Build and run isolated iOS 17 Debug simulator with SimAgentationPlus source tags"
+tools.xcodegen = "2.46.0"
+run = "bash ios/scripts/inspect.sh"
+
 [tasks."ios:build"]
 description = "Build native frameworks and verify the iOS app"
 run = ["mise run ios:libbox", "mise run ios:verify"]

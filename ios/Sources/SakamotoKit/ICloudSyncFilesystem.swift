@@ -41,6 +41,12 @@ public protocol ICloudFilesystem: Sendable {
     /// Atomic write: temp file + rename, private file mode (0600 — the port
     /// of icloud.atomic).
     func writeAtomic(_ data: Data, toPath path: String) throws
+    /// Bounded source enumeration for first-device conf discovery.
+    func sourceNames(under root: String) throws -> [String]
+}
+
+public extension ICloudFilesystem {
+    func sourceNames(under root: String) throws -> [String] { [] }
 }
 
 /// In-memory implementation for tests and previews.
@@ -99,6 +105,11 @@ public final class InMemoryFilesystem: ICloudFilesystem, @unchecked Sendable {
         directories.insert((path as NSString).deletingLastPathComponent)
     }
 
+    public func sourceNames(under root: String) throws -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        return files.keys.filter { $0.hasPrefix(root + "/") }.map { String($0.dropFirst(root.count + 1)) }.filter(ICloudSyncPaths.isValidSourceName).sorted()
+    }
+
     // --- Test helpers (not part of the protocol) ---
 
     public func createSymbolicLink(atPath path: String, toDestination target: String) {
@@ -135,6 +146,34 @@ private func isFilesystemSymbolicLink(atPath path: String, fileManager: FileMana
     }
 }
 
+private func filesystemSourceNames(under root: String, fileManager: FileManager) throws -> [String] {
+    guard fileManager.fileExists(atPath: root) else { return [] }
+    guard try !isFilesystemSymbolicLink(atPath: root, fileManager: fileManager) else { throw ICloudSyncError.symlinkRefused(root) }
+    var result: [String] = []
+    var visited = 0
+    func visit(_ relative: String, depth: Int) throws {
+        guard depth <= ICloudSyncLimits.maxIncludeDepth else { throw ICloudSyncError.filesystem("source folder exceeds discovery depth") }
+        let directory = relative.isEmpty ? root : root + "/" + relative
+        for name in try fileManager.contentsOfDirectory(atPath: directory) {
+            visited += 1
+            guard visited <= 1024 else { throw ICloudSyncError.filesystem("source folder exceeds discovery limit") }
+            let source = relative.isEmpty ? name : relative + "/" + name
+            guard ICloudSyncPaths.isValidSourceName(source) else { continue }
+            let path = root + "/" + source
+            guard try !isFilesystemSymbolicLink(atPath: path, fileManager: fileManager) else { throw ICloudSyncError.symlinkRefused(path) }
+            var isDirectory: ObjCBool = false
+            guard fileManager.fileExists(atPath: path, isDirectory: &isDirectory) else { continue }
+            if isDirectory.boolValue { try visit(source, depth: depth + 1) }
+            else if source.lowercased().hasSuffix(".conf") {
+                result.append(source)
+                guard result.count <= ICloudSyncLimits.maxIncludeFiles else { throw ICloudSyncError.filesystem("too many conf sources") }
+            }
+        }
+    }
+    try visit("", depth: 0)
+    return result.sorted()
+}
+
 // MARK: - Local adapter (real files, no iCloud)
 
 /// Real-files implementation used for the LOCAL side (app-support staging of
@@ -144,6 +183,10 @@ public final class LocalFilesystem: ICloudFilesystem, @unchecked Sendable {
 
     public init(fileManager: FileManager = .default) {
         self.fileManager = fileManager
+    }
+
+    public func sourceNames(under root: String) throws -> [String] {
+        try filesystemSourceNames(under: root, fileManager: fileManager)
     }
 
     public func contents(atPath path: String) throws -> Data? {
@@ -224,6 +267,10 @@ public final class CloudFilesystem: ICloudFilesystem, @unchecked Sendable {
     public init(fileManager: FileManager = .default, coordinator: NSFileCoordinator = NSFileCoordinator()) {
         self.fileManager = fileManager
         self.coordinator = coordinator
+    }
+
+    public func sourceNames(under root: String) throws -> [String] {
+        try filesystemSourceNames(under: root, fileManager: fileManager)
     }
 
     public func contents(atPath path: String) throws -> Data? {

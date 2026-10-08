@@ -128,6 +128,35 @@ final class ICloudSyncTests: XCTestCase {
         XCTAssertEqual(try cloud.contents(atPath: "/two/nodes.txt"), Data("baseline".utf8))
     }
 
+    func testChangedLocalSourcesAbortBeforeCloudAndBaselineWrites() async {
+        let cloud = InMemoryFilesystem()
+        let local = InMemoryFilesystem()
+        let store = makeStore(settings: enabled(), local: local, cloud: cloud)
+        let result = await store.syncNow(staging: [entry("nodes.txt", "local")], sourcesAreCurrent: { false })
+        XCTAssertTrue(result.updates.isEmpty)
+        XCTAssertTrue(result.downloads.isEmpty)
+        XCTAssertTrue(cloud.allFiles().isEmpty)
+        XCTAssertTrue(local.allFiles().isEmpty)
+    }
+
+    func testFirstUseDiscoversMainConfAndRelativeIncludes() async throws {
+        let cloud = InMemoryFilesystem(), local = InMemoryFilesystem()
+        try cloud.writeAtomic(Data("[General]\ninclude = child.conf\n[Rule]\nFINAL,DIRECT".utf8), toPath: "/tui/sources/current/main.conf")
+        try cloud.writeAtomic(Data("[Rule]\nDOMAIN,example.com,DIRECT".utf8), toPath: "/tui/sources/current/child.conf")
+        let store = makeStore(settings: enabled(includeConf: true), local: local, cloud: cloud)
+        let outcome = await store.syncNow(staging: [], directoryURL: URL(fileURLWithPath: "/tui"), downloadNames: ["nodes.txt"], discoverConf: true)
+        XCTAssertEqual(outcome.discoveredMainConf, "sources/current/main.conf")
+        XCTAssertEqual(Set(outcome.downloads.map(\.name)), Set(["sources/current/main.conf", "sources/current/child.conf"]))
+    }
+    func testDiscoveryFailsClosedOnMissingInclude() async throws {
+        let cloud = InMemoryFilesystem(), local = InMemoryFilesystem()
+        try cloud.writeAtomic(Data("[General]\ninclude = missing.conf\n[Rule]\nFINAL,DIRECT".utf8), toPath: "/tui/main.conf")
+        let store = makeStore(settings: enabled(includeConf: true), local: local, cloud: cloud)
+        let outcome = await store.syncNow(staging: [], directoryURL: URL(fileURLWithPath: "/tui"), discoverConf: true)
+        XCTAssertTrue(outcome.downloads.isEmpty)
+        XCTAssertTrue(local.allFiles().isEmpty)
+    }
+
     // MARK: Path policy (ValidSourceName port)
 
     func testValidSourceNameDenylist() {

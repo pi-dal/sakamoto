@@ -15,8 +15,7 @@ final class S3SyncModel: ObservableObject {
     private let defaults: UserDefaults
     private let vault = TailscaleKeychainStore(account: "s3-sync-credentials")
     private let settingsKey = "sakamoto.s3.settings"
-    private let baselineKey = "sakamoto.s3.baseline"
-    private let bundleKey = "sakamoto.s3.bundle"
+    private var baselineKey: String { "sakamoto.s3.baseline." + (store.selectedProfileID ?? "unassigned") }
 
     init(store: ConfigStore, defaults: UserDefaults = .standard) {
         self.store = store; self.defaults = defaults
@@ -48,29 +47,29 @@ final class S3SyncModel: ObservableObject {
         }
     }
     private func export() throws -> SourceBundle {
-        var bundle = defaults.data(forKey: bundleKey).flatMap { try? JSONDecoder().decode(SourceBundle.self, from: $0) } ?? SourceBundle()
-        let nodes = store.nodesSources.nodesText
-        if !nodes.isEmpty || bundle.files["nodes.txt"] != nil { bundle.files["nodes.txt"] = nodes }
-        if !store.policy.rules.isEmpty || bundle.files["policy.json"] != nil {
-            bundle.files["policy.json"] = try json(store.policy.rules.map { SyncPolicy(match: $0.match, action: $0.action) })
-        }
-        if !store.nodesSources.subscriptions.isEmpty || bundle.files["subscriptions.json"] != nil {
-            bundle.files["subscriptions.json"] = try json(store.nodesSources.subscriptions.map { SyncSubscription(name: $0.name, url: $0.url, format: $0.format) })
-        }
-        if let source = store.importedSource, !ICloudSyncModel.isRemoteURL(source.displaySource) {
-            let name = "conf/" + (source.displaySource as NSString).lastPathComponent
-            bundle.mainConf = name; bundle.files[name] = source.content
+        var bundle = store.sourceBundle
+        // S3's contract is conf/<relative path>, whereas iCloud preserves
+        // the TUI's runtime-relative names. Convert this snapshot explicitly.
+        if bundle.files.keys.contains(where: { $0.hasSuffix(".conf") && !$0.hasPrefix("conf/") }) {
+            let confs = bundle.files.filter { $0.key.lowercased().hasSuffix(".conf") }
+            for name in confs.keys { bundle.files.removeValue(forKey: name) }
+            for (name, content) in confs { bundle.files["conf/" + name] = content }
+            if !bundle.mainConf.isEmpty { bundle.mainConf = "conf/" + bundle.mainConf }
         }
         return bundle
     }
     func syncNow() {
         guard !syncing else { return }
         guard settings.enabled else { notice = "Enable S3 sync first"; return }
+        store.ensureSourceProfile()
         do {
             let settingsJSON = try json(settings)
             let credentialsJSON = try json(S3SyncCredentials(accessKey: accessKey, secretKey: secretKey, sessionToken: sessionToken))
             let localJSON = try json(export())
             let baseline = defaults.string(forKey: baselineKey) ?? ""
+            let profileID = store.selectedProfileID
+            let sourcesBefore = store.sourceBundle
+            let capturedBaselineKey = baselineKey
             syncing = true
             Task {
                 defer { syncing = false }
@@ -82,45 +81,25 @@ final class S3SyncModel: ObservableObject {
                         return raw
                     }.value
                     let response = try JSONDecoder().decode(S3SyncResponse.self, from: Data(raw.utf8))
-                    guard try json(export()) == localJSON, try json(settings) == settingsJSON else {
+                    guard store.selectedProfileID == profileID, try json(export()) == localJSON, try json(settings) == settingsJSON else {
                         throw AppSetupError("Local sources changed during sync; retry without overwriting")
                     }
-                    try adopt(response)
-                    defaults.set(try JSONEncoder().encode(response.bundle), forKey: bundleKey)
-                    defaults.set(try json(response.baseline), forKey: baselineKey)
+                    var bundle = response.bundle
+                    if store.confSources.isEmpty || store.confSources.contains(where: { !$0.hasPrefix("conf/") }) {
+                        bundle.files = Dictionary(uniqueKeysWithValues: bundle.files.map { name, body in
+                            (name.hasPrefix("conf/") ? String(name.dropFirst(5)) : name, body)
+                        })
+                        if bundle.mainConf.hasPrefix("conf/") { bundle.mainConf = String(bundle.mainConf.dropFirst(5)) }
+                    }
+                    for (name, body) in sourcesBefore.files where !(response.downloads ?? []).contains(name) && (name == "policy.json" || name == "subscriptions.json") {
+                        bundle.files[name] = body
+                    }
+                    try store.adoptSourceBundle(bundle)
+                    defaults.set(try json(response.baseline), forKey: capturedBaselineKey)
                     notice = "Synced \((response.downloads ?? []).count) source files" + (response.uploaded ? "; uploaded changes" : "")
                 } catch { notice = "S3 sync: \(error.localizedDescription)" }
             }
         } catch { notice = "S3 sync: \(error.localizedDescription)" }
-    }
-    private func adopt(_ response: S3SyncResponse) throws {
-        let files = response.bundle.files
-        let downloads = Set(response.downloads ?? [])
-        var nextNodes = store.nodesSources.nodes
-        var nextSubs = store.nodesSources.subscriptions
-        if downloads.contains("nodes.txt"), let content = files["nodes.txt"] {
-            nextNodes = []
-            for line in content.split(whereSeparator: { $0.isNewline }) {
-                let raw = line.trimmingCharacters(in: .whitespaces)
-                if raw.isEmpty || raw.hasPrefix("#") { continue }
-                var error: NSError?
-                guard let info = MobilecoreParseShareLink(raw, &error), error == nil else { throw AppSetupError("Downloaded node failed validation") }
-                nextNodes.append(StagedNode(rawLink: raw, tag: info.tag, type: info.type, server: info.server))
-            }
-        }
-        if downloads.contains("subscriptions.json"), let content = files["subscriptions.json"] {
-            nextSubs = try JSONDecoder().decode([SyncSubscription].self, from: Data(content.utf8)).map { StagedSubscription(name: $0.name, url: $0.url, format: $0.format) }
-        }
-        let policy: PolicyBook?
-        if downloads.contains("policy.json"), let content = files["policy.json"] {
-            policy = PolicyBook(rules: try JSONDecoder().decode([SyncPolicy].self, from: Data(content.utf8)).map { StagedPolicyRule(match: $0.match, action: $0.action) })
-        } else { policy = nil }
-        if downloads.contains("nodes.txt") || downloads.contains("subscriptions.json") { store.commitNodesSources(NodesSourcesBook(nodes: nextNodes, subscriptions: nextSubs)) }
-        if let policy { store.commitPolicy(policy) }
-        if !response.bundle.mainConf.isEmpty, let content = files[response.bundle.mainConf],
-           store.importedSource?.content != content || store.importedSource?.displaySource != response.bundle.mainConf {
-            store.commitImport(ImportedSource(displaySource: response.bundle.mainConf, content: content))
-        }
     }
 }
 

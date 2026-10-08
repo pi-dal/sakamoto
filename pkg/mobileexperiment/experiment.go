@@ -51,6 +51,77 @@ func (t *ExperimentTracker) ObserveLog(message string, nowMillis int64, proxyHea
 	return ""
 }
 
+// OwnedRulesJSON only replaces a rule whose exact three-field shape and
+// domain set match the caller's committed operational state. A user-created
+// proxy-domain rule is never removed by the host's insertion helper.
+func OwnedRulesJSON(content, previousJSON, domainsJSON string) (string, error) {
+	var previous, domains []string
+	if err := json.Unmarshal([]byte(previousJSON), &previous); err != nil {
+		return "", err
+	}
+	if err := json.Unmarshal([]byte(domainsJSON), &domains); err != nil {
+		return "", err
+	}
+	proxy, err := experiment.ProxyOutbound([]byte(content))
+	if err != nil {
+		return "", err
+	}
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(content), &root); err != nil {
+		return "", err
+	}
+	var route map[string]json.RawMessage
+	if err := json.Unmarshal(root["route"], &route); err != nil {
+		return "", err
+	}
+	var rules []map[string]json.RawMessage
+	if err := json.Unmarshal(route["rules"], &rules); err != nil {
+		return "", err
+	}
+	set := func(values []string) map[string]bool {
+		result := map[string]bool{}
+		for _, v := range values {
+			result[v] = true
+		}
+		return result
+	}
+	old := set(previous)
+	var next []map[string]json.RawMessage
+	for _, rule := range rules {
+		var action, outbound string
+		_ = json.Unmarshal(rule["action"], &action)
+		_ = json.Unmarshal(rule["outbound"], &outbound)
+		if rule["domain"] != nil && action == "route" && outbound == proxy {
+			var names []string
+			_ = json.Unmarshal(rule["domain"], &names)
+			owned := len(rule) == 3 && len(old) > 0 && len(set(names)) == len(old)
+			for _, name := range names {
+				if !old[name] {
+					owned = false
+				}
+			}
+			if !owned {
+				return "", fmt.Errorf("user proxy domain rule overlaps automatic learning")
+			}
+			continue
+		}
+		next = append(next, rule)
+	}
+	route["rules"], err = json.Marshal(next)
+	if err != nil {
+		return "", err
+	}
+	root["route"], err = json.Marshal(route)
+	if err != nil {
+		return "", err
+	}
+	base, err := json.Marshal(root)
+	if err != nil {
+		return "", err
+	}
+	return RulesJSON(string(base), domainsJSON)
+}
+
 func ProxyOutbound(content string) (string, error) {
 	return experiment.ProxyOutbound([]byte(content))
 }

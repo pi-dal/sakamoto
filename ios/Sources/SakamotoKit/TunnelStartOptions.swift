@@ -15,15 +15,18 @@ public struct TunnelStartOptions: Codable, Equatable, Sendable {
     public var configContent: String
     /// Optional UI locale forwarded to the core (libbox SetLocale).
     public var locale: String?
+    public var profileID: String?
+    public var experimentJSON: String?
 
     enum CodingKeys: String, CodingKey {
         case configContent
-        case locale
+        case locale, profileID, experimentJSON
     }
 
-    public init(configContent: String, locale: String? = nil) {
+    public init(configContent: String, locale: String? = nil, profileID: String? = nil, experimentJSON: String? = nil) {
         self.configContent = configContent
         self.locale = locale
+        self.profileID = profileID; self.experimentJSON = experimentJSON
     }
 
     // MARK: NETunnelProviderProtocol.providerConfiguration
@@ -36,6 +39,8 @@ public struct TunnelStartOptions: Codable, Equatable, Sendable {
         if let locale {
             dict[CodingKeys.locale.rawValue] = locale
         }
+        if let profileID { dict[CodingKeys.profileID.rawValue] = profileID }
+        if let experimentJSON { dict[CodingKeys.experimentJSON.rawValue] = experimentJSON }
         return dict
     }
 
@@ -48,7 +53,9 @@ public struct TunnelStartOptions: Codable, Equatable, Sendable {
         }
         self.init(
             configContent: configContent,
-            locale: providerConfiguration[CodingKeys.locale.rawValue] as? String
+            locale: providerConfiguration[CodingKeys.locale.rawValue] as? String,
+            profileID: providerConfiguration[CodingKeys.profileID.rawValue] as? String,
+            experimentJSON: providerConfiguration[CodingKeys.experimentJSON.rawValue] as? String
         )
     }
 
@@ -63,6 +70,8 @@ public struct TunnelStartOptions: Codable, Equatable, Sendable {
         if let locale {
             dict[CodingKeys.locale.rawValue] = locale as NSString
         }
+        if let profileID { dict[CodingKeys.profileID.rawValue] = profileID as NSString }
+        if let experimentJSON { dict[CodingKeys.experimentJSON.rawValue] = experimentJSON as NSString }
         return dict
     }
 
@@ -73,7 +82,9 @@ public struct TunnelStartOptions: Codable, Equatable, Sendable {
         }
         self.init(
             configContent: configContent,
-            locale: startTunnelOptions[CodingKeys.locale.rawValue] as? String
+            locale: startTunnelOptions[CodingKeys.locale.rawValue] as? String,
+            profileID: startTunnelOptions[CodingKeys.profileID.rawValue] as? String,
+            experimentJSON: startTunnelOptions[CodingKeys.experimentJSON.rawValue] as? String
         )
     }
 }

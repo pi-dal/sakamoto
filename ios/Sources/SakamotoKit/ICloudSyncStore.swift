@@ -38,6 +38,7 @@ public struct ICloudSyncOutcome: Equatable, Sendable {
     public var downloads: [Download]
     /// Names the pass skipped (e.g. additional paths with no staged data).
     public var skipped: [String]
+    public var discoveredMainConf: String? = nil
 
     public struct Download: Equatable, Sendable {
         public var name: String
@@ -126,8 +127,12 @@ public actor ICloudSyncStore {
         staging: [ICloudSyncPayload.Entry],
         directoryURL: URL? = nil,
         downloadNames: [String] = [],
-        validateDownload: @Sendable (String, Data) throws -> Void = { _, _ in }
-    ) -> ICloudSyncOutcome {
+        sourceScope: String = "",
+        mainConf: String = "",
+        discoverConf: Bool = false,
+        validateDownload: @Sendable (String, Data) throws -> Void = { _, _ in },
+        sourcesAreCurrent: @Sendable () async -> Bool = { true }
+    ) async -> ICloudSyncOutcome {
         guard settings.enabled else {
             lastStatus = .disabled
             return ICloudSyncOutcome(status: .disabled, updates: [], downloads: [], skipped: [])
@@ -148,6 +153,28 @@ public actor ICloudSyncStore {
             .appendingPathComponent("Documents", isDirectory: true)
             .appendingPathComponent(directoryName, isDirectory: true).path
 
+        // Discover only consented conf sources. If multiple roots exist,
+        // preserve all and require the UI to select; never choose arbitrarily.
+        var confNames: [String] = []
+        var discoveredMain: String?
+        if discoverConf {
+            do {
+                confNames = try cloudFilesystem.sourceNames(under: cloudRoot).filter { $0.lowercased().hasSuffix(".conf") }
+                guard confNames.count <= ICloudSyncLimits.maxIncludeFiles else { return fail(ICloudSyncError.filesystem("too many conf sources")) }
+                var children = Set<String>()
+                for name in confNames {
+                    try Self.checkPath(root: cloudRoot, path: cloudRoot + "/" + name, filesystem: cloudFilesystem)
+                    guard let data = try cloudFilesystem.contents(atPath: cloudRoot + "/" + name) else { continue }
+                    let parent = (name as NSString).deletingLastPathComponent
+                    for child in try ICloudSyncConf.localIncludes(ofConfContent: data) { children.insert(parent.isEmpty ? child : parent + "/" + child) }
+                }
+                let roots = confNames.filter { !children.contains($0) }
+                if mainConf.isEmpty && roots.count == 1 { discoveredMain = roots.first }
+            } catch { return fail(error) }
+        }
+        let effectiveMain = mainConf.isEmpty ? discoveredMain ?? "" : mainConf
+        let requestedDownloads = Array(Set(downloadNames + confNames)).sorted()
+
         // --- validate + resolve names ---------------------------------------
 
         var skipped: [String] = []
@@ -161,14 +188,14 @@ public actor ICloudSyncStore {
             }
             pairs.append(Pair(name: entry.name, data: entry.data, cloudPath: cloudRoot + "/" + entry.name))
         }
-        for name in downloadNames where !staging.contains(where: { $0.name == name }) {
+        for name in requestedDownloads where !staging.contains(where: { $0.name == name }) {
             guard ICloudSyncPaths.isValidSourceName(name) else { return fail(ICloudSyncError.forbiddenSourceName(name)) }
             pairs.append(Pair(name: name, data: nil, cloudPath: cloudRoot + "/" + name))
         }
         // Additional source paths must name staged entries; anything else is
         // reported as skipped — the pass never invents files.
         for additional in settings.additionalSourcePaths {
-            if !staging.contains(where: { $0.name == additional }) && !downloadNames.contains(additional) {
+            if !staging.contains(where: { $0.name == additional }) && !requestedDownloads.contains(additional) {
                 skipped.append(additional)
             }
         }
@@ -180,7 +207,7 @@ public actor ICloudSyncStore {
 
         // A baseline belongs to one remote directory. Switching folders must
         // never reuse another directory's hash to choose an automatic upload.
-        let scope = Self.digest(Data(cloudRoot.utf8))
+        let scope = Self.digest(Data((sourceScope.isEmpty ? cloudRoot : cloudRoot + "\n" + sourceScope).utf8))
         let statePath = localDirectory + "/directories/" + scope + "/" + Self.stateFileName
         let state: [String: String]
         do {
@@ -203,6 +230,7 @@ public actor ICloudSyncStore {
         }
 
         var plan = Plan()
+        var sourceFiles: [String: Data] = [:]
         var conflictNames: [String] = []
 
         for pair in pairs {
@@ -225,6 +253,7 @@ public actor ICloudSyncStore {
                 do { try validateDownload(pair.name, remote) }
                 catch { return fail(ICloudSyncError.filesystem("invalid cloud source \(pair.name); current data kept")) }
             }
+            if let data = pair.data ?? remote { sourceFiles[pair.name] = data }
             guard let localData = pair.data else {
                 if state[pair.name] != nil { return fail(ICloudSyncError.deletedLocally(pair.name)) }
                 if let remote {
@@ -283,11 +312,20 @@ public actor ICloudSyncStore {
             )
         }
 
+        for action in plan.downloads { sourceFiles[action.name] = action.data }
+        do { try ICloudSyncPaths.validateConfGraph(main: effectiveMain, files: sourceFiles) }
+        catch { return fail(error) }
+
+        guard await sourcesAreCurrent() else {
+            return fail(ICloudSyncError.filesystem("local sources changed during sync; no copies or baselines were written"))
+        }
+
         // --- execute: local staging, cloud copies, baseline per action -------
 
         var updates: [String] = []
         var downloads: [ICloudSyncOutcome.Download] = []
         var currentState = state
+        guard settings.enabled else { return fail(ICloudSyncError.filesystem("sync was disabled during preflight")) }
 
         let sourcesDirectory = localDirectory + "/" + Self.sourcesDirectoryName
 
@@ -338,7 +376,7 @@ public actor ICloudSyncStore {
         let now = clock.now()
         let status: ICloudSyncStatus = updates.isEmpty ? .upToDate(now) : .synced(now, updates)
         lastStatus = status
-        return ICloudSyncOutcome(status: status, updates: updates, downloads: downloads, skipped: skipped)
+        return ICloudSyncOutcome(status: status, updates: updates, downloads: downloads, skipped: skipped, discoveredMainConf: discoveredMain)
     }
 
     // MARK: internals

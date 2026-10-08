@@ -92,7 +92,7 @@ struct TailscaleView: View {
                 Form {
                     SecureField("tskey-auth-…", text: $authKeyDraft)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    if let notice = provisionNotice, notice.kind == .error { Text(notice.text).foregroundStyle(.red) }
+                    if let notice = provisionNotice, notice.kind == .error { Text(notice.text).foregroundStyle(.primary) }
                 }
                 .navigationTitle("Auth key")
                 .toolbar {
@@ -139,7 +139,7 @@ struct TailscaleView: View {
             if let notice = provisionNotice {
                 Text(notice.text)
                     .font(.footnote)
-                    .foregroundStyle(notice.kind == .error ? Color.red : Color.secondary)
+                    .foregroundStyle(notice.kind == .error ? Color.primary : Color.secondary)
             }
         } header: {
             Text("Endpoint configuration")
@@ -212,7 +212,7 @@ struct TailscaleView: View {
             if let error = controller.lastError, controller.channelActive {
                 Text(error)
                     .font(.footnote)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(.primary)
             }
         } header: {
             Text("Built-in Tailscale")
@@ -325,7 +325,7 @@ struct TailscaleView: View {
             if let result = controller.pingResults[peer.stableID] {
                 Text(result.error ?? (result.isDirect == true ? "\(result.latencyMS ?? 0) ms direct" : "\(result.latencyMS ?? 0) ms"))
                     .font(.footnote.monospacedDigit())
-                    .foregroundStyle(result.error == nil ? Color.green : Color.red)
+                    .foregroundStyle(.primary)
             }
         }
     }
@@ -341,19 +341,13 @@ struct TailscaleView: View {
 
     private var unsupportedSection: some View {
         Section {
-            ForEach(TailscaleCapabilities.unsupported) { capability in
-                VStack(alignment: .leading) {
-                    Text("Unsupported: \(capability.capability.rawValue)")
-                        .font(.footnote.weight(.semibold))
-                    Text(capability.reason)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
+            DisclosureGroup("Available features") {
+                Text("View your devices, select an exit node, test device latency and sign out.")
+                Text("Sign in using the login link, or configure an optional auth key.")
+                Text("File transfer, Tailscale SSH and service sharing are unavailable in this app.")
+                    .foregroundStyle(.secondary)
             }
-        } header: {
-            Text("Capabilities")
-        } footer: {
-            Text("Supported actions: \(TailscaleCapabilities.supportedActions.map { $0.rawValue }.joined(separator: ", ")). iOS has no tailscale CLI, Taildrop, SSH, or serve surface in libbox — those entries are facts, not omissions.")
+            .sakamotoInspectTag("TailscaleFeatures")
         }
     }
 

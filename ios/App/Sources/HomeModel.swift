@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import Libbox
 import SakamotoKit
 
@@ -59,6 +60,10 @@ final class HomeModel: ObservableObject {
     private var measuredAt: Date?
     private var verifiedAt: Date?
     private var verificationPhase: SessionPhase?
+    private var storeUpdates: AnyCancellable?
+    private var requestedConfig: String?
+    private var requestedProfileID: String?
+    private var requestedExperiment: String?
 
     init(
         tunnel: TunnelControlling,
@@ -68,6 +73,7 @@ final class HomeModel: ObservableObject {
         self.tunnel = tunnel
         self.commanding = commanding
         self.store = store
+        storeUpdates = store.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
     }
 
     /// One-time activation from the view: provider snapshot, tunnel
@@ -86,8 +92,8 @@ final class HomeModel: ObservableObject {
 
     func connect() async {
         guard !busy else { return }
-        guard !store.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            notice = Notice(kind: .warning, text: "Import a VPN configuration in Config before connecting.")
+        guard store.canConnect else {
+            notice = Notice(kind: .warning, text: "Select a complete, current configuration in Config before connecting.")
             return
         }
         busy = true
@@ -98,15 +104,21 @@ final class HomeModel: ObservableObject {
         refoldPhase()
         do {
             let keyStore = TailscaleKeychainStore()
+            let prepared = try store.connectionContent()
+            requestedConfig = prepared
             let content = try TailscaleConfigInjection.inject(
                 authKey: keyStore.readAuthKey() ?? "",
-                into: store.content
+                into: prepared
             )
-            try await tunnel.connect(options: TunnelStartOptions(configContent: content))
+            let options = try store.connectionOptions(content: content)
+            requestedProfileID = options.profileID
+            requestedExperiment = options.experimentJSON
+            try await tunnel.connect(options: options)
             notice = Notice(kind: .progress, text: "Starting")
             await refreshProviderState()
             syncCommandChannel()
         } catch {
+            requestedConfig = nil
             serviceState = .stopped
             notice = Notice(kind: .error, text: "connect: \(error.localizedDescription)")
             refoldPhase()
@@ -139,6 +151,7 @@ final class HomeModel: ObservableObject {
         do {
             let snapshot = try await tunnel.ping()
             serviceState = snapshot.serviceState
+            confirmRequestedConfiguration()
             if let detail = snapshot.detail, !detail.isEmpty {
                 notice = Notice(kind: .warning, text: detail)
             } else if notice?.kind == .progress && serviceState != .starting && serviceState != .stopping {
@@ -162,6 +175,7 @@ final class HomeModel: ObservableObject {
             for await observation in observations ?? AsyncStream { $0.finish() } {
                 guard let self else { return }
                 self.serviceState = observation.serviceState
+                self.confirmRequestedConfiguration()
                 if let detail = observation.detail, !detail.isEmpty {
                     self.notice = Notice(kind: .warning, text: detail)
                 } else if self.notice?.kind == .progress && self.serviceState != .starting && self.serviceState != .stopping {
@@ -189,6 +203,16 @@ final class HomeModel: ObservableObject {
                     self.groups = []
                 }
             }
+        }
+    }
+
+    private func confirmRequestedConfiguration() {
+        if serviceState.running, let config = requestedConfig {
+            if store.selectedProfileID == requestedProfileID,
+               (try? store.connectionOptions().experimentJSON) == requestedExperiment {
+                store.connectionConfirmed(content: config)
+            }
+            requestedConfig = nil; requestedProfileID = nil; requestedExperiment = nil
         }
     }
 

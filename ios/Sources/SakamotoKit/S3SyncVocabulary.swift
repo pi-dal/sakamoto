@@ -54,4 +54,11 @@ public struct SyncSubscription: Codable, Sendable {
     public var url: String
     public var format: String
     public init(name: String, url: String, format: String) { self.name = name; self.url = url; self.format = format }
+    private enum CodingKeys: String, CodingKey { case name, url, format }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        url = try c.decode(String.self, forKey: .url)
+        format = try c.decodeIfPresent(String.self, forKey: .format) ?? "auto"
+    }
 }

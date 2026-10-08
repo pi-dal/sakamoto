@@ -22,15 +22,18 @@ public enum TunnelRequest: Equatable, Sendable {
     /// (ConfigState.NeedsReconnect -> applied). Carries the full generated
     /// sing-box config JSON.
     case reloadConfig(content: String)
+    case reloadProfile(options: TunnelStartOptions)
+    case recoverExperiment
+    case removeLearnedDomain(String)
 
     enum Action: String {
         case ping
-        case reloadConfig
+        case reloadConfig, reloadProfile, recoverExperiment, removeLearnedDomain
     }
 
     enum CodingKeys: String, CodingKey {
         case action
-        case configContent
+        case configContent, optionsJSON, domain
     }
 
     // MARK: Encoding
@@ -43,6 +46,13 @@ public enum TunnelRequest: Equatable, Sendable {
         switch self {
         case .ping:
             return try encoder.encode(["action": Action.ping.rawValue])
+        case .recoverExperiment:
+            return try encoder.encode(["action": Action.recoverExperiment.rawValue])
+        case .removeLearnedDomain(let domain):
+            return try encoder.encode(["action": Action.removeLearnedDomain.rawValue, "domain": domain])
+        case .reloadProfile(let options):
+            let raw = String(decoding: try encoder.encode(options), as: UTF8.self)
+            return try encoder.encode(["action": Action.reloadProfile.rawValue, "optionsJSON": raw])
         case .reloadConfig(let content):
             return try encoder.encode([
                 CodingKeys.action.rawValue: Action.reloadConfig.rawValue,
@@ -62,6 +72,14 @@ public enum TunnelRequest: Equatable, Sendable {
         switch raw[CodingKeys.action.rawValue] {
         case Action.ping.rawValue:
             self = .ping
+        case Action.recoverExperiment.rawValue:
+            self = .recoverExperiment
+        case Action.removeLearnedDomain.rawValue:
+            guard let domain = raw["domain"], domain.count <= 253 else { throw TunnelProfile.InvalidProfile("Missing learned domain") }
+            self = .removeLearnedDomain(domain)
+        case Action.reloadProfile.rawValue:
+            guard let json = raw["optionsJSON"] else { throw TunnelProfile.InvalidProfile("Missing profile reload options") }
+            self = .reloadProfile(options: try decoder.decode(TunnelStartOptions.self, from: Data(json.utf8)))
         case Action.reloadConfig.rawValue:
             guard let content = raw[CodingKeys.configContent.rawValue] else {
                 throw DecodingError.keyNotFound(

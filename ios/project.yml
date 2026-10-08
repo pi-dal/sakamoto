@@ -27,7 +27,7 @@ settings:
   base:
     DEVELOPMENT_TEAM: ""
     CODE_SIGN_STYLE: Automatic
-    CURRENT_PROJECT_VERSION: 5
+    CURRENT_PROJECT_VERSION: 6
     MARKETING_VERSION: 0.1.1
     SWIFT_VERSION: "5.10"
 
@@ -37,6 +37,9 @@ targets:
     platform: iOS
     sources:
       - path: App/Sources
+      # Shared extension logic is also compiled into the app for integration
+      # tests; it only starts when the PacketTunnel provider calls it.
+      - path: Extension/ProviderExperimentRunner.swift
       - path: Shared
       - path: App/Assets.xcassets
     dependencies:
@@ -153,6 +156,20 @@ targets:
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
 
+  SakamotoAppTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: AppTests
+    dependencies:
+      - target: Sakamoto
+      - package: SakamotoiOS
+        product: SakamotoKit
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.pidal.sakamoto.AppTests
+
 schemes:
   Sakamoto:
     build:
@@ -162,3 +179,6 @@ schemes:
         SakamotoWidgets: all
     run:
       config: Debug
+    test:
+      targets:
+        - SakamotoAppTests

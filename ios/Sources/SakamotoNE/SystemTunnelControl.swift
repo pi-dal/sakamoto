@@ -20,6 +20,9 @@ public enum SystemTunnelControl {
         case .busy: throw ControlError.busy
         case .unchanged: return current
         case .start:
+            guard UserDefaults(suiteName: SystemSurfaceStore.groupIdentifier)?.bool(forKey: "sakamoto.profile.requiresApply") != true else {
+                throw ControlError.needsApply
+            }
             guard manager.isEnabled,
                   let protocolConfiguration = manager.protocolConfiguration as? NETunnelProviderProtocol,
                   let options = TunnelStartOptions(providerConfiguration: protocolConfiguration.providerConfiguration ?? [:]),
@@ -45,10 +48,11 @@ public enum SystemTunnelControl {
     }
 
     public enum ControlError: LocalizedError {
-        case needsSetup, busy
+        case needsSetup, needsApply, busy
         public var errorDescription: String? {
             switch self {
             case .needsSetup: return "Open sakamoto and connect once to set up and authorize the VPN."
+            case .needsApply: return "Open sakamoto and apply the selected configuration before connecting from a widget or shortcut."
             case .busy: return "The VPN is starting or stopping. Try again after it finishes."
             }
         }

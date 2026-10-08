@@ -13,8 +13,25 @@ struct HomeView: View {
         List {
             Section {
                 phaseBanner
-                connectButton
-                modeButton
+                Picker("Configuration", selection: Binding(
+                    get: { model.store.selectedProfileID ?? "" },
+                    set: { id in
+                        do { try model.store.selectProfile(id) }
+                        catch { model.store.reportProfileError(error) }
+                    }
+                )) {
+                    Text("Choose configuration").tag("")
+                    ForEach(model.store.profiles) { Text($0.name).tag($0.id) }
+                }
+                if let error = model.store.profileError { Text(error).font(.footnote).foregroundStyle(.primary) }
+                if model.store.configState != .clean && model.store.canConnect && model.serviceState.running {
+                    Button("Apply selected configuration") { Task { await model.store.regenerateAndApply(tunnel: model.tunnel) } }
+                }
+                if model.store.selectedProfile?.sourcesChanged == true {
+                    Label("Sources changed — generate in Config",  systemImage: "exclamationmark.circle").font(.footnote).foregroundStyle(.secondary)
+                }
+                connectButton.sakamotoInspectTag("TunnelConnect")
+                modeButton.sakamotoInspectTag("RoutingMode")
                 if let notice = model.notice {
                     Text(notice.text)
                         .font(.footnote)
@@ -100,7 +117,7 @@ struct HomeView: View {
         }
         .buttonStyle(.borderedProminent)
         .controlSize(.large)
-        .disabled(model.busy || model.store.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        .disabled(model.busy || ((model.phase == .disconnected || model.phase == .unavailable) && !model.store.canConnect))
     }
 
     private var modeButton: some View {
@@ -128,7 +145,7 @@ struct HomeView: View {
                 Text("Command channel")
                 Spacer()
                 Text(model.commandChannelActive ? "Connected" : "Unavailable")
-                    .foregroundStyle(model.commandChannelActive ? Color.green : Color.secondary)
+                    .foregroundStyle(model.commandChannelActive ? Color.primary : Color.secondary)
             }
         } header: {
             Text("Control plane")
@@ -178,7 +195,7 @@ struct HomeView: View {
             // URL-test result, independent of selection.
             Text(node.status.rawValue)
                 .font(.footnote)
-                .foregroundStyle(node.status == .reachable ? Color.green : Color.secondary)
+                .foregroundStyle(node.status == .reachable ? Color.primary : Color.secondary)
             if node.status == .reachable {
                 Text("\(node.latencyMS) ms")
                     .font(.footnote.monospacedDigit())
@@ -201,10 +218,10 @@ struct HomeView: View {
 
     private var phaseColor: Color {
         switch model.phase {
-        case .reachable: return .green
-        case .tunRunning: return .yellow
-        case .unverified: return .orange
-        case .conflict, .unavailable: return .red
+        case .reachable: return .primary
+        case .tunRunning: return .secondary
+        case .unverified: return .secondary
+        case .conflict, .unavailable: return .primary
         case .starting, .stopping: return .secondary
         case .disconnected: return .secondary
         }
@@ -212,18 +229,18 @@ struct HomeView: View {
 
     private var probeColor: Color {
         switch model.probe.state {
-        case ProbeState.reachable.rawValue: return Color.green
+        case ProbeState.reachable.rawValue: return Color.primary
         case ProbeState.checking.rawValue: return Color.secondary
-        case ProbeState.unverified.rawValue: return Color.orange
+        case ProbeState.unverified.rawValue: return Color.secondary
         default: return Color.secondary
         }
     }
 
     private func noticeColor(_ kind: NoticeKind) -> Color {
         switch kind {
-        case .error: return .red
-        case .warning: return .orange
-        case .success: return .green
+        case .error: return .primary
+        case .warning: return .secondary
+        case .success: return .primary
         case .progress, .info: return .secondary
         }
     }

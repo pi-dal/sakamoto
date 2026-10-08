@@ -60,6 +60,14 @@ NAME=Libbox
     FRAMEWORK="${REPO_ROOT}/ios/Frameworks/${NAME}.xcframework"
     if [ -d "${FRAMEWORK}" ]; then
         PLIST_OK=1
+        if ! find "${FRAMEWORK}" -name Mobilegen.objc.h -print -quit | grep -q .; then
+            echo "Combined Mobilegen header missing — rebuild with ios/scripts/build-libbox.sh"
+            FAILED=1
+        fi
+        if ! find "${FRAMEWORK}" -name Mobileexperiment.objc.h -print -quit | grep -q .; then
+            echo "Combined Mobileexperiment header missing — rebuild with ios/scripts/build-libbox.sh"
+            FAILED=1
+        fi
         if ! find "${FRAMEWORK}" -name Mobilecore.objc.h -print -quit | grep -q .; then
             echo "Combined Mobilecore header missing — rebuild with ios/scripts/build-libbox.sh"
             FAILED=1

@@ -22,10 +22,11 @@ import zipfile
 
 parser = argparse.ArgumentParser()
 parser.add_argument('serial', nargs='?', help='Debug device serial for USB transfer')
-parser.add_argument('--export', type=Path, help='Write a private ZIP for Config → Import tunnel package')
+parser.add_argument('--export', type=Path, help='Write a private ZIP for Android Config → Import tunnel package')
+parser.add_argument('--export-ios', type=Path, help='Write a complete private .sakamoto configuration for iOS')
 args = parser.parse_args()
-if bool(args.serial) == bool(args.export):
-    parser.error('Use either a device serial or --export ZIP_PATH')
+if sum(bool(value) for value in (args.serial, args.export, args.export_ios)) != 1:
+    parser.error('Use a device serial, --export ZIP_PATH, or --export-ios PACKAGE_PATH')
 root = Path.home() / '.config/sakamoto'
 serial = args.serial
 pkg = 'com.pidal.sakamoto'
@@ -130,6 +131,36 @@ with tempfile.TemporaryDirectory(prefix='sakamoto-sync-check-') as tmp:
     result = subprocess.run(['sing-box', 'check', '-D', tmp, '-c', str(path)], capture_output=True)
     if result.returncode:
         raise RuntimeError('Adapted config failed sing-box validation; nothing transferred')
+# iOS profiles contain the exact runtime config and every local rule file.
+# Only the owner-selected destination receives this private snapshot; source
+# sync stays source-only and never silently uploads runtime/API credentials.
+if args.export_ios:
+    import base64
+    sources_hash = hashlib.sha256()
+    for name in sorted(files):
+        if name.startswith('imports/local/') and name != 'imports/local/config.json':
+            sources_hash.update(name.encode() + b'\0' + files[name])
+    source_files = {}
+    for name, data in files.items():
+        if name.startswith('imports/local/') and name.endswith('.conf'):
+            source_files[name.removeprefix('imports/local/')] = data.decode('utf-8')
+    main_conf = str(source.relative_to(root))
+    source_files['nodes.txt'] = node_file.read_text()
+    source_files['policy.json'] = json.dumps(settings.get('policy') or [])
+    source_files['subscriptions.json'] = json.dumps(settings.get('subscriptions') or [])
+    source_bundle = dict(version=1, main_conf=main_conf, files=source_files)
+    package = dict(format='sakamoto-tunnel-v1', name=source.stem,
+                   sourceBundleJSON=json.dumps(source_bundle, separators=(',', ':')),
+                   hostMetadataJSON=json.dumps(metadata, separators=(',', ':')),
+                   config=json.dumps(config, separators=(',', ':')),
+                   files={name: base64.b64encode(data).decode() for name, data in files.items() if name.startswith('rules/')},
+                   sourceDigest=sources_hash.hexdigest())
+    args.export_ios.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(args.export_ios, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    with os.fdopen(fd, 'w') as output:
+        json.dump(package, output, separators=(',', ':'))
+    print('Validated complete private iOS configuration exported; import the .sakamoto file in Config')
+    sys.exit(0)
 # Portable official-client path: never publish this user-specific package.
 if args.export:
     args.export.parent.mkdir(parents=True, exist_ok=True)

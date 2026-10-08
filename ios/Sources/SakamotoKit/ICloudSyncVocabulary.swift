@@ -179,7 +179,7 @@ public enum ICloudSyncPaths {
             if part.isEmpty || part == "." || part == ".." || part.hasPrefix(".") { return false }
             let lower = part.lowercased()
             switch lower {
-            case "config.json", "sakamoto.yaml", "proxy-restore.json", "auto-proxy.json",
+            case "s3-credentials.json", "s3-state.json", "config.json", "sakamoto.yaml", "proxy-restore.json", "auto-proxy.json",
                  "api-rotation.pending.json", "watch.sock", "watch.lock", "svc.sock",
                  "dns-restore.json", "icloud-state.json", "auth.json", "secrets.zsh",
                  // iOS-local staging state (never a cloud source).
@@ -193,6 +193,30 @@ public enum ICloudSyncPaths {
             }
         }
         return true
+    }
+
+    /// A known main source and every local include form one snapshot.
+    /// Do not commit a download whose dependencies cannot be staged.
+    public static func validateConfGraph(main: String, files: [String: Data]) throws {
+        guard !main.isEmpty else { return }
+        var visiting = Set<String>()
+        var done = Set<String>()
+        func visit(_ name: String, depth: Int) throws {
+            guard isValidSourceName(name), name.lowercased().hasSuffix(".conf"), depth <= ICloudSyncLimits.maxIncludeDepth,
+                  done.count < ICloudSyncLimits.maxIncludeFiles else { throw ICloudSyncError.unsafeInclude(name) }
+            guard !visiting.contains(name) else { throw ICloudSyncError.unsafeInclude("include cycle") }
+            if done.contains(name) { return }
+            guard let data = files[name] else { throw ICloudSyncError.filesystem("missing required conf include: \(name)") }
+            visiting.insert(name)
+            defer { visiting.remove(name) }
+            let parent = (name as NSString).deletingLastPathComponent
+            for relative in try ICloudSyncConf.localIncludes(ofConfContent: data) {
+                let child = parent.isEmpty ? relative : parent + "/" + relative
+                try visit(child, depth: depth + 1)
+            }
+            done.insert(name)
+        }
+        try visit(main, depth: 0)
     }
 
     /// Minimal port of filepath.Clean for relative slash paths (the only form

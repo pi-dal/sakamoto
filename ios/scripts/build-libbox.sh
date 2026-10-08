@@ -35,12 +35,12 @@ p = Path(sys.argv[1])
 s = p.read_text()
 anchor = '_ "github.com/sagernet/gomobile"'
 assert s.count(anchor) == 1, "Upstream builder import drift"
-s = s.replace(anchor, anchor + '\n\t_ "github.com/pi-dal/sakamoto/pkg/mobilecore"')
+s = s.replace(anchor, anchor + '\n\t_ "github.com/pi-dal/sakamoto/pkg/mobilecore"\n\t_ "github.com/pi-dal/sakamoto/pkg/mobileexperiment"\n\t_ "github.com/pi-dal/sakamoto/pkg/mobilegen"')
 anchor = 'args = append(args, "./experimental/libbox")'
 assert s.count(anchor) == 2, "Upstream bind target drift"
 # Only change the Apple occurrence, never the Android builder.
 pos = s.index('func buildApple()')
-s = s[:pos] + s[pos:].replace(anchor, 'args = append(args, "./experimental/libbox", "github.com/pi-dal/sakamoto/pkg/mobilecore")', 1)
+s = s[:pos] + s[pos:].replace(anchor, 'args = append(args, "./experimental/libbox", "github.com/pi-dal/sakamoto/pkg/mobilecore", "github.com/pi-dal/sakamoto/pkg/mobileexperiment", "github.com/pi-dal/sakamoto/pkg/mobilegen")', 1)
 p.write_text(s)
 PY
 cd "${WORK}/sing-box"
@@ -55,4 +55,4 @@ done
 mkdir -p "${OUTPUT_DIR}"
 rm -rf "${OUTPUT_DIR}/Libbox.xcframework"
 mv Libbox.xcframework "${OUTPUT_DIR}/Libbox.xcframework"
-echo "Built combined libbox + mobilecore: ${OUTPUT_DIR}/Libbox.xcframework"
+echo "Built combined libbox + mobilecore + mobileexperiment: ${OUTPUT_DIR}/Libbox.xcframework"

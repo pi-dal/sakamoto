@@ -1,0 +1,26 @@
+# Development-only overlay. The distribution project.yml remains iOS 16
+# and has no inspector package dependency. Generate this separate project
+# only when inspecting the simulator; never use it to archive a release.
+include:
+  - project.yml
+name: SakamotoInspector
+packages:
+  sim-agentation:
+    url: https://github.com/lcandy2/sim-agentation
+    exactVersion: 0.2.2
+
+targets:
+  Sakamoto:
+    dependencies:
+      - package: sim-agentation
+        product: SimAgentationPlus
+    settings:
+      base:
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+      configs:
+        Debug:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) DEBUG SAKAMOTO_SIM_AGENTATION"
+  SakamotoAppTests:
+    settings:
+      base:
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"

@@ -49,6 +49,25 @@ func TestMobileTrackerRejectsExplicitDirectAndGeneric403(t *testing.T) {
 	}
 }
 
+func TestOwnedRulesNeverRemoveUserProxyRules(t *testing.T) {
+	config := `{"route":{"rules":[{"domain":["user.example"],"action":"route","outbound":"Exit"},{"rule_set":["rs-proxy"],"action":"route","outbound":"Exit"}]}}`
+	if _, err := OwnedRulesJSON(config, `[]`, `["learned.example"]`); err == nil {
+		t.Fatal("user rule removed")
+	}
+	base := `{"route":{"rules":[{"rule_set":["rs-direct"],"action":"route","outbound":"direct"},{"rule_set":["rs-proxy"],"action":"route","outbound":"Exit"}]}}`
+	first, err := OwnedRulesJSON(base, `[]`, `["learned.example"]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := OwnedRulesJSON(first, `["learned.example"]`, `["next.example"]`)
+	if err != nil || strings.Contains(next, "learned.example") || !strings.Contains(next, "next.example") {
+		t.Fatal("owned replacement failed", err)
+	}
+	if _, err := OwnedRulesJSON(first, `["wrong.example"]`, `[]`); err == nil {
+		t.Fatal("wrong ownership accepted")
+	}
+}
+
 func TestRulesKeepDirectPriorityAndValidateDomain(t *testing.T) {
 	config := `{"route":{"final":"direct","rules":[{"action":"reject","rule_set":["rs-reject"]},{"action":"route","outbound":"direct","rule_set":["rs-direct"]},{"action":"route","outbound":"Exit","rule_set":["rs-proxy"]}]}}`
 	got, err := RulesJSON(config, `["learned.example"]`)
