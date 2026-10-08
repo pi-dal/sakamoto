@@ -115,7 +115,7 @@ struct HomeView: View {
             Text(model.phase == .disconnected || model.phase == .unavailable ? "Connect" : "Disconnect")
                 .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.borderedProminent)
+        .sakamotoGlassButton(prominent: true)
         .controlSize(.large)
         .disabled(model.busy || ((model.phase == .disconnected || model.phase == .unavailable) && !model.store.canConnect))
     }

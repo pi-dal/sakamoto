@@ -1,12 +1,16 @@
 import SwiftUI
 
+enum SakamotoPalette {
+    static let controlAccent = Color(red: 0.27, green: 0.40, blue: 0.64)
+}
+
 /// Keep native switch thumbs visible when the app's monochrome tint becomes
 /// white in Dark Mode. This style affects switches, not navigation/buttons.
 struct SakamotoSwitchStyle: ToggleStyle {
     func makeBody(configuration: Configuration) -> some View {
         Toggle(configuration)
             .toggleStyle(.switch)
-            .tint(Color(red: 0.27, green: 0.40, blue: 0.64))
+            .tint(SakamotoPalette.controlAccent)
     }
 }
 
@@ -40,11 +44,15 @@ extension View {
         if #available(iOS 26, *) {
             if prominent {
                 self.buttonStyle(.glassProminent)
+                    .tint(SakamotoPalette.controlAccent)
+                    .foregroundStyle(.white)
             } else {
                 self.buttonStyle(.glass)
             }
         } else if prominent {
             self.buttonStyle(.borderedProminent)
+                .tint(SakamotoPalette.controlAccent)
+                .foregroundStyle(.white)
         } else {
             self.buttonStyle(.bordered)
         }

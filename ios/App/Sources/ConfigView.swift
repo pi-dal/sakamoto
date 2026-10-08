@@ -358,7 +358,6 @@ struct ConfigView: View {
     @ObservedObject var sync: ICloudSyncModel
     @ObservedObject var s3: S3SyncModel
     @ObservedObject var settings: SettingsModel
-    @Environment(\.scenePhase) private var scenePhase
     @State private var showImportOptions = false
     @State private var showURLImport = false
     @State private var showEditor = false
@@ -367,11 +366,8 @@ struct ConfigView: View {
     @State private var pendingImport: ImportPayload?
     @State private var confirmTextImport = false
     @State private var payloadError: String?
-    /// Foreground clipboard offer: presence-only detection (hasStrings /
-    /// hasURLs), deduped by UIPasteboard.changeCount. Payload content is
-    /// never read silently — the row embeds a user-directed PasteButton.
-    @State private var clipboardOffer: ClipboardOffer?
-    @State private var clipboardOfferContent: ClipboardOffer.Content?
+    @State private var showClipboardImport = false
+    @State private var clipboardDraft = ""
 
     var body: some View {
         List {
@@ -402,9 +398,6 @@ struct ConfigView: View {
                 Button { showImportOptions = true } label: { Label("Add sources", systemImage: "plus") }
                     .sakamotoInspectTag("ConfigurationImport")
                     .disabled(model.importing)
-                if let clipboardOfferContent {
-                    clipboardOfferRow(content: clipboardOfferContent)
-                }
                 if let payloadError { Text(payloadError).font(.footnote).foregroundStyle(.primary) }
                 if let error = model.importError {
                     Text(error).font(.footnote).foregroundStyle(.primary)
@@ -458,9 +451,43 @@ struct ConfigView: View {
         }
         .navigationTitle("Config")
         .sakamotoRootPage()
-        .onAppear(perform: probeClipboard)
-        .onChange(of: scenePhase) { phase in
-            if phase == .active { probeClipboard() }
+        .sheet(isPresented: $showClipboardImport, onDismiss: {
+            clipboardDraft = ""
+            routePendingImport()
+        }) {
+            NavigationStack {
+                Form {
+                    PasteButton(payloadType: String.self) { strings in
+                        clipboardDraft = strings.first ?? ""
+                        payloadError = nil
+                    }
+                    .accessibilityLabel("Paste source text")
+                    TextEditor(text: $clipboardDraft)
+                        .frame(minHeight: 160)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .accessibilityLabel("Source text")
+                    if let payloadError { Text(payloadError).font(.footnote) }
+                }
+                .navigationTitle("Import text")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { pendingImport = nil; showClipboardImport = false }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Import") {
+                            do {
+                                pendingImport = try ImportPayload.detect(clipboardDraft)
+                                payloadError = nil
+                                showClipboardImport = false
+                            } catch {
+                                pendingImport = nil
+                                payloadError = "No supported configuration or link found"
+                            }
+                        }.disabled(clipboardDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+            }
         }
         .sheet(isPresented: $showScanner, onDismiss: processScannedImport) {
             QRScannerView { code in
@@ -535,6 +562,9 @@ struct ConfigView: View {
         .confirmationDialog("Add sources", isPresented: $showImportOptions, titleVisibility: .visible) {
             Button("From Files…") { model.importNodesFile = false; model.showFileImporter = true }
             Button("From URL…") { showURLImport = true }
+            Button("From clipboard…") {
+                pendingImport = nil; payloadError = nil; clipboardDraft = ""; showClipboardImport = true
+            }
             Button("Scan QR code") { pendingImport = nil; showScanner = true }
             Button("Cancel", role: .cancel) {}
         }
@@ -581,73 +611,6 @@ struct ConfigView: View {
         } message: {
             Text(model.pendingSubscriptionDeletion.map { SecretMasking.maskSecret($0.url) } ?? "")
         }
-    }
-
-    // MARK: Clipboard offer
-
-    /// Presence-only probe: changeCount revision + hasStrings/hasURLs say
-    /// whether something is waiting, never what it is. Dismissed revisions
-    /// stay suppressed; a new copy (new changeCount) offers again.
-    private func probeClipboard() {
-        let pasteboard = UIPasteboard.general
-        let revision = pasteboard.changeCount
-        var offer = clipboardOffer ?? ClipboardOffer()
-        guard offer.shouldOffer(revision: revision) else {
-            clipboardOffer = offer
-            clipboardOfferContent = nil
-            return
-        }
-        if pasteboard.hasURLs { clipboardOfferContent = .link }
-        else if pasteboard.hasStrings { clipboardOfferContent = .text }
-        else { clipboardOfferContent = nil }
-        clipboardOffer = offer
-    }
-
-    private func consumeClipboardOffer() {
-        var offer = clipboardOffer ?? ClipboardOffer()
-        offer.dismiss(revision: UIPasteboard.general.changeCount)
-        clipboardOffer = offer
-        clipboardOfferContent = nil
-    }
-
-    /// Compact offer row: honest wording ("text" / "link" — the payload is
-    /// unknown until the user directs the paste), a real PasteButton that
-    /// routes through the same import pipeline, and a dismiss affordance.
-    private func clipboardOfferRow(content: ClipboardOffer.Content) -> some View {
-        HStack(spacing: 12) {
-            Text(content == .link
-                 ? "A link is on your clipboard — paste to import it"
-                 : "Text is on your clipboard — paste to import it")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-            Spacer()
-            PasteButton(payloadType: String.self) { strings in
-                guard let text = strings.first else { return }
-                consumeClipboardOffer()
-                receiveImport(text)
-            }
-            .controlSize(.large)
-            .frame(minWidth: 44, minHeight: 44)
-            .accessibilityLabel("Paste clipboard import suggestion")
-            .disabled(model.importing)
-            Button {
-                consumeClipboardOffer()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(minWidth: 44, minHeight: 44)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.borderless)
-            .accessibilityLabel("Dismiss clipboard import suggestion")
-        }
-    }
-
-    private func receiveImport(_ raw: String) {
-        do { pendingImport = try ImportPayload.detect(raw); payloadError = nil; routePendingImport() }
-        catch { pendingImport = nil; payloadError = "No supported configuration or link found" }
     }
 
     private func processScannedImport() {
