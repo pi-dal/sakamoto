@@ -120,6 +120,21 @@ public final class InMemoryFilesystem: ICloudFilesystem, @unchecked Sendable {
     }
 }
 
+/// Inspect entries without following dangling links. Missing entries are
+/// allowed during preflight; other I/O failures must still stop the sync.
+private func isFilesystemSymbolicLink(atPath path: String, fileManager: FileManager) throws -> Bool {
+    do {
+        let attributes = try fileManager.attributesOfItem(atPath: path)
+        return attributes[.type] as? FileAttributeType == .typeSymbolicLink
+    } catch let error as NSError {
+        if error.domain == NSCocoaErrorDomain,
+           error.code == NSFileNoSuchFileError || error.code == NSFileReadNoSuchFileError {
+            return false
+        }
+        throw error
+    }
+}
+
 // MARK: - Local adapter (real files, no iCloud)
 
 /// Real-files implementation used for the LOCAL side (app-support staging of
@@ -143,9 +158,7 @@ public final class LocalFilesystem: ICloudFilesystem, @unchecked Sendable {
     }
 
     public func isSymbolicLink(atPath path: String) throws -> Bool {
-        let url = URL(fileURLWithPath: path)
-        let values = try url.resourceValues(forKeys: [.isSymbolicLinkKey])
-        return values.isSymbolicLink ?? false
+        try isFilesystemSymbolicLink(atPath: path, fileManager: fileManager)
     }
 
     public func ensureDirectory(atPath path: String) throws {
@@ -239,9 +252,7 @@ public final class CloudFilesystem: ICloudFilesystem, @unchecked Sendable {
     }
 
     public func isSymbolicLink(atPath path: String) throws -> Bool {
-        let url = URL(fileURLWithPath: path)
-        let values = try url.resourceValues(forKeys: [.isSymbolicLinkKey])
-        return values.isSymbolicLink ?? false
+        try isFilesystemSymbolicLink(atPath: path, fileManager: fileManager)
     }
 
     public func ensureDirectory(atPath path: String) throws {
