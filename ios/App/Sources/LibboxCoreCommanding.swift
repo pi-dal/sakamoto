@@ -25,9 +25,12 @@ import SakamotoKit
 
 enum CommandChannelError: LocalizedError {
     case unavailable
+    case testTimedOut
 
     public var errorDescription: String? {
         switch self {
+        case .testTimedOut:
+            return "No fresh node test result within 20 seconds"
         case .unavailable:
             return "command channel unavailable — connect the tunnel first"
         }
@@ -54,7 +57,9 @@ final class LibboxCoreCommanding: CoreCommanding, @unchecked Sendable {
 
     private var clashModeValue: RoutingMode?
     private var clashModesSeen = false
-    private var pendingTests: Set<String> = []
+    private var pendingTests: [String: Int64] = [:]
+    private var failedTests: [String: Int64] = [:]
+    private var measurementTimes: [String: Int64] = [:]
     private var connectionTable = ConnectionTable()
     private var logBuffer = LogBuffer()
 
@@ -88,6 +93,9 @@ final class LibboxCoreCommanding: CoreCommanding, @unchecked Sendable {
         self.client = nil
         let wasActive = active
         active = false
+        pendingTests.removeAll()
+        failedTests.removeAll()
+        measurementTimes.removeAll()
         // An intentional stop is not an error; the generic "connect the
         // tunnel" hint renders until the next start.
         lastConnectError = nil
@@ -212,13 +220,49 @@ final class LibboxCoreCommanding: CoreCommanding, @unchecked Sendable {
         }
     }
 
+    private func beginNodeTest(_ tag: String) {
+        lock.lock(); defer { lock.unlock() }
+        pendingTests[tag] = measurementTimes[tag] ?? 0
+        failedTests.removeValue(forKey: tag)
+    }
+
+    private func nodeTestPending(_ tag: String) throws -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard active else { throw CommandChannelError.unavailable }
+        return pendingTests[tag] != nil
+    }
+
+    private func failNodeTest(_ tag: String) {
+        lock.lock(); defer { lock.unlock() }
+        failedTests[tag] = pendingTests.removeValue(forKey: tag) ?? measurementTimes[tag] ?? 0
+    }
+
+    private func freshTestDelay(_ tag: String) -> UInt64 {
+        lock.lock(); defer { lock.unlock() }
+        let now = Date().timeIntervalSince1970
+        guard let last = measurementTimes[tag], last >= Int64(now) else { return 0 }
+        // The core reports second-resolution timestamps. Start in the next
+        // second so a quick repeated test cannot reuse the previous stamp.
+        return UInt64(max(0, floor(now) + 1.05 - now) * 1_000_000_000)
+    }
+
     func urlTest(outboundTag: String) async throws {
         let client = try requireClient()
-        lock.lock()
-        pendingTests.insert(outboundTag)
-        lock.unlock()
-        try await runOffMain {
-            try client.urlTest(outboundTag)
+        let delay = freshTestDelay(outboundTag)
+        if delay > 0 { try await Task.sleep(nanoseconds: delay) }
+        beginNodeTest(outboundTag)
+        do {
+            try await runOffMain { try client.urlTest(outboundTag) }
+            // The RPC only queues a measurement. Hold the batch slot until
+            // the authoritative group stream reports a newer measurement.
+            for _ in 0..<80 {
+                try await Task.sleep(nanoseconds: 250_000_000)
+                if try !nodeTestPending(outboundTag) { return }
+            }
+            throw CommandChannelError.testTimedOut
+        } catch {
+            failNodeTest(outboundTag)
+            throw error
         }
     }
 
@@ -353,20 +397,24 @@ final class LibboxCoreCommanding: CoreCommanding, @unchecked Sendable {
                         lock.lock()
                         // A fresh delay result retires the pending test: the
                         // stream is authoritative once it reports.
-                        if pendingTests.contains(item.tag), item.urlTestTime > 0 {
-                            pendingTests.remove(item.tag)
+                        if let previous = pendingTests[item.tag], item.urlTestTime > previous {
+                            pendingTests.removeValue(forKey: item.tag)
                         }
-                        let isPending = pendingTests.contains(item.tag)
+                        if let failedAt = failedTests[item.tag], item.urlTestTime > failedAt { failedTests.removeValue(forKey: item.tag) }
+                        measurementTimes[item.tag] = max(measurementTimes[item.tag] ?? 0, item.urlTestTime)
+                        let isPending = pendingTests[item.tag] != nil
+                        let delay: Int32 = failedTests[item.tag] != nil ? -1 : item.urlTestDelay
                         lock.unlock()
-                        let statusString = MobilecoreNodeStatus(item.urlTestDelay, isPending)
+                        let statusString = MobilecoreNodeStatus(delay, isPending)
                         let status = NodeStatus(
                             rawValue: statusString ?? NodeStatus.untested.rawValue
                         ) ?? .untested
                         items.append(NodeSnapshot(
                             tag: item.tag,
                             status: status,
-                            latencyMS: item.urlTestDelay,
-                            selected: group.selected == item.tag
+                            latencyMS: delay,
+                            selected: group.selected == item.tag,
+                            kind: item.type
                         ))
                     }
                 }

@@ -40,6 +40,7 @@ final class HomeModel: ObservableObject {
     @Published private(set) var routingMode: RoutingMode?
     @Published private(set) var groups: [GroupSnapshot] = []
     @Published private(set) var notice: Notice?
+    @Published private(set) var testingAll = false
     @Published private(set) var busy = false
     /// Live fact from the command channel; false before the first tunnel
     /// start and while it is down. Drives honest "unavailable" states.
@@ -291,6 +292,19 @@ final class HomeModel: ObservableObject {
         } catch {
             notice = Notice(kind: .error, text: "select: \(error.localizedDescription)")
         }
+    }
+
+    func testAllNodes() async {
+        guard !testingAll, let commanding, commandChannelActive else { return }
+        let targets = NodeTestBatcher.targets(groups)
+        guard !targets.isEmpty else { notice = Notice(kind: .info, text: "No proxy nodes available to test."); return }
+        testingAll = true
+        defer { testingAll = false }
+        let report = await NodeTestBatcher.run(targets) { tag in
+            try await commanding.urlTest(outboundTag: tag)
+        }
+        notice = Notice(kind: report.failed == 0 ? .info : .warning,
+                        text: "Tested \(report.requested) nodes\(report.failed == 0 ? "" : "; \(report.failed) had no fresh result or could not be tested").")
     }
 
     func testNode(_ node: NodeSnapshot) async {

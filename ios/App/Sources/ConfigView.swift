@@ -390,8 +390,16 @@ struct ConfigView: View {
                 if model.store.selectedProfile?.sourcesChanged == true {
                     Text("Changes are ready to apply.").font(.footnote).foregroundStyle(.secondary)
                 }
-                if model.store.sourceBundle.mainConf.isEmpty && !model.store.confSources.isEmpty {
-                    NavigationLink("Choose a rule source") { advancedConfiguration }
+            }
+            Section {
+                NavigationLink {
+                    ConfSourceView(store: model.store)
+                } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Rule source (.conf)")
+                        Text(model.store.sourceBundle.mainConf.isEmpty ? "Choose .conf" : URL(fileURLWithPath: model.store.sourceBundle.mainConf).lastPathComponent)
+                            .font(.subheadline).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                    }
                 }
             }
             Section {
@@ -405,11 +413,13 @@ struct ConfigView: View {
             }
             Section("Manage") {
                 NavigationLink {
-                    List { policySection }
-                        .listStyle(.insetGrouped)
-                        .navigationTitle("Policy")
-                        .navigationBarTitleDisplayMode(.inline)
+                    RoutingRulesView(store: model.store) {
+                        List { policySection }
+                            .listStyle(.insetGrouped)
+                            .navigationTitle("Custom overrides")
+                    }
                 } label: { Label("Routing rules", systemImage: "arrow.triangle.branch") }
+                NavigationLink { ProxyChainView(store: model.store) } label: { Label("Proxy chain", systemImage: "point.3.connected.trianglepath.dotted") }
                 NavigationLink {
                     List { nodesSourcesSection }
                         .listStyle(.insetGrouped)

@@ -310,12 +310,12 @@ struct SettingsView: View {
                 row("Strict routing", semantics.strictRoute.map { $0 ? "On" : "Off" } ?? "—")
             }
             row("Automatic fallback", "Settings → Experiment")
-            row("Chain SOCKS exit", "Imported configuration")
+            NavigationLink("Proxy chain") { ProxyChainView(store: model.store) }
             row("Subscriptions / nodes", "Config → Nodes & sources")
         } header: {
-            Text("Host-owned semantics (read-only here)")
+            Text("Saved configuration")
         } footer: {
-            Text("Sources are generated on this device. Imported advanced routing and chain intent should be reviewed before regeneration.")
+            Text("Generate and apply in Config after editing sources. Proxy-chain settings are kept with this configuration.")
         }
     }
 

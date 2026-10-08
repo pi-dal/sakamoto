@@ -103,12 +103,14 @@ public struct GroupSnapshot: Equatable, Sendable {
 /// never re-derives latency semantics. `selected` is the filled dot: an
 /// intent, never a connectivity claim.
 public struct NodeSnapshot: Equatable, Sendable {
+    public var kind: String = ""
     public var tag: String
     public var status: NodeStatus
     public var latencyMS: Int32
     public var selected: Bool
 
-    public init(tag: String, status: NodeStatus, latencyMS: Int32, selected: Bool) {
+    public init(tag: String, status: NodeStatus, latencyMS: Int32, selected: Bool, kind: String = "") {
+        self.kind = kind
         self.tag = tag
         self.status = status
         self.latencyMS = latencyMS

@@ -1,8 +1,8 @@
 import SwiftUI
 import SakamotoKit
 
-// Home tab: phase banner, Connect/Disconnect, mode cycle, groups. The phase
-// word is rendered verbatim from the Go bridge — no iOS-side folding.
+// Home tab: tunnel switch, routing mode, and node groups. The phase is
+// reported verbatim from the Go bridge in Connection details.
 
 struct HomeView: View {
     @ObservedObject var model: HomeModel
@@ -12,7 +12,6 @@ struct HomeView: View {
     var body: some View {
         List {
             Section {
-                phaseBanner
                 Picker("Configuration", selection: Binding(
                     get: { model.store.selectedProfileID ?? "" },
                     set: { id in
@@ -30,7 +29,6 @@ struct HomeView: View {
                 if model.store.selectedProfile?.sourcesChanged == true {
                     Label("Sources changed — generate in Config",  systemImage: "exclamationmark.circle").font(.footnote).foregroundStyle(.secondary)
                 }
-                connectButton.sakamotoInspectTag("TunnelConnect")
                 modeButton.sakamotoInspectTag("RoutingMode")
                 if let notice = model.notice {
                     Text(notice.text)
@@ -38,7 +36,12 @@ struct HomeView: View {
                         .foregroundStyle(noticeColor(notice.kind))
                 }
             } header: {
-                Text("Tunnel")
+                HStack {
+                    Text("Tunnel")
+                    Spacer()
+                    tunnelSwitch.sakamotoInspectTag("TunnelConnect")
+                }
+                .textCase(nil)
             }
 
             Section {
@@ -70,6 +73,7 @@ struct HomeView: View {
             groupsSection
             Section {
                 DisclosureGroup("Connection details") {
+                    LabeledRow("VPN status", model.phase.rawValue)
                     LabeledRow("Command channel", model.commandChannelActive ? "Connected" : "Unavailable")
                     LabeledRow("Service", model.serviceState.rawValue)
                 }
@@ -92,32 +96,27 @@ struct HomeView: View {
         .task { await model.activate() }
     }
 
-    private var phaseBanner: some View {
-        HStack {
-            Text(model.phase.rawValue)
-                .font(.title3.bold())
-                .foregroundStyle(phaseColor)
-            Spacer()
-        }
-        .accessibilityLabel("VPN status: \(model.phase.rawValue)")
+    private var tunnelIsOn: Bool {
+        model.serviceState.running || model.serviceState == .starting || model.serviceState == .stopping
     }
 
-    private var connectButton: some View {
-        Button {
-            Task {
-                if model.phase == .disconnected || model.phase == .unavailable {
-                    await model.connect()
+    private var tunnelSwitch: some View {
+        Toggle("Tunnel", isOn: Binding(
+            get: { tunnelIsOn },
+            set: { enabled in
+                if enabled {
+                    Task { await model.connect() }
                 } else {
                     showDisconnectConfirm = true
                 }
             }
-        } label: {
-            Text(model.phase == .disconnected || model.phase == .unavailable ? "Connect" : "Disconnect")
-                .frame(maxWidth: .infinity)
-        }
-        .sakamotoGlassButton(prominent: true)
-        .controlSize(.large)
-        .disabled(model.busy || ((model.phase == .disconnected || model.phase == .unavailable) && !model.store.canConnect))
+        ))
+        .labelsHidden()
+        .toggleStyle(SakamotoSwitchStyle())
+        .frame(minHeight: 44)
+        .accessibilityValue("\(tunnelIsOn ? "On" : "Off"), \(model.phase.rawValue)")
+        .accessibilityHint(tunnelIsOn ? "Disconnect tunnel" : "Connect tunnel")
+        .disabled(model.busy || model.serviceState == .starting || model.serviceState == .stopping || (!tunnelIsOn && !model.store.canConnect))
     }
 
     private var modeButton: some View {
@@ -155,6 +154,9 @@ struct HomeView: View {
     @ViewBuilder
     private var groupsSection: some View {
         Section {
+            Button(model.testingAll ? "Testing nodes…" : "Test all nodes") {
+                Task { await model.testAllNodes() }
+            }.disabled(!model.commandChannelActive || model.testingAll || model.groups.isEmpty)
             if model.groups.isEmpty {
                 Text(model.store.content.isEmpty ? "Import a VPN configuration in Config to get started." : "Connect to view nodes and groups")
                     .font(.footnote)
@@ -188,42 +190,24 @@ struct HomeView: View {
     }
 
     private func nodeRow(group: GroupSnapshot, node: NodeSnapshot) -> some View {
-        HStack {
-            Text(node.tag)
-            Spacer()
-            // Latency is the measurement; "Reachable" here is this node's
-            // URL-test result, independent of selection.
-            Text(node.status.rawValue)
-                .font(.footnote)
-                .foregroundStyle(node.status == .reachable ? Color.primary : Color.secondary)
-            if node.status == .reachable {
-                Text("\(node.latencyMS) ms")
-                    .font(.footnote.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-            if group.selectable {
-                Button("Pick") {
-                    Task { await model.selectNode(groupTag: group.tag, node: node) }
+        VStack(alignment: .leading, spacing: 8) {
+            Text(node.tag).lineLimit(2)
+            HStack(spacing: 12) {
+                VStack(alignment: .leading) {
+                    Text(node.status.rawValue).font(.footnote).foregroundStyle(.secondary)
+                    if node.status == .reachable { Text("\(node.latencyMS) ms").font(.footnote.monospacedDigit()) }
                 }
-                .font(.footnote)
-                .sakamotoGlassButton()
+                Spacer(minLength: 8)
+                if group.selectable {
+                    Button(node.selected ? "Picked" : "Pick") {
+                        Task { await model.selectNode(groupTag: group.tag, node: node) }
+                    }.font(.footnote).lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                        .sakamotoGlassButton().disabled(!model.commandChannelActive)
+                }
+                Button("Test") { Task { await model.testNode(node) } }
+                    .font(.footnote).lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                    .sakamotoGlassButton().disabled(!model.commandChannelActive || model.testingAll || node.status == .testing)
             }
-            Button("Test") {
-                Task { await model.testNode(node) }
-            }
-            .font(.footnote)
-            .sakamotoGlassButton()
-        }
-    }
-
-    private var phaseColor: Color {
-        switch model.phase {
-        case .reachable: return .primary
-        case .tunRunning: return .secondary
-        case .unverified: return .secondary
-        case .conflict, .unavailable: return .primary
-        case .starting, .stopping: return .secondary
-        case .disconnected: return .secondary
         }
     }
 

@@ -13,6 +13,7 @@ public struct TunnelProfile: Codable, Equatable, Identifiable, Sendable {
     public var sourceBundleJSON: String?
     public var pendingApply: Bool? = true
     public var experiment: ExperimentSettings?
+    public var proxyChain: ProxyChainSettings?
     /// Immutable rule snapshot directory, independent of logical profile ID.
     public var ruleRevisionID: String?
 

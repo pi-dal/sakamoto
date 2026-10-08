@@ -225,7 +225,9 @@ final class ConfigStore: ObservableObject {
         guard UUID(uuidString: profile.id) != nil else { throw TunnelProfile.InvalidProfile("Invalid configuration identifier") }
         if let revision = profile.ruleRevisionID, UUID(uuidString: revision) == nil { throw TunnelProfile.InvalidProfile("Invalid rule snapshot identifier") }
         let root = try AppPaths.sharedDirectory().appendingPathComponent(profile.ruleRevisionID.map { "RuleSnapshots/\($0)" } ?? "Profiles/\(profile.id)", isDirectory: true)
-        let config = try profile.preparedConfig(ruleDirectory: root)
+        var runtimeProfile = profile
+        runtimeProfile.config = try profile.proxyChain?.applying(to: profile.config) ?? profile.config
+        let config = try runtimeProfile.preparedConfig(ruleDirectory: root)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         for (name, data) in profile.files {
             guard TunnelProfile.validFileName(name) else { throw TunnelProfile.InvalidProfile("Invalid rule file path") }
@@ -271,6 +273,25 @@ final class ConfigStore: ObservableObject {
                 persistProfiles()
             }
         }
+    }
+
+    func saveProxyChain(_ settings: ProxyChainSettings) throws {
+        guard !generating && !applying else { throw TunnelProfile.InvalidProfile("Wait for generation or Apply to finish before saving the chain.") }
+        guard let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) else {
+            throw TunnelProfile.InvalidProfile("Generate or import a configuration first.")
+        }
+        var candidate = profiles[index]
+        if candidate.proxyChain == nil { candidate.config = try ProxyChainSettings.unchainedImportedConfig(candidate.config) }
+        candidate.proxyChain = settings
+        _ = try prepare(candidate)
+        content = candidate.config
+        persistence.set(content, forKey: Self.storageKey)
+        profiles[index] = candidate
+        profiles[index].pendingApply = true
+        UserDefaults(suiteName: SystemSurfaceStore.groupIdentifier)?.set(true, forKey: "sakamoto.experiment.pause." + candidate.id)
+        persistProfiles()
+        transition(.modified)
+        lastAction = "Proxy chain saved. Apply changes to use it."
     }
 
     func saveExperimentSettings(_ settings: ExperimentSettings) throws {
@@ -331,6 +352,7 @@ final class ConfigStore: ObservableObject {
         candidate.ruleRevisionID = revision
         candidate.name = selectedProfile?.name ?? "Generated configuration"
         candidate.experiment = settingsBefore
+        candidate.proxyChain = selectedProfile?.proxyChain ?? ProxyChainSettings.importedChain(in: contentBefore)
         // Preserve device-specific Tailscale endpoint and advanced settings;
         // generated sources own rules/nodes, not endpoint identity or auth.
         if let old = try? JSONSerialization.jsonObject(with: Data(contentBefore.utf8)) as? [String: Any],

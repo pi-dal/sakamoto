@@ -111,6 +111,8 @@ struct DataView: View {
     @StateObject private var model: DataModel
     @State private var showConnectionDetails = false
     @State private var confirmClose = false
+    @State private var connectionQuery = ""
+    @State private var showAllConnections = false
     @State private var showAvailability = false
 
     init(commanding: CoreCommanding?) {
@@ -125,6 +127,7 @@ struct DataView: View {
         }
         .navigationTitle("Data")
         .sakamotoRootPage()
+        .searchable(text: $connectionQuery, prompt: "Website, rule or outbound")
         .alert("Data unavailable", isPresented: $showAvailability) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -190,6 +193,8 @@ struct DataView: View {
                         VStack(alignment: .leading) {
                             Text(record.displayName)
                                 .lineLimit(1)
+                            Text("Rule: \(record.rule.isEmpty ? "Not reported by core" : record.rule)")
+                                .font(.caption).foregroundStyle(.secondary).lineLimit(2)
                             Text(record.closed
                                  ? "closed · \(record.outbound)"
                                  : "\(record.outbound) · ↑\(formatBytes(record.uplinkTotal)) ↓\(formatBytes(record.downlinkTotal))")
@@ -206,10 +211,8 @@ struct DataView: View {
                 }
                 .buttonStyle(.plain)
             }
-            if model.connections.count > DataModel.visibleConnectionRows {
-                Text("… \(model.connections.count - DataModel.visibleConnectionRows) more")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+            if !showAllConnections && filteredConnections.count > DataModel.visibleConnectionRows {
+                Button("Show all \(filteredConnections.count) connections") { showAllConnections = true }
             }
         } header: {
             Text("Recent connections")
@@ -226,8 +229,12 @@ struct DataView: View {
         }
     }
 
+    private var filteredConnections: [ConnectionRecord] {
+        model.connections.filter { connectionQuery.isEmpty || [$0.displayName, $0.destination, $0.rule, $0.outbound].contains { $0.localizedCaseInsensitiveContains(connectionQuery) } }
+    }
+
     private var visibleConnections: [ConnectionRecord] {
-        Array(model.connections.prefix(DataModel.visibleConnectionRows))
+        showAllConnections ? filteredConnections : Array(filteredConnections.prefix(DataModel.visibleConnectionRows))
     }
 
     @ViewBuilder
@@ -240,9 +247,7 @@ struct DataView: View {
                 if !conn.chain.isEmpty {
                     detailRow("Chain", conn.chain.joined(separator: " → "))
                 }
-                if !conn.rule.isEmpty {
-                    detailRow("Rule", conn.rule)
-                }
+                detailRow("Rule", conn.rule.isEmpty ? "Not reported by core" : conn.rule)
                 detailRow("Traffic", "↑\(formatBytes(conn.uplinkTotal)) ↓\(formatBytes(conn.downlinkTotal))")
                 Button("Close connection", role: .destructive) { confirmClose = true }
                     .disabled(model.closeInFlight || conn.closed)
