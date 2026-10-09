@@ -19,6 +19,7 @@ package mobilecore
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/pi-dal/sakamoto/pkg/mobileconf"
@@ -104,8 +105,8 @@ func ValidateSourceURL(source string) error { return mobileconf.ValidSource(sour
 // content in, content out. Shape (asserted in importer_test.go, mirrored by
 // the Swift Codable ConfigModel.ImportSummary):
 //
-//	{"totalRules": n, "proxyRules": n, "directRules": n, "rejectRules": n,
-//	 "finalTarget": "", "hostCount": n, "dnsResolvers": [],
+//	{"totalRules": n, "proxyRules": n, "proxyDomains": [], "proxyNonDomainRules": n,
+//	 "directRules": n, "rejectRules": n, "finalTarget": "", "hostCount": n, "dnsResolvers": [],
 //	 "includesPending": [], "ruleSetsPending": [], "unsupported": []}
 //
 // The device never fetches anything and never resolves includes: those
@@ -157,6 +158,20 @@ func ParseConfContentJSON(content string) (string, error) {
 		unsupported = append(unsupported,
 			fmt.Sprintf("[Proxy Group] %d entries replaced by sakamoto groups", len(doc.PGroups)))
 	}
+	// On-demand rules can express host suffixes, not keywords or IP ranges.
+	proxyDomains := make([]string, 0)
+	seenDomains := make(map[string]bool)
+	for _, kind := range []string{"domain", "domain_suffix"} {
+		for value := range doc.Buckets["proxy"][kind] {
+			value = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(value), "."))
+			if !seenDomains[value] {
+				seenDomains[value] = true
+				proxyDomains = append(proxyDomains, value)
+			}
+		}
+	}
+	sort.Strings(proxyDomains)
+	proxyNonDomainRules := len(doc.Buckets["proxy"]["domain_keyword"]) + len(doc.Buckets["proxy"]["ip_cidr"])
 	// nil slices must encode as [] (Swift decodes option-free lists).
 	if resolvers == nil {
 		resolvers = []string{}
@@ -171,27 +186,31 @@ func ParseConfContentJSON(content string) (string, error) {
 		unsupported = []string{}
 	}
 	report := struct {
-		TotalRules      int32    `json:"totalRules"`
-		ProxyRules      int32    `json:"proxyRules"`
-		DirectRules     int32    `json:"directRules"`
-		RejectRules     int32    `json:"rejectRules"`
-		FinalTarget     string   `json:"finalTarget"`
-		HostCount       int32    `json:"hostCount"`
-		DNSResolvers    []string `json:"dnsResolvers"`
-		IncludesPending []string `json:"includesPending"`
-		RuleSetsPending []string `json:"ruleSetsPending"`
-		Unsupported     []string `json:"unsupported"`
+		TotalRules          int32    `json:"totalRules"`
+		ProxyRules          int32    `json:"proxyRules"`
+		ProxyDomains        []string `json:"proxyDomains"`
+		ProxyNonDomainRules int32    `json:"proxyNonDomainRules"`
+		DirectRules         int32    `json:"directRules"`
+		RejectRules         int32    `json:"rejectRules"`
+		FinalTarget         string   `json:"finalTarget"`
+		HostCount           int32    `json:"hostCount"`
+		DNSResolvers        []string `json:"dnsResolvers"`
+		IncludesPending     []string `json:"includesPending"`
+		RuleSetsPending     []string `json:"ruleSetsPending"`
+		Unsupported         []string `json:"unsupported"`
 	}{
-		TotalRules:      int32(doc.TotalRules()),
-		ProxyRules:      int32(doc.RuleCount("proxy")),
-		DirectRules:     int32(doc.RuleCount("direct")),
-		RejectRules:     int32(doc.RuleCount("reject")),
-		FinalTarget:     doc.Final,
-		HostCount:       int32(len(doc.Hosts)),
-		DNSResolvers:    resolvers,
-		IncludesPending: includes,
-		RuleSetsPending: ruleSets,
-		Unsupported:     unsupported,
+		TotalRules:          int32(doc.TotalRules()),
+		ProxyRules:          int32(doc.RuleCount("proxy")),
+		ProxyDomains:        proxyDomains,
+		ProxyNonDomainRules: int32(proxyNonDomainRules),
+		DirectRules:         int32(doc.RuleCount("direct")),
+		RejectRules:         int32(doc.RuleCount("reject")),
+		FinalTarget:         doc.Final,
+		HostCount:           int32(len(doc.Hosts)),
+		DNSResolvers:        resolvers,
+		IncludesPending:     includes,
+		RuleSetsPending:     ruleSets,
+		Unsupported:         unsupported,
 	}
 	b, err := json.Marshal(report)
 	if err != nil {

@@ -81,8 +81,14 @@ Domain conditions accept domains or HTTP/HTTPS URLs, normalize them to hosts
 and match subdomains. iOS connects if DNS resolution fails or an optional check
 URL does not return HTTP 200; it does not promise to start for every request to
 a directly reachable host. The condition starts the VPN, while the generated
-configuration controls proxy routing. The same screen can stage PROXY policy
-rules; apply them in Config before enabling on-demand.
+configuration controls proxy routing. Selecting Domains with an empty list imports
+host-based PROXY rules from the selected `.conf` and its local includes. The
+“Use PROXY domains from .conf” button merges those hosts into the editable list;
+current generated local rule snapshots also supply downloaded rule-set domains.
+Changed sources must be generated before their remote rules are available. IP
+ranges and keyword predicates cannot be converted to iOS on-demand domains.
+Review the list and save to install the system conditions. The same screen can
+stage PROXY policy rules; apply them in Config before enabling on-demand.
 
 Manual disconnect in Home, Shortcuts, the widget or Control Center disables
 on-demand until the user enables it again in Settings. Unapplied profile edits

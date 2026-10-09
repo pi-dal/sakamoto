@@ -9,23 +9,37 @@ struct AutomaticConnectionView: View {
     @State private var domains = ""
     @State private var probeURL = ""
     @State private var saving = false
+    @State private var importingDomains = false
     @State private var notice: String?
 
     var body: some View {
         List {
             Section {
-                Picker("Connect automatically", selection: $mode) {
+                Picker("Connect on", selection: $mode) {
                     Text("Off").tag(AutomaticConnectionSettings.Mode.off)
                     Text("Any network").tag(AutomaticConnectionSettings.Mode.anyNetwork)
                     Text("Wi-Fi").tag(AutomaticConnectionSettings.Mode.wifi)
                     Text("Cellular").tag(AutomaticConnectionSettings.Mode.cellular)
-                    Text("When a domain needs VPN").tag(AutomaticConnectionSettings.Mode.domains)
+                    Text("Domains").tag(AutomaticConnectionSettings.Mode.domains)
                 }
             } header: { Text("On demand") } footer: {
                 Text("iOS reconnects the saved VPN when the selected condition matches, including after a restart once the device can access its saved configuration. Connect once in Home before enabling. Manually disconnecting pauses automatic connection; enable it again here to resume.")
             }
             if mode == .domains {
                 Section {
+                    Button {
+                        Task { await importProxyDomains() }
+                    } label: {
+                        HStack {
+                            Text("Use PROXY domains from .conf")
+                            if importingDomains { Spacer(); ProgressView() }
+                        }
+                    }
+                    .disabled(importingDomains || saving || store.generating)
+                    if !store.sourceBundle.mainConf.isEmpty {
+                        Text(URL(fileURLWithPath: store.sourceBundle.mainConf).lastPathComponent)
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     TextField("example.com\nhttps://example.org", text: $domains, axis: .vertical)
                         .lineLimit(3...8)
                         .textInputAutocapitalization(.never)
@@ -40,7 +54,7 @@ struct AutomaticConnectionView: View {
                 }
                 Section {
                     Button("Add these domains to proxy rules") { addProxyRules() }
-                        .disabled(saving || store.generating || domains.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(saving || importingDomains || store.generating || domains.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 } footer: {
                     Text("Adds PROXY rules to the selected configuration. Apply changes in Config, then save automatic connection here.")
                 }
@@ -52,7 +66,7 @@ struct AutomaticConnectionView: View {
                         if saving { Spacer(); ProgressView() }
                     }
                 }
-                .disabled(saving)
+                .disabled(saving || importingDomains)
                 if let notice { Text(notice).font(.footnote).foregroundStyle(.secondary) }
             }
             Section {
@@ -68,12 +82,43 @@ struct AutomaticConnectionView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("Automatic connection")
         .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: mode) { next in
+            if next == .domains && domains.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Task { await importProxyDomains() }
+            }
+        }
         .task {
             do {
                 let settings = try await SystemTunnelControl.automaticConnectionSettings()
                 mode = settings.mode; domains = settings.domains.joined(separator: "\n"); probeURL = settings.probeURL
             } catch { notice = error.localizedDescription }
         }
+    }
+
+    private func importProxyDomains() async {
+        guard !importingDomains else { return }
+        importingDomains = true
+        defer { importingDomains = false }
+        let bundle = store.sourceBundle
+        let profile = store.selectedProfile
+        let draftBefore = domains
+        do {
+            let imported = try await Task.detached(priority: .userInitiated) {
+                try OnDemandDomainImport.read(bundle: bundle, profile: profile)
+            }.value
+            let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
+            guard try encoder.encode(store.sourceBundle) == encoder.encode(bundle), store.selectedProfile == profile, domains == draftBefore else {
+                notice = "Configuration or domains changed. Retry importing its proxy domains."
+                return
+            }
+            guard !imported.domains.isEmpty else {
+                notice = (["No host-based PROXY rules found in the selected conf. Generate its sources or add domains manually."] + imported.notes).joined(separator: " ")
+                return
+            }
+            let current = try AutomaticConnectionSettings.normalizeDomains(domains)
+            domains = Array(Set(current + imported.domains)).sorted().joined(separator: "\n")
+            notice = (["Imported \(imported.domains.count) proxy domains. Review and save automatic connection."] + imported.notes).joined(separator: " ")
+        } catch { notice = error.localizedDescription }
     }
 
     private func save() async {

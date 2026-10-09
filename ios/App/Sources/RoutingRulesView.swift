@@ -46,7 +46,7 @@ struct RoutingRulesView<Overrides: View>: View {
                 ForEach(store.confSources, id: \.self) { name in
                     NavigationLink(name) {
                         RuleTextView(title: URL(fileURLWithPath: name).lastPathComponent,
-                                     rows: sourceRows(store.sourceBundle.files[name] ?? ""))
+                                     rows: ConfRulePresentation.rows(in: store.sourceBundle.files[name] ?? ""))
                     }
                 }
             }
@@ -83,15 +83,6 @@ struct RoutingRulesView<Overrides: View>: View {
         }
         return predicates.isEmpty ? "All traffic reaching this rule" : predicates.joined(separator: " · ")
     }
-    private func sourceRows(_ body: String) -> [String] {
-        var section = ""
-        return body.components(separatedBy: .newlines).compactMap { raw in
-            let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            if line.hasPrefix("[") { section = line.lowercased(); return nil }
-            guard section == "[rule]" || line.lowercased().hasPrefix("include") else { return nil }
-            return line.isEmpty ? nil : SecretMasking.maskSecret(line)
-        }
-    }
 }
 
 struct RuleTextView: View {
@@ -103,7 +94,7 @@ struct RuleTextView: View {
     var body: some View {
         List {
             Text("\(rows.count) entries in this saved snapshot").font(.footnote).foregroundStyle(.secondary)
-            ForEach(Array(filtered.enumerated()), id: \.offset) { _, row in Text(row).font(.caption.monospaced()).textSelection(.enabled) }
+            ForEach(Array(filtered.enumerated()), id: \.offset) { _, row in Text(row).font(.caption.monospaced()).fixedSize(horizontal: false, vertical: true).textSelection(.enabled) }
             if filtered.count == limit { Button("Show more") { limit += 100 } }
         }.navigationTitle(title).searchable(text: $query, prompt: "Domain, IP or rule")
     }
