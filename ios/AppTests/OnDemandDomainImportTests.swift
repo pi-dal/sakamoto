@@ -32,6 +32,21 @@ final class OnDemandDomainImportTests: XCTestCase {
         XCTAssertTrue(try OnDemandDomainImport.read(bundle: SourceBundle(), profile: dirty).domains.isEmpty)
     }
 
+    func testLargeConfStopsBeforeReturningPartialImport() {
+        var bundle = SourceBundle(); bundle.mainConf = "main.conf"
+        bundle.files["main.conf"] = "[Rule]\n" + (0...AutomaticConnectionSettings.maxDomains).map { "DOMAIN,d\($0).example,PROXY" }.joined(separator: "\n")
+        XCTAssertThrowsError(try OnDemandDomainImport.read(bundle: bundle, profile: nil))
+        bundle.files["main.conf"] = "[Rule]\n" + String(repeating: "#", count: 2 << 20)
+        XCTAssertThrowsError(try OnDemandDomainImport.read(bundle: bundle, profile: nil))
+    }
+
+    func testDomainBudgetCoversAllLocalIncludes() {
+        var bundle = SourceBundle(); bundle.mainConf = "main.conf"
+        bundle.files["main.conf"] = "[General]\ninclude=child.conf\n[Rule]\n" + (0..<128).map { "DOMAIN,d\($0).example,PROXY" }.joined(separator: "\n")
+        bundle.files["child.conf"] = "[Rule]\nDOMAIN,overflow.example,PROXY"
+        XCTAssertThrowsError(try OnDemandDomainImport.read(bundle: bundle, profile: nil))
+    }
+
     func testGeneratedCompiledRuleSetContributesProxyDomains() async throws {
         try AppServiceSetup.apply()
         let suite = "ondemand-import-" + UUID().uuidString

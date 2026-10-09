@@ -10,46 +10,65 @@ struct OnDemandDomainImport {
         var result = Self()
         var hosts = Set<String>()
         var visited = Set<String>()
+        var visiting = Set<String>()
+        var sourceBytes = 0
+        let maxImportBytes = 2 << 20
         struct Summary: Decodable {
-            var proxyDomains: [String]
-            var proxyNonDomainRules: Int
-            var includesPending: [String]
-            var ruleSetsPending: [String]
+            var domains: [String]
+            var hasNonDomainRules: Bool
+            var hasRemoteRules: Bool
         }
         // sing-box Listable fields encode one entry as a scalar and many as an array.
         func strings(_ value: Any?) -> [String] {
             if let value = value as? String { return [value] }
             return value as? [String] ?? []
         }
-        func add(_ values: [String]) {
+        func add(_ values: [String]) throws {
             for value in values {
                 if let normalized = try? AutomaticConnectionSettings.normalizeDomains(value), normalized.count == 1 {
                     hosts.insert(normalized[0])
+                    guard hosts.count <= AutomaticConnectionSettings.maxDomains else {
+                        throw AutomaticConnectionSettings.ValidationError.tooManyDomains
+                    }
                 }
             }
         }
-        func visit(_ name: String) throws {
+        func visit(_ name: String, depth: Int = 0) throws {
+            guard !visiting.contains(name), depth <= ICloudSyncLimits.maxIncludeDepth,
+                  ICloudSyncPaths.isValidSourceName(name), name.lowercased().hasSuffix(".conf") else {
+                throw TunnelProfile.InvalidProfile("Invalid or cyclic selected conf includes.")
+            }
             if visited.contains(name) { return }
             guard visited.count < ICloudSyncLimits.maxIncludeFiles,
                   let body = bundle.files[name] else { throw TunnelProfile.InvalidProfile("Missing selected conf or include. Sync the complete sources first.") }
+            sourceBytes += body.utf8.count
+            guard sourceBytes <= maxImportBytes else {
+                throw TunnelProfile.InvalidProfile("Configuration is too large for automatic domain import. Choose a few trigger domains manually.")
+            }
+            visiting.insert(name)
+            defer { visiting.remove(name) }
             visited.insert(name)
             var error: NSError?
-            let raw = MobilecoreParseConfContentJSON(body, &error)
+            let raw = MobilecoreOnDemandConfJSON(body, &error)
             if let error { throw error }
             let summary = try JSONDecoder().decode(Summary.self, from: Data(raw.utf8))
-            add(summary.proxyDomains)
-            if summary.proxyNonDomainRules > 0 { result.notes.append("IP and keyword rules cannot be used as iOS on-demand domains.") }
-            if !summary.ruleSetsPending.isEmpty || summary.includesPending.contains(where: { $0.hasPrefix("http") }) {
+            try add(summary.domains)
+            if summary.hasNonDomainRules { result.notes.append("IP and keyword rules cannot be used as iOS on-demand domains.") }
+            if summary.hasRemoteRules {
                 result.notes.append("Remote rules use the generated local snapshot. Generate current sources to include downloads.")
             }
             let parent = (name as NSString).deletingLastPathComponent
             for include in try ICloudSyncConf.localIncludes(ofConfContent: Data(body.utf8)) {
-                try visit(parent.isEmpty ? include : parent + "/" + include)
+                try visit(parent.isEmpty ? include : parent + "/" + include, depth: depth + 1)
             }
         }
         if !bundle.mainConf.isEmpty {
-            try ICloudSyncPaths.validateConfGraph(main: bundle.mainConf, files: bundle.files.mapValues { Data($0.utf8) })
             try visit(bundle.mainConf)
+        }
+        if let profile, !profile.sourcesChanged {
+            guard profile.config.utf8.count <= maxImportBytes else {
+                throw TunnelProfile.InvalidProfile("Generated configuration is too large for automatic domain import. Choose a few trigger domains manually.")
+            }
         }
         if let profile, !profile.sourcesChanged,
            let root = try JSONSerialization.jsonObject(with: Data(profile.config.utf8)) as? [String: Any],
@@ -61,8 +80,8 @@ struct OnDemandDomainImport {
             for rule in rules where proxyTags.contains(rule["outbound"] as? String ?? "") {
                 // Negated/logical predicates cannot be flattened into a host list.
                 if rule["invert"] as? Bool == true || rule["type"] as? String == "logical" { continue }
-                add(strings(rule["domain"]))
-                add(strings(rule["domain_suffix"]))
+                try add(strings(rule["domain"]))
+                try add(strings(rule["domain_suffix"]))
                 referenced.formUnion(strings(rule["rule_set"]))
             }
             let sets = route["rule_set"] as? [[String: Any]] ?? []
@@ -73,15 +92,11 @@ struct OnDemandDomainImport {
                     continue
                 }
                 var error: NSError?
-                let raw = MobilegenInspectRuleSetJSON(data, &error)
+                let raw = MobilegenOnDemandRuleSetJSON(data, &error)
                 if let error { throw error }
-                let object = try JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any] ?? [:]
-                for rule in object["rules"] as? [[String: Any]] ?? [] {
-                    if rule["invert"] as? Bool == true || rule["type"] as? String == "logical" { continue }
-                    add(strings(rule["domain"]))
-                    add(strings(rule["domain_suffix"]))
-                    if rule["ip_cidr"] != nil || rule["domain_keyword"] != nil { result.notes.append("IP and keyword rules cannot be used as iOS on-demand domains.") }
-                }
+                let summary = try JSONDecoder().decode(Summary.self, from: Data(raw.utf8))
+                try add(summary.domains)
+                if summary.hasNonDomainRules { result.notes.append("IP and keyword rules cannot be used as iOS on-demand domains.") }
             }
         }
         result.domains = hosts.sorted()

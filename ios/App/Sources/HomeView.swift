@@ -12,16 +12,7 @@ struct HomeView: View {
     var body: some View {
         List {
             Section {
-                Picker("Configuration", selection: Binding(
-                    get: { model.store.selectedProfileID ?? "" },
-                    set: { id in
-                        do { try model.store.selectProfile(id) }
-                        catch { model.store.reportProfileError(error) }
-                    }
-                )) {
-                    Text("Choose configuration").tag("")
-                    ForEach(model.store.profiles) { Text($0.name).tag($0.id) }
-                }
+                ConfigurationMenu(store: model.store)
                 if let error = model.store.profileError { Text(error).font(.footnote).foregroundStyle(.primary) }
                 if model.store.configState != .clean && model.store.canConnect && model.serviceState.running {
                     Button("Apply selected configuration") { Task { await model.store.regenerateAndApply(tunnel: model.tunnel) } }

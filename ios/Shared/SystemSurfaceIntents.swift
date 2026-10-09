@@ -57,11 +57,19 @@ struct SetTunnelEnabledIntent: SetValueIntent {
 
 enum SystemSurfaceActions {
     static func perform(_ action: SystemTunnelAction) async throws {
-        let state = try await SystemTunnelControl.perform(action)
-        let snapshot = SystemSurfaceStore.read().reconciled(with: state, at: Date())
-        // An idempotent Connect must not renew an older network probe.
-        SystemSurfaceStore.write(snapshot)
-        SystemSurfaceReload.reload()
+        defer { SystemSurfaceReload.reload() }
+        do {
+            let state = try await SystemTunnelControl.perform(action)
+            let snapshot = SystemSurfaceStore.read().reconciled(with: state, at: Date())
+            // An idempotent Connect must not renew an older network probe.
+            SystemSurfaceStore.write(snapshot)
+        } catch {
+            // Clear stale requested values even when a transition times out.
+            if let state = try? await SystemTunnelControl.status() {
+                SystemSurfaceStore.write(SystemSurfaceStore.read().reconciled(with: state, at: Date()))
+            }
+            throw error
+        }
     }
 }
 

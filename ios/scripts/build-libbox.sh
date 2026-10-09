@@ -44,6 +44,14 @@ s = s[:pos] + s[pos:].replace(anchor, 'args = append(args, "./experimental/libbo
 p.write_text(s)
 PY
 cd "${WORK}/sing-box"
+# The upstream iOS stubs disable every debug knob, including DERP-only binds.
+# Patch one checked anchor in a private dependency copy; never mutate GOMODCACHE.
+TAILSCALE_SOURCE="$(go list -m -f '{{.Dir}}' github.com/sagernet/tailscale)"
+cp -R "${TAILSCALE_SOURCE}" "${WORK}/tailscale"
+chmod -R u+w "${WORK}/tailscale"
+python3 "${REPO_ROOT}/ios/scripts/patch-tailscale-derp.py" "${WORK}/tailscale"
+gofmt -w "${WORK}/tailscale/wgengine/magicsock/debugknobs_stubs.go"
+go mod edit "-replace=github.com/sagernet/tailscale=${WORK}/tailscale"
 go mod edit -require=github.com/pi-dal/sakamoto@v0.0.0 "-replace=github.com/pi-dal/sakamoto=${REPO_ROOT}"
 GOFLAGS=-mod=mod go run ./cmd/internal/build_libbox -target apple -platform "${TARGETS}"
 [ -d Libbox.xcframework ] || { echo "Combined Libbox.xcframework not produced" >&2; exit 1; }

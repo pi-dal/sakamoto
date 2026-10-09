@@ -55,7 +55,10 @@ request start/stop without opening the app. Both the app and widget targets
 carry the NetworkExtension entitlement; signed-device operation still needs
 verification. Starting and Stopping are requests, not connection confirmation.
 Manual disconnect pauses on-demand connection to prevent immediate restart. On iOS 16 the widget opens Home; interactive widget buttons require
-iOS 17, and the Control Center toggle requires iOS 18.
+iOS 17, and the Control Center toggle requires iOS 18. Actions reload the saved
+manager on the main actor, wait up to 12 seconds for a settled system state, and
+refresh controls even after a timeout or error. A temporary status-read failure
+uses a recent display snapshot so the control remains available for retry.
 
 The app and provider write a display-only App Group snapshot. Widgets show the
 system VPN state, node label, mode and measured latency; no config, credentials or
@@ -87,8 +90,13 @@ host-based PROXY rules from the selected `.conf` and its local includes. The
 current generated local rule snapshots also supply downloaded rule-set domains.
 Changed sources must be generated before their remote rules are available. IP
 ranges and keyword predicates cannot be converted to iOS on-demand domains.
-Review the list and save to install the system conditions. The same screen can
-stage PROXY policy rules; apply them in Config before enabling on-demand.
+Review the list and save to install the system conditions. Trigger lists are
+limited to 128 distinct hosts and 32 KiB of input; these are application budgets,
+not Apple-documented limits. Conf imports and expanded binary rule snapshots
+are limited to 2 MiB and return a clear error rather than truncating a larger
+list. Complete proxy rules remain available after the VPN connects. Import runs
+off the UI thread and cannot overwrite domains or a profile changed meanwhile.
+The same screen can stage PROXY policy rules; apply them in Config before enabling on-demand.
 
 Manual disconnect in Home, Shortcuts, the widget or Control Center disables
 on-demand until the user enables it again in Settings. Unapplied profile edits
@@ -189,6 +197,16 @@ generated bindings):
 | Per-peer latency probe (direct vs DERP relay) | `CommandClient.StartTailscalePing` |
 | Login | status-driven auth-URL flow (`BackendState == NeedsLogin` + `authURL` → open in browser); optional auth key via Keychain → `TailscaleConfigInjection` at start |
 | As routing source | the tailscale endpoint is an outbound/endpoint in the running core; its reachability shows in the peers' online/active facts |
+
+Settings → Tailscale → **Force DERP relay** saves a per-profile transport policy;
+use Apply & reconnect after switching it. Old profiles default to normal direct
+peer connectivity. The policy travels in `TunnelStartOptions`, outside sing-box
+JSON, and survives regeneration. The provider closes the previous service before
+changing the shared atomic policy, including when rolling back a failed reload.
+The build patches only `debugAlwaysDERP` in a disposable copy of the pinned iOS
+Tailscale dependency. Its existing DERP-only bind path substitutes blocking UDP
+sockets; other debug knobs remain disabled and the Go module cache is untouched.
+Direct-versus-relay peer probes on a signed device remain the runtime check.
 
 **Explicitly unsupported on iOS** (rendered verbatim in the Tailscale tab;
 pinned by `TailscaleVocabularyTests`):

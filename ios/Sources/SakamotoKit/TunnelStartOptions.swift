@@ -17,16 +17,18 @@ public struct TunnelStartOptions: Codable, Equatable, Sendable {
     public var locale: String?
     public var profileID: String?
     public var experimentJSON: String?
+    public var forceTailscaleDERP: Bool?
 
     enum CodingKeys: String, CodingKey {
         case configContent
-        case locale, profileID, experimentJSON
+        case locale, profileID, experimentJSON, forceTailscaleDERP
     }
 
-    public init(configContent: String, locale: String? = nil, profileID: String? = nil, experimentJSON: String? = nil) {
+    public init(configContent: String, locale: String? = nil, profileID: String? = nil, experimentJSON: String? = nil, forceTailscaleDERP: Bool? = nil) {
         self.configContent = configContent
         self.locale = locale
         self.profileID = profileID; self.experimentJSON = experimentJSON
+        self.forceTailscaleDERP = forceTailscaleDERP
     }
 
     // MARK: NETunnelProviderProtocol.providerConfiguration
@@ -41,6 +43,7 @@ public struct TunnelStartOptions: Codable, Equatable, Sendable {
         }
         if let profileID { dict[CodingKeys.profileID.rawValue] = profileID }
         if let experimentJSON { dict[CodingKeys.experimentJSON.rawValue] = experimentJSON }
+        if let forceTailscaleDERP { dict[CodingKeys.forceTailscaleDERP.rawValue] = forceTailscaleDERP }
         return dict
     }
 
@@ -55,7 +58,8 @@ public struct TunnelStartOptions: Codable, Equatable, Sendable {
             configContent: configContent,
             locale: providerConfiguration[CodingKeys.locale.rawValue] as? String,
             profileID: providerConfiguration[CodingKeys.profileID.rawValue] as? String,
-            experimentJSON: providerConfiguration[CodingKeys.experimentJSON.rawValue] as? String
+            experimentJSON: providerConfiguration[CodingKeys.experimentJSON.rawValue] as? String,
+            forceTailscaleDERP: providerConfiguration[CodingKeys.forceTailscaleDERP.rawValue] as? Bool
         )
     }
 
@@ -72,6 +76,7 @@ public struct TunnelStartOptions: Codable, Equatable, Sendable {
         }
         if let profileID { dict[CodingKeys.profileID.rawValue] = profileID as NSString }
         if let experimentJSON { dict[CodingKeys.experimentJSON.rawValue] = experimentJSON as NSString }
+        if let forceTailscaleDERP { dict[CodingKeys.forceTailscaleDERP.rawValue] = NSNumber(value: forceTailscaleDERP) }
         return dict
     }
 
@@ -84,7 +89,8 @@ public struct TunnelStartOptions: Codable, Equatable, Sendable {
             configContent: configContent,
             locale: startTunnelOptions[CodingKeys.locale.rawValue] as? String,
             profileID: startTunnelOptions[CodingKeys.profileID.rawValue] as? String,
-            experimentJSON: startTunnelOptions[CodingKeys.experimentJSON.rawValue] as? String
+            experimentJSON: startTunnelOptions[CodingKeys.experimentJSON.rawValue] as? String,
+            forceTailscaleDERP: (startTunnelOptions[CodingKeys.forceTailscaleDERP.rawValue] as? NSNumber)?.boolValue
         )
     }
 }

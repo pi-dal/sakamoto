@@ -16,6 +16,8 @@ public struct TunnelProfile: Codable, Equatable, Identifiable, Sendable {
     public var proxyChain: ProxyChainSettings?
     /// Immutable rule snapshot directory, independent of logical profile ID.
     public var ruleRevisionID: String?
+    /// Device-side transport policy, kept outside the upstream sing-box JSON.
+    public var forceTailscaleDERP: Bool?
 
     public init(id: String = UUID().uuidString, name: String, config: String, files: [String: Data] = [:], sourceDigest: String = "", importedAt: Date = Date(), sourceBundleJSON: String? = nil) {
         self.id = id; self.name = name; self.config = config; self.files = files
@@ -60,6 +62,7 @@ public struct TunnelProfile: Codable, Equatable, Identifiable, Sendable {
         }
         let profile = TunnelProfile(name: package.name, config: package.config, files: package.files, sourceDigest: package.sourceDigest, sourceBundleJSON: package.sourceBundleJSON)
         var imported = profile
+        imported.forceTailscaleDERP = package.forceTailscaleDERP
         imported.experiment = try ExperimentSettings.hostMetadata(package.hostMetadataJSON)
         if package.hostMetadataJSON == nil {
             imported.experiment?.mode = SettingsOverrides.experimentEnabled(in: imported.config) ? .on : .off
@@ -76,6 +79,7 @@ public struct TunnelProfile: Codable, Equatable, Identifiable, Sendable {
         public var sourceDigest: String
         public var sourceBundleJSON: String?
         public var hostMetadataJSON: String?
+        public var forceTailscaleDERP: Bool?
         public init(name: String, config: String, files: [String: Data], sourceDigest: String = "", sourceBundleJSON: String? = nil) {
             self.format = "sakamoto-tunnel-v1"; self.name = name; self.config = config
             self.files = files; self.sourceDigest = sourceDigest; self.sourceBundleJSON = sourceBundleJSON

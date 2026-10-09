@@ -55,8 +55,15 @@ struct VPNWidget: Widget {
 private struct VPNControlProvider: ControlValueProvider {
     var previewValue: Bool { false }
     func currentValue() async throws -> Bool {
-        let state = try await SystemTunnelControl.status()
-        return state == .running || state == .starting
+        do {
+            let state = try await SystemTunnelControl.status()
+            return state == .running || state == .starting
+        } catch {
+            // A transient NE IPC error must not permanently disable the control.
+            let snapshot = SystemSurfaceStore.read()
+            guard (0...30).contains(Date().timeIntervalSince(snapshot.updatedAt)) else { return false }
+            return snapshot.serviceState == .running || snapshot.serviceState == .starting
+        }
     }
 }
 

@@ -53,6 +53,8 @@ final class ConfigStore: ObservableObject {
 
     private let persistence: UserDefaults
     private let keyStore: TailscaleAuthKeyStoring
+    private var cachedSourceJSON: String?
+    private var cachedSourceBundle: SourceBundle?
 
     init(persistence: UserDefaults = .standard, keyStore: TailscaleAuthKeyStoring) {
         self.persistence = persistence
@@ -275,6 +277,17 @@ final class ConfigStore: ObservableObject {
         }
     }
 
+    func setForceTailscaleDERP(_ enabled: Bool) throws {
+        guard !generating && !applying else { throw TunnelProfile.InvalidProfile("Wait for generation or Apply to finish before changing Tailscale transport.") }
+        guard let index = profiles.firstIndex(where: { $0.id == selectedProfileID }),
+              TailscaleEndpointProvisioning.isEnabled(in: content) else { throw TunnelProfile.InvalidProfile("Enable a Tailscale endpoint first.") }
+        profiles[index].forceTailscaleDERP = enabled ? true : nil
+        profiles[index].pendingApply = true
+        persistProfiles()
+        transition(.modified)
+        lastAction = "Tailscale transport saved. Apply & reconnect to use it."
+    }
+
     func saveProxyChain(_ settings: ProxyChainSettings) throws {
         guard !generating && !applying else { throw TunnelProfile.InvalidProfile("Wait for generation or Apply to finish before saving the chain.") }
         guard let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) else {
@@ -311,7 +324,8 @@ final class ConfigStore: ObservableObject {
         let settings = experimentSettings
         try settings.validate()
         let raw = String(decoding: try JSONEncoder().encode(settings), as: UTF8.self)
-        return TunnelStartOptions(configContent: try prepared ?? connectionContent(), profileID: selectedProfileID, experimentJSON: raw)
+        return TunnelStartOptions(configContent: try prepared ?? connectionContent(), profileID: selectedProfileID, experimentJSON: raw,
+                                  forceTailscaleDERP: selectedProfile?.forceTailscaleDERP)
     }
 
     func connectionContent() throws -> String {
@@ -352,6 +366,7 @@ final class ConfigStore: ObservableObject {
         candidate.ruleRevisionID = revision
         candidate.name = selectedProfile?.name ?? "Generated configuration"
         candidate.experiment = settingsBefore
+        candidate.forceTailscaleDERP = selectedProfile?.forceTailscaleDERP
         candidate.proxyChain = selectedProfile?.proxyChain ?? ProxyChainSettings.importedChain(in: contentBefore)
         // Preserve device-specific Tailscale endpoint and advanced settings;
         // generated sources own rules/nodes, not endpoint identity or auth.
@@ -392,8 +407,14 @@ final class ConfigStore: ObservableObject {
     /// Includes and their paths belong to the selected profile, never to
     /// whichever profile happened to run the previous sync pass.
     var sourceBundle: SourceBundle {
-        if let raw = selectedProfile?.sourceBundleJSON,
-           let bundle = try? JSONDecoder().decode(SourceBundle.self, from: Data(raw.utf8)) { return bundle }
+        if let raw = selectedProfile?.sourceBundleJSON {
+            if cachedSourceJSON == raw, let cachedSourceBundle { return cachedSourceBundle }
+            if let bundle = try? JSONDecoder().decode(SourceBundle.self, from: Data(raw.utf8)) {
+                cachedSourceJSON = raw; cachedSourceBundle = bundle
+                return bundle
+            }
+        }
+        cachedSourceJSON = nil; cachedSourceBundle = nil
         var bundle = SourceBundle()
         if !nodesSources.nodes.isEmpty { bundle.files["nodes.txt"] = nodesSources.nodesText }
         let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys

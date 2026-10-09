@@ -120,6 +120,25 @@ final class ConfigStoreTests: XCTestCase {
         XCTAssertEqual(restored.experimentSettings, settings)
     }
 
+    func testDERPPolicyBelongsToProfileSurvivesGenerationAndRequiresApply() async throws {
+        let store = ConfigStore(persistence: defaults, keyStore: EmptyKeys())
+        try store.installProfile(profile("Tailnet", node: "trojan://test@example.com:443#node"))
+        try store.setTailscaleEnabled(true, options: TailscaleEndpointOptions())
+        try store.setForceTailscaleDERP(true)
+        XCTAssertTrue(store.selectedProfile?.pendingApply == true)
+        XCTAssertEqual(try store.connectionOptions().forceTailscaleDERP, true)
+        try await store.generateFromSources()
+        XCTAssertEqual(try store.connectionOptions().forceTailscaleDERP, true)
+        let firstID = try XCTUnwrap(store.selectedProfileID)
+        try store.installProfile(profile("Other"))
+        XCTAssertNil(try store.connectionOptions().forceTailscaleDERP)
+        try store.selectProfile(firstID)
+        let restored = ConfigStore(persistence: defaults, keyStore: EmptyKeys())
+        XCTAssertEqual(try restored.connectionOptions().forceTailscaleDERP, true)
+        try restored.setForceTailscaleDERP(false)
+        XCTAssertNil(try restored.connectionOptions().forceTailscaleDERP)
+    }
+
     func testIdenticalSyncDoesNotInvalidateRunnableProfile() throws {
         let store = ConfigStore(persistence: defaults, keyStore: EmptyKeys())
         try store.installProfile(profile("Good", node: "trojan://test@example.com:443#node"))

@@ -328,12 +328,20 @@ struct SettingsView: View {
                 Text(model.store.configState.rawValue)
                     .foregroundStyle(model.store.configState == .clean ? Color.primary : Color.secondary)
             }
-            Button("Apply configuration & reconnect") {
+            Button {
                 confirmApply = true
+            } label: {
+                HStack {
+                    Text(model.store.applying ? "Applying…" : "Apply & reconnect")
+                    Spacer()
+                    if model.store.applying { ProgressView() }
+                }
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
             }
-            .disabled(model.store.generating || (!model.store.canConnect && !model.store.canGenerate))
-            .sakamotoGlassButton(prominent: true)
-            .disabled(model.store.configState == .clean)
+            .buttonStyle(.plain)
+            .foregroundStyle(SakamotoPalette.controlAccent)
+            .disabled(model.store.applying || model.store.generating || (!model.store.canConnect && !model.store.canGenerate) || model.store.configState == .clean)
         }
     }
 

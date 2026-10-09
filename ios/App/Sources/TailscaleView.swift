@@ -122,6 +122,16 @@ struct TailscaleView: View {
                 set: { value in if value { setEnabled(true) } else { confirmDisable = true } }
             ))
             if enabled {
+                Toggle("Force DERP relay", isOn: Binding(
+                    get: { store.selectedProfile?.forceTailscaleDERP == true },
+                    set: { enabled in
+                        do { try store.setForceTailscaleDERP(enabled) }
+                        catch { provisionNotice = Notice(kind: .error, text: error.localizedDescription) }
+                    }
+                ))
+                .disabled(store.applying || store.generating)
+                Text("Use relays instead of direct peer connections. Apply & connect to switch; relay paths may be slower.")
+                    .font(.footnote).foregroundStyle(.secondary)
                 DisclosureGroup("Endpoint options") {
                     TextField("Hostname (optional)", text: $hostnameDraft)
                         .autocorrectionDisabled()

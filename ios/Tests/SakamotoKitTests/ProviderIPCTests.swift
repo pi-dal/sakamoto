@@ -97,6 +97,15 @@ final class TunnelStartOptionsTests: XCTestCase {
         XCTAssertEqual(TunnelStartOptions(startTunnelOptions: dict), options)
     }
 
+    func testDERPFlagRoundTripsAndOlderProfilesDefaultToDirectEnabled() throws {
+        let options = TunnelStartOptions(configContent: config, forceTailscaleDERP: true)
+        XCTAssertEqual(TunnelStartOptions(providerConfiguration: options.providerConfiguration), options)
+        XCTAssertEqual(TunnelStartOptions(startTunnelOptions: options.startTunnelOptions), options)
+        XCTAssertEqual(try JSONDecoder().decode(TunnelStartOptions.self, from: JSONEncoder().encode(options)), options)
+        let older = try JSONDecoder().decode(TunnelStartOptions.self, from: Data(#"{"configContent":"{}"}"#.utf8))
+        XCTAssertNil(older.forceTailscaleDERP)
+    }
+
     func testStartTunnelOptionsWithoutConfigContentIsNil() {
         XCTAssertNil(TunnelStartOptions(startTunnelOptions: ["locale": "en" as NSString]))
     }

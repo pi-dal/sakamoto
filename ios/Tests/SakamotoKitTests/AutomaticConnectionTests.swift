@@ -11,6 +11,14 @@ final class AutomaticConnectionTests: XCTestCase {
         }
     }
 
+    func testTriggerBudgetsAllowDuplicatesButRejectLargeLists() throws {
+        let atLimit = (0..<AutomaticConnectionSettings.maxDomains).map { "d\($0).example" }.joined(separator: "\n")
+        XCTAssertEqual(try AutomaticConnectionSettings.normalizeDomains(atLimit).count, AutomaticConnectionSettings.maxDomains)
+        XCTAssertEqual(try AutomaticConnectionSettings.normalizeDomains(atLimit + "\nd0.example").count, AutomaticConnectionSettings.maxDomains)
+        XCTAssertThrowsError(try AutomaticConnectionSettings.normalizeDomains(atLimit + "\noverflow.example"))
+        XCTAssertThrowsError(try AutomaticConnectionSettings.normalizeDomains(String(repeating: "a", count: AutomaticConnectionSettings.maxInputBytes + 1)))
+    }
+
     func testInvalidSettingsCannotEnableAnEmptyDomainRule() {
         XCTAssertThrowsError(try AutomaticConnectionSettings(mode: .domains).validated())
         XCTAssertThrowsError(try AutomaticConnectionSettings(mode: .domains, domains: ["example.com"], probeURL: "https://user:secret@example.org").validated())

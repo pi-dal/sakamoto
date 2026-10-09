@@ -4,7 +4,9 @@ import SakamotoKit
 
 /// Extensions operate only on this app's already-authorized provider profile.
 /// They never create a profile, read private app config, or persist credentials.
+@MainActor
 public enum SystemTunnelControl {
+    private static var actionInFlight = false
     public static let providerIdentifier = "com.pidal.sakamoto.PacketTunnel"
 
     public static func status() async throws -> ServiceState {
@@ -14,8 +16,16 @@ public enum SystemTunnelControl {
 
     @discardableResult
     public static func perform(_ action: SystemTunnelAction) async throws -> ServiceState {
+        guard !actionInFlight else { throw ControlError.busy }
+        actionInFlight = true
+        defer { actionInFlight = false }
         guard let manager = try await configuredManager() else { throw ControlError.needsSetup }
-        let current = NETunnelController.serviceState(for: manager.connection.status)
+        var current = NETunnelController.serviceState(for: manager.connection.status)
+        // Disconnect can cancel a connection that is still starting.
+        if current == .stopping || (current == .starting && !isDisconnect(action)) {
+            current = try await SystemTunnelTransition.wait(state: { NETunnelController.serviceState(for: manager.connection.status) },
+                                                           accepts: { $0 != .starting && $0 != .stopping })
+        }
         // Turning an already-stopped VPN off must also disarm on-demand.
         if case .disconnect = action, manager.isOnDemandEnabled {
             manager.isOnDemandEnabled = false
@@ -38,7 +48,7 @@ public enum SystemTunnelControl {
                 try await manager.loadFromPreferences()
             }
             try manager.connection.startVPNTunnel()
-            return .starting
+            return try await SystemTunnelTransition.wait(state: { NETunnelController.serviceState(for: manager.connection.status) }, accepts: { $0 == .running })
         case .stop:
             // A manual stop must survive the next network request.
             if manager.isOnDemandEnabled {
@@ -47,7 +57,7 @@ public enum SystemTunnelControl {
                 try await manager.loadFromPreferences()
             }
             manager.connection.stopVPNTunnel()
-            return .stopping
+            return try await SystemTunnelTransition.wait(state: { NETunnelController.serviceState(for: manager.connection.status) }, accepts: { $0 == .stopped || $0 == .unavailable })
         }
     }
 
@@ -72,6 +82,11 @@ public enum SystemTunnelControl {
         try await manager.loadFromPreferences()
     }
 
+    private static func isDisconnect(_ action: SystemTunnelAction) -> Bool {
+        if case .disconnect = action { return true }
+        return false
+    }
+
     private static func configuredManager() async throws -> NETunnelProviderManager? {
         let managers: [NETunnelProviderManager] = try await withCheckedThrowingContinuation { continuation in
             NETunnelProviderManager.loadAllFromPreferences { managers, error in
@@ -79,18 +94,21 @@ public enum SystemTunnelControl {
                 else { continuation.resume(returning: managers ?? []) }
             }
         }
-        return managers.first {
+        guard let manager = managers.first(where: {
             ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == providerIdentifier
-        }
+        }) else { return nil }
+        try await manager.loadFromPreferences()
+        return manager
     }
 
     public enum ControlError: LocalizedError {
-        case needsSetup, needsApply, busy
+        case needsSetup, needsApply, busy, timedOut
         public var errorDescription: String? {
             switch self {
             case .needsSetup: return "Open sakamoto and connect once to set up and authorize the VPN."
             case .needsApply: return "Open sakamoto and apply the selected configuration before connecting from a widget or shortcut."
             case .busy: return "The VPN is starting or stopping. Try again after it finishes."
+            case .timedOut: return "The VPN has not finished changing state. Open sakamoto to check its status, or retry the control."
             }
         }
     }

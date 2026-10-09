@@ -40,7 +40,13 @@ struct AutomaticConnectionView: View {
                         Text(URL(fileURLWithPath: store.sourceBundle.mainConf).lastPathComponent)
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    TextField("example.com\nhttps://example.org", text: $domains, axis: .vertical)
+                    TextField("example.com\nhttps://example.org", text: Binding(
+                        get: { domains },
+                        set: { next in
+                            if next.utf8.count <= AutomaticConnectionSettings.maxInputBytes { domains = next }
+                            else { notice = AutomaticConnectionSettings.ValidationError.inputTooLarge.localizedDescription }
+                        }
+                    ), axis: .vertical)
                         .lineLimit(3...8)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
@@ -50,7 +56,7 @@ struct AutomaticConnectionView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                 } header: { Text("Domains or URLs") } footer: {
-                    Text("URLs match by host and include subdomains; paths are ignored. iOS connects when DNS resolution fails, or when the optional check URL does not return HTTP 200. A successful direct connection may not trigger the VPN. These conditions start the VPN; proxy routing still follows your configuration.")
+                    Text("Choose up to \(AutomaticConnectionSettings.maxDomains) trigger domains. iOS checks DNS or the optional URL before connecting. Complete proxy routing rules still apply after connection.")
                 }
                 Section {
                     Button("Add these domains to proxy rules") { addProxyRules() }
@@ -90,7 +96,9 @@ struct AutomaticConnectionView: View {
         .task {
             do {
                 let settings = try await SystemTunnelControl.automaticConnectionSettings()
-                mode = settings.mode; domains = settings.domains.joined(separator: "\n"); probeURL = settings.probeURL
+                mode = settings.mode
+                let safe = try settings.validated()
+                domains = safe.domains.joined(separator: "\n"); probeURL = safe.probeURL
             } catch { notice = error.localizedDescription }
         }
     }
@@ -106,8 +114,9 @@ struct AutomaticConnectionView: View {
             let imported = try await Task.detached(priority: .userInitiated) {
                 try OnDemandDomainImport.read(bundle: bundle, profile: profile)
             }.value
-            let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
-            guard try encoder.encode(store.sourceBundle) == encoder.encode(bundle), store.selectedProfile == profile, domains == draftBefore else {
+            let currentBundle = store.sourceBundle
+            guard currentBundle.mainConf == bundle.mainConf, currentBundle.files == bundle.files,
+                  store.selectedProfile == profile, domains == draftBefore else {
                 notice = "Configuration or domains changed. Retry importing its proxy domains."
                 return
             }
@@ -116,7 +125,7 @@ struct AutomaticConnectionView: View {
                 return
             }
             let current = try AutomaticConnectionSettings.normalizeDomains(domains)
-            domains = Array(Set(current + imported.domains)).sorted().joined(separator: "\n")
+            domains = try AutomaticConnectionSettings.normalizeDomains((current + imported.domains).joined(separator: "\n")).sorted().joined(separator: "\n")
             notice = (["Imported \(imported.domains.count) proxy domains. Review and save automatic connection."] + imported.notes).joined(separator: " ")
         } catch { notice = error.localizedDescription }
     }

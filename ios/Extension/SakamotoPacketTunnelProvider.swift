@@ -269,7 +269,7 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
         let previous = tunnelStartOptions
         await stopExperiments()
         do {
-            try await startService(content: content)
+            try await startService(content: content, forceDERP: options.forceTailscaleDERP == true)
             try startExperiments(options: options, settings: settings, content: content, root: root)
             tunnelStartOptions = options
         } catch {
@@ -280,7 +280,7 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
                 do {
                     await stopExperiments()
                     let (oldContent, oldSettings) = try ProviderExperimentRunner.prepared(previous, root: root)
-                    try await startService(content: oldContent)
+                    try await startService(content: oldContent, forceDERP: previous.forceTailscaleDERP == true)
                     try startExperiments(options: previous, settings: oldSettings, content: oldContent, root: root)
                 } catch {
                     TunnelDiagnostics.record(stage: "VPN reload rollback", error: error)
@@ -295,12 +295,12 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
         guard let id = options.profileID, let settings else { return }
         let runner = try ProviderExperimentRunner(profileID: id, settings: settings, content: content, root: root) { [weak self] candidate in
             guard let self else { throw ProviderStartupError("Provider stopped") }
-            try await self.startService(content: candidate)
+            try await self.startService(content: candidate, forceDERP: options.forceTailscaleDERP == true)
         }
         experimentRunner = runner; runner.start()
     }
 
-    @MainActor private func startService(content: String) async throws {
+    @MainActor private func startService(content: String, forceDERP: Bool) async throws {
         guard let commandServer else {
             throw ProviderStartupError("(sakamoto) command server not started")
         }
@@ -308,6 +308,12 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
         // async network-settings callback runs. Never hold the main actor
         // across that native call (or starve lifecycle/IPC callbacks).
         try await Task.detached(priority: .userInitiated) {
+            if MobilegenTailscaleForceDERPEnabled() != forceDERP {
+                // Rebuild peer sockets only after closing the previous service.
+                // An atomic policy alone cannot close an already-direct socket.
+                try commandServer.closeService()
+                MobilegenSetTailscaleForceDERP(forceDERP)
+            }
             try commandServer.startOrReloadService(content, options: LibboxOverrideOptions())
         }.value
     }
