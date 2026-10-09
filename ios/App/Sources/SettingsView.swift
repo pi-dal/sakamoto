@@ -169,6 +169,7 @@ struct SettingsView: View {
         List {
             if !sourcesOnly {
             Section("Connections") {
+                NavigationLink("Automatic connection") { AutomaticConnectionView(store: model.store) }
                 NavigationLink("Tunnel settings") {
                     List { runtimeSection; editableSection; applySection }
                         .listStyle(.insetGrouped)

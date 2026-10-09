@@ -25,11 +25,11 @@ open class VpnWidgetProvider : AppWidgetProvider() {
             providers.forEach { provider -> update(context, manager, manager.getAppWidgetIds(ComponentName(context, provider))) }
         }
 
-        fun layoutFor(provider: String, minWidth: Int, minHeight: Int): Int = when {
+        fun layoutFor(provider: String, minWidth: Int, minHeight: Int, fontScale: Float = 1f): Int = when {
             provider.endsWith("VpnToggleWidgetProvider") -> R.layout.widget_vpn_toggle
             provider.endsWith("VpnCompactWidgetProvider") -> if (minWidth in 1..119) R.layout.widget_vpn_toggle else R.layout.widget_vpn_compact
             minWidth in 1..119 -> R.layout.widget_vpn_toggle
-            minHeight in 1..109 || minWidth in 1..219 -> R.layout.widget_vpn_compact
+            minHeight > 0 && minHeight < (132 * fontScale.coerceAtLeast(1f)).toInt() || minWidth in 1..219 -> R.layout.widget_vpn_compact
             else -> R.layout.widget_vpn
         }
 
@@ -70,6 +70,9 @@ open class VpnWidgetProvider : AppWidgetProvider() {
                 else -> R.color.primary
             })
             val view = RemoteViews(context.packageName, layout)
+            if (layout == R.layout.widget_vpn) {
+                view.setInt(R.id.widget_mode, "setMaxWidth", ((minWidth * 0.25f) * context.resources.displayMetrics.density).toInt())
+            }
             val openStatus = SystemStatusSurface.open(context, SystemStatusSurface.ACTION_STATUS)
             val toggle = SystemStatusSurface.toggle(context)
             view.setOnClickPendingIntent(R.id.widget_root, if (layout == R.layout.widget_vpn) openStatus else toggle)
@@ -85,7 +88,9 @@ open class VpnWidgetProvider : AppWidgetProvider() {
                 // combine portrait width with landscape's minimum height.
                 // Visibility depends on size only. Switching the VPN must
                 // never collapse the node slots and move the header.
-                val showNode = minHeight >= 96 && minWidth >= 176
+                val fontScale = context.resources.configuration.fontScale.coerceAtLeast(1f)
+                val detailHeight = (48 + 36 * fontScale).toInt()
+                val showNode = minHeight >= detailHeight && minWidth >= 176
                 view.setViewVisibility(R.id.widget_detail, if (showNode) View.VISIBLE else View.GONE)
                 view.setViewVisibility(R.id.widget_node_info, if (showNode) View.VISIBLE else View.GONE)
                 val density = context.resources.displayMetrics.density
@@ -148,15 +153,15 @@ open class VpnWidgetProvider : AppWidgetProvider() {
                 android.util.Log.d("SakamotoWidgetSize", "id=$id min=${minWidth}x$minHeight max=${maxWidth}x$maxHeight sizes=$sizes")
                 if (android.os.Build.VERSION.SDK_INT >= 31 && sizes.isNotEmpty()) {
                     val variants = sizes.distinct().take(16).associateWith { size ->
-                        val layout = layoutFor(info.provider.className, size.width.toInt(), size.height.toInt())
+                        val layout = layoutFor(info.provider.className, size.width.toInt(), size.height.toInt(), context.resources.configuration.fontScale)
                         views(context, layout, size.height.toInt(), size.width.toInt())
                     }
                     manager.updateAppWidget(id, RemoteViews(variants))
                 } else {
                     // Legacy min/max combine different orientations; portrait
                     // is minWidth×maxHeight, not minWidth×minHeight.
-                    val portrait = views(context, layoutFor(info.provider.className, minWidth, maxHeight), maxHeight, minWidth)
-                    val landscape = views(context, layoutFor(info.provider.className, maxWidth, minHeight), minHeight, maxWidth)
+                    val portrait = views(context, layoutFor(info.provider.className, minWidth, maxHeight, context.resources.configuration.fontScale), maxHeight, minWidth)
+                    val landscape = views(context, layoutFor(info.provider.className, maxWidth, minHeight, context.resources.configuration.fontScale), minHeight, maxWidth)
                     manager.updateAppWidget(id, RemoteViews(landscape, portrait))
                 }
             }

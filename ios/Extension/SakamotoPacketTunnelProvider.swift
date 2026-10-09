@@ -2,6 +2,7 @@ import Foundation
 import Libbox
 import NetworkExtension
 import SakamotoKit
+import WidgetKit
 
 // Sakamoto PacketTunnelProvider — the iOS tunnel-side integration point.
 //
@@ -80,6 +81,10 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
     // MARK: Lifecycle (mirrors sing-box-for-apple ExtensionProvider)
 
     override open func startTunnel(options startOptions: [String: NSObject]?) async throws {
+        if startOptions?["configContent"] == nil,
+           UserDefaults(suiteName: SystemSurfaceStore.groupIdentifier)?.bool(forKey: "sakamoto.profile.requiresApply") == true {
+            throw ProviderStartupError("Open sakamoto and apply the selected configuration before automatic connection.")
+        }
         TunnelDiagnostics.clear()
         do { try await startTunnelService(options: startOptions) }
         catch {
@@ -145,6 +150,7 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
         do {
             try await applyProfile(options)
             SystemSurfaceStore.write(SystemSurfaceSnapshot(serviceState: .running, phase: .tunRunning))
+            reloadSystemSurfaces()
         } catch {
             SystemSurfaceStore.write(SystemSurfaceSnapshot(serviceState: .unavailable, phase: .unavailable))
             throw error
@@ -152,9 +158,19 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
         writeTunnelMessage("(packet-tunnel): Here I stand")
     }
 
+    private func reloadSystemSurfaces() {
+        WidgetCenter.shared.reloadTimelines(ofKind: "com.pidal.sakamoto.vpn-widget")
+        if #available(iOS 18.0, *) {
+            ControlCenter.shared.reloadControls(ofKind: "com.pidal.sakamoto.vpn-control")
+        }
+    }
+
     override open func stopTunnel(with reason: NEProviderStopReason) async {
         SystemSurfaceStore.write(SystemSurfaceSnapshot(serviceState: .stopping, phase: .stopping))
-        defer { SystemSurfaceStore.write(SystemSurfaceSnapshot(serviceState: .stopped, phase: .disconnected)) }
+        defer {
+            SystemSurfaceStore.write(SystemSurfaceSnapshot(serviceState: .stopped, phase: .disconnected))
+            reloadSystemSurfaces()
+        }
         await stopExperiments()
         writeTunnelMessage("(packet-tunnel) stopping, reason: \(reason.rawValue)")
         do {

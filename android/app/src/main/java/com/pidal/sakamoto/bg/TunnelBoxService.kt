@@ -74,6 +74,7 @@ class TunnelBoxService(
 
     private var commandServer: CommandServer? = null
     @Volatile private var reloading = false
+    @Volatile private var starting = false
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -85,8 +86,9 @@ class TunnelBoxService(
     private var receiverRegistered = false
 
     /** Called from SakamotoVpnService.onStartCommand. */
-    fun onStartCommand(): Int {
-        if (commandServer != null) return Service.START_NOT_STICKY
+    @Synchronized fun onStartCommand(): Int {
+        if (commandServer != null || starting) return Service.START_NOT_STICKY
+        starting = true
         MobilecoreRuntime.setServiceState("Starting")
         showForegroundNotification(starting = true)
         if (!receiverRegistered) {
@@ -108,7 +110,7 @@ class TunnelBoxService(
                 startServer(server)
             } catch (e: Exception) {
                 stopAndAlert("start command server: ${e.message}")
-            }
+            } finally { starting = false }
         }.start()
         return Service.START_NOT_STICKY
     }
@@ -116,11 +118,12 @@ class TunnelBoxService(
     private fun startServer(server: CommandServer) {
         try {
             com.pidal.sakamoto.runtime.ExperimentRuntime.restorePending(service)
-            val staged = ConfigRepository.readGeneratedContent(service)
-            if (staged == null) {
+            val base = ConfigRepository.readGeneratedContent(service)
+            if (base == null) {
                 stopAndAlert("empty configuration — import a config in the Config tab first")
                 return
             }
+            val staged = com.pidal.sakamoto.runtime.AutomaticConnectionSettings.load(service).applying(base)
             // Tailscale auth key injection at start time (mirrors the iOS
             // TailscaleConfigInjection): the stored key merges into the
             // tailscale endpoint config here, in the tunnel process's start
@@ -176,11 +179,12 @@ class TunnelBoxService(
     override fun serviceReload() {
         val server = commandServer ?: return
         try {
-            val staged = ConfigRepository.readGeneratedContent(service)
-            if (staged == null) {
+            val base = ConfigRepository.readGeneratedContent(service)
+            if (base == null) {
                 stopAndAlert("empty configuration on reload")
                 return
             }
+            val staged = com.pidal.sakamoto.runtime.AutomaticConnectionSettings.load(service).applying(base)
             val content = try {
                 val storedKey = TailscaleAuthKeyStore(service).readAuthKey()
                 if (storedKey.isNullOrEmpty()) staged

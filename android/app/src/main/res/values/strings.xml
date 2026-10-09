@@ -435,4 +435,20 @@
     <string name="about_unofficial">This is an unofficial client built for personal use. State vocabulary, phase folding and routing semantics are shared with the sakamoto host via pkg/mobilecore.</string>
     <string name="about_portrait">About portrait: photo by Joi Ito; Commons crop by Solid State Survivor. Adapted into grayscale terminal pixels. CC BY 2.0. The app icon uses artwork provided by the project owner. Independent tribute; no endorsement by Ryuichi Sakamoto, his family, estate, or representatives.\nSource: https://commons.wikimedia.org/wiki/File:RyuichiSakamoto2007.jpg\nLicense: https://creativecommons.org/licenses/by/2.0/</string>
     <string name="about_state_semantics">Home/Config/Data/Settings semantics mirror the sakamoto macOS TUI: phases fold in Go, this app renders.</string>
+    <string name="automatic_connection">Automatic connection</string>
+    <string name="automatic_startup">Startup</string>
+    <string name="start_on_boot">Connect after restart</string>
+    <string name="always_on_vpn">Always-on VPN settings</string>
+    <string name="automatic_startup_note">Connect once in Home to authorize the VPN. Restart connection uses the saved configuration after the first unlock. For continuous reconnection, enable Always-on VPN for sakamoto in Android VPN settings.</string>
+    <string name="automatic_proxy_rules">Proxy conditions</string>
+    <string name="automatic_proxy_outbound">Proxy outbound</string>
+    <string name="automatic_choose_proxy">Choose a proxy</string>
+    <string name="automatic_generate_first">Generate a configuration first.</string>
+    <string name="automatic_domains">Domains or URLs</string>
+    <string name="automatic_domain_count">%1$d domains</string>
+    <string name="automatic_apps">Apps to proxy</string>
+    <string name="automatic_app_count">%1$d apps</string>
+    <string name="automatic_only_apps">Only selected apps use VPN</string>
+    <string name="automatic_routing_note">Domain and app rules select the proxy while the VPN is running. URLs match hosts and subdomains, not paths. Android cannot start a stopped VPN from another app’s domain request. Enable Always-on VPN to keep these conditions active. Other traffic follows your existing rules; with Only selected apps enabled, other apps bypass this VPN.</string>
+    <string name="automatic_apply_note">Apply changes in Config or reconnect after changing proxy conditions. Conditions remain on this device across source regeneration.</string>
 </resources>

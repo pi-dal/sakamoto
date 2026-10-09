@@ -21,7 +21,7 @@ tunnel process; this is not a CLI probe and not an external-daemon count).
 | Unsigned simulator build | `xcodebuild … CODE_SIGNING_ALLOWED=NO build` (verified) |
 | Home Screen widgets (small/medium/large) | `Widgets/SakamotoWidgets.swift`; interactive on iOS 17+, opens the app to execute VPN actions |
 | Shortcuts / Siri | Connect, Disconnect, Toggle and Get VPN status in `Shared/SystemSurfaceIntents.swift` |
-| Control Center control | Native VPN toggle on iOS 18+, shared saved-profile operation |
+| Control Center control | Native VPN toggle on iOS 18+, directly operates the saved profile without opening the app |
 | App Store Connect signing | distribution export verified with Team `6Y2YB464VU`, NetworkExtension, shared App Group and production iCloud entitlements; device VPN behavior still needs runtime verification |
 
 ## SimAgentationPlus simulator debugging
@@ -51,9 +51,10 @@ content can include private UI data; keep it local and do not publish it.
 
 Connect once in the app to create and authorize its VPN profile. System actions
 load only the sakamoto provider's saved profile, read current system state and
-request start/stop. They open the app to use its VPN capability; background
-operation is not claimed. Starting and Stopping are requests, not connection
-confirmation. On iOS 16 the widget opens Home; interactive widget buttons require
+request start/stop without opening the app. Both the app and widget targets
+carry the NetworkExtension entitlement; signed-device operation still needs
+verification. Starting and Stopping are requests, not connection confirmation.
+Manual disconnect pauses on-demand connection to prevent immediate restart. On iOS 16 the widget opens Home; interactive widget buttons require
 iOS 17, and the Control Center toggle requires iOS 18.
 
 The app and provider write a display-only App Group snapshot. Widgets show the
@@ -67,6 +68,40 @@ WidgetKit extension is registered in Simulator, but desktop rendering, Shortcuts
 execution and VPN actions need runtime verification with a working WidgetKit host
 and a signed NetworkExtension profile. Compile success alone does not validate
 those operations.
+
+## Automatic connection
+
+Settings → Automatic connection installs system VPN On Demand rules for any
+network, Wi-Fi, cellular, or selected destination domains. Connect and apply the
+configuration once before enabling. The saved system profile persists across
+restarts; startup depends on network availability and access to protected data.
+This is not an iOS boot receiver or an MDM Always On VPN.
+
+Domain conditions accept domains or HTTP/HTTPS URLs, normalize them to hosts
+and match subdomains. iOS connects if DNS resolution fails or an optional check
+URL does not return HTTP 200; it does not promise to start for every request to
+a directly reachable host. The condition starts the VPN, while the generated
+configuration controls proxy routing. The same screen can stage PROXY policy
+rules; apply them in Config before enabling on-demand.
+
+Manual disconnect in Home, Shortcuts, the widget or Control Center disables
+on-demand until the user enables it again in Settings. Unapplied profile edits
+block automatic cold starts. Per-app VPN on iOS requires managed apps and device
+management. Settings → Automatic connection → Connect when an app opens
+provides a native Shortcuts link and setup instructions. The same entry is in
+Widgets & Shortcuts. App launch refreshes the four preconfigured App Shortcuts;
+no download is required.
+
+In Shortcuts, create Automation → App → choose apps → Is Opened → Run
+Immediately → New Blank Automation → sakamoto → Connect VPN. On older iOS,
+disable Ask Before Running. Optionally create a separate Is Closed automation
+with Disconnect VPN. Use explicit Connect/Disconnect rather than Toggle so
+reopening an app cannot reverse the VPN state. Is Closed also fires when
+switching away; it stops the device VPN and pauses on-demand, potentially
+interrupting other apps or background transfers. These automations switch the
+whole VPN and do not provide per-app traffic isolation. The user must choose
+apps and save automations in Shortcuts; there is no public API to create those
+personal triggers inside sakamoto.
 
 ## App icon
 

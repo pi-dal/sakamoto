@@ -32,6 +32,7 @@ struct SakamotoApp: App {
 
     init() {
         try? AppServiceSetup.apply()
+        SakamotoShortcuts.updateAppShortcutParameters()
         let tunnel = NETunnelController(
             providerBundleIdentifier: Bundle.main.object(
                 forInfoDictionaryKey: "SakamotoProviderBundleIdentifier"

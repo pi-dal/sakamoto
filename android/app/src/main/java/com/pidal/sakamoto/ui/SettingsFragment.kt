@@ -13,6 +13,9 @@ class SettingsFragment : Fragment() {
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, state: Bundle?): View {
         val page = GroupedPage(requireContext())
         val connection = page.section(getString(R.string.settings_section_connections))
+        page.setting(connection, getString(R.string.automatic_connection), icon = R.drawable.ic_service) {
+            (requireActivity() as MainActivity).openChild(AutomaticConnectionFragment(), getString(R.string.automatic_connection))
+        }
         page.setting(connection, getString(R.string.tunnel_settings), icon = R.drawable.ic_route) {
             (requireActivity() as MainActivity).openChild(TunnelSettingsFragment(), getString(R.string.tunnel_settings))
         }

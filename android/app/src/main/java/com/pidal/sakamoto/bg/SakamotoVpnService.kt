@@ -9,7 +9,6 @@ import android.os.IBinder
 import android.os.Process
 import android.provider.Settings as AndroidSettings
 import android.system.OsConstants
-import android.util.Log
 import com.pidal.sakamoto.SakamotoApplication
 import io.nekohasekai.libbox.BridgeOptions
 import io.nekohasekai.libbox.BridgeSession
@@ -175,21 +174,19 @@ class SakamotoVpnService : VpnService(), PlatformInterface {
                 builder.addRoute(route.address(), route.prefix())
             }
 
-            val includePackage = options.includePackage
-            while (includePackage.hasNext()) {
-                try {
+            val automatic = com.pidal.sakamoto.runtime.AutomaticConnectionSettings.load(this)
+            if (automatic.onlySelectedApps) {
+                check(automatic.packages.isNotEmpty()) { "Select apps before restricting VPN access" }
+                // Never degrade an allowlist to all apps if a package disappeared.
+                automatic.packages.forEach { builder.addAllowedApplication(it) }
+            } else {
+                val includePackage = options.includePackage
+                while (includePackage.hasNext()) {
                     builder.addAllowedApplication(includePackage.next())
-                } catch (e: Exception) {
-                    Log.w("SakamotoVpnService", "addAllowedApplication failed", e)
                 }
-            }
-
-            val excludePackage = options.excludePackage
-            while (excludePackage.hasNext()) {
-                try {
+                val excludePackage = options.excludePackage
+                while (excludePackage.hasNext()) {
                     builder.addDisallowedApplication(excludePackage.next())
-                } catch (e: Exception) {
-                    Log.w("SakamotoVpnService", "addDisallowedApplication failed", e)
                 }
             }
         }

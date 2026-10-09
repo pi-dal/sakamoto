@@ -59,7 +59,7 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
     // MARK: TunnelControlling
 
     public func connect(options: TunnelStartOptions) async throws {
-        try await loadProviderPreferences()
+        try await loadProviderPreferences(refresh: true)
         manager.protocolConfiguration = Self.makeProviderProtocol(
             bundleIdentifier: providerBundleIdentifier,
             options: options
@@ -72,7 +72,12 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
     }
 
     public func disconnect() async throws {
-        try await loadProviderPreferences()
+        try await loadProviderPreferences(refresh: true)
+        if manager.isOnDemandEnabled {
+            manager.isOnDemandEnabled = false
+            try await savePreferences()
+            try await reloadPreferences()
+        }
         manager.connection.stopVPNTunnel()
     }
 
@@ -103,7 +108,7 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
     }
 
     public func reload(options: TunnelStartOptions) async throws {
-        try await loadProviderPreferences()
+        try await loadProviderPreferences(refresh: true)
         let previous = manager.protocolConfiguration
         // Persist the same configuration for subsequent cold starts, but
         // restore the old preferences if the live provider rejects it.
@@ -210,8 +215,13 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
         return TunnelObservation(serviceState: state, conflict: false, detail: failure.map { "\($0.stage): \($0.message)" })
     }
 
-    private func loadProviderPreferences() async throws {
-        guard !preferencesLoaded else { return }
+    private func loadProviderPreferences(refresh: Bool = false) async throws {
+        if preferencesLoaded {
+            // Refresh mutations after Settings/Control Center changed preferences.
+            // Status polling reads the existing session without a disk reload.
+            if refresh { try await reloadPreferences() }
+            return
+        }
         if manager is NETunnelProviderManager {
             let managers: [NETunnelProviderManager] = try await withCheckedThrowingContinuation { continuation in
                 NETunnelProviderManager.loadAllFromPreferences { managers, error in

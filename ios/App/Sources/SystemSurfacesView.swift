@@ -1,4 +1,5 @@
 import SwiftUI
+import AppIntents
 
 struct SystemSurfacesView: View {
     var body: some View {
@@ -9,10 +10,11 @@ struct SystemSurfacesView: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("Shortcuts") {
-                Text("Connect VPN")
-                Text("Disconnect VPN")
-                Text("Toggle VPN")
-                Text("Get VPN status")
+                ShortcutsLink { SakamotoShortcuts.updateAppShortcutParameters() }
+                    .shortcutsLinkStyle(.automaticOutline)
+                NavigationLink("Connect when an app opens") { AppAutomationView() }
+                Text("Connect VPN · Disconnect VPN · Toggle VPN · Get VPN status")
+                    .font(.footnote).foregroundStyle(.secondary)
             }
             Section("Control Center") {
                 Text("VPN connection")
@@ -20,7 +22,7 @@ struct SystemSurfacesView: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section {
-                Text("Connect once in sakamoto to configure and authorize the VPN. System actions open the app and use that saved profile. The system confirms whether the tunnel is running; network verification is a separate check.")
+                Text("Connect once in sakamoto to configure and authorize the VPN. Widgets on iOS 17 and later, Shortcuts and Control Center use the saved profile directly. Manually disconnecting also pauses on-demand connection. The system confirms whether the tunnel is running; network verification is a separate check.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }

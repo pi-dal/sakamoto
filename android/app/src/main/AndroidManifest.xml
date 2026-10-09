@@ -17,6 +17,13 @@
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <!-- API 34+ requires a declared foreground service type; the VPN service
          uses systemExempted like upstream's VPNService. -->
@@ -44,6 +51,12 @@
             </intent-filter>
         </activity>
 
+        <receiver android:name=".bg.BootReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
         <receiver android:name=".widget.WidgetToggleReceiver" android:exported="false" />
         <receiver android:name=".widget.VpnToggleWidgetProvider" android:exported="true" android:label="@string/widget_toggle_label">
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
@@ -67,6 +80,7 @@
             <intent-filter>
                 <action android:name="android.net.VpnService" />
             </intent-filter>
+            <meta-data android:name="android.net.VpnService.SUPPORTS_ALWAYS_ON" android:value="true" />
         </service>
 
     </application>

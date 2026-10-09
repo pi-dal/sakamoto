@@ -6,8 +6,8 @@ JNI runtime. Native frameworks and private configuration are never committed.
 
 ## Install the official release
 
-Download `sakamoto-android-v0.1.0.apk` and `SHA256SUMS` from the
-[Android v0.1.0 release](https://github.com/pi-dal/sakamoto/releases/tag/android-v0.1.0).
+Download `sakamoto-android-v0.1.2.apk` and `SHA256SUMS` from the
+[Android v0.1.2 release](https://github.com/pi-dal/sakamoto/releases/tag/android-v0.1.2).
 Verify the checksum before installation. The APK is a non-debuggable release
 signed with the project's dedicated Android certificate:
 
@@ -15,7 +15,7 @@ signed with the project's dedicated Android certificate:
 SHA-256: a6fb9d4b3070023b52c0efcf254b2cad251fa3fa79cab6eeec2c378f6daa66bc
 ```
 
-The package is `com.pidal.sakamoto`, versionName `0.1.0`, versionCode `2`.
+The package is `com.pidal.sakamoto`, versionName `0.1.2`, versionCode `4`.
 Future official versions retain the signing certificate for upgrades.
 A development APK uses a different debug certificate and cannot be replaced
 in place by the official APK. Preserve/export configuration and credentials
@@ -64,6 +64,27 @@ through system dialogs. Denying notifications does not prevent the VPN, but
 removes status/control visibility from the notification shade. Diagnostics
 separate authorization, system TUN, physical internet, command channel and a
 real DNS/TLS/HTTPS 204 check. Node latency is not an end-to-end VPN health claim.
+
+## Automatic connection
+
+Settings → Automatic connection provides Connect after restart, a link to the
+Android Always-on VPN settings, proxy outbound selection, domain/URL rules,
+and an installed-app picker. Boot startup runs after the first unlock, requires
+prior VPN consent and a generated configuration, and also resumes after an app
+update. Android owns continuous reconnection through its Always-on setting.
+
+Selected domains and apps route through the chosen proxy while the VPN runs.
+URLs match hosts and subdomains, not paths. Android cannot inspect another
+app's destination and start a stopped VPN from that request; enable Always-on
+for continuous conditional routing. Only selected apps use VPN optionally
+restricts the system TUN allowlist; other apps bypass this VPN. With that option
+off, existing TUN include/exclude settings and routing rules are preserved.
+
+Conditions remain local across source regeneration and are applied to a runtime
+copy on start/reload. Save validates the proxy target and Libbox configuration;
+missing selected packages fail rather than silently expanding the VPN to all
+apps. Apply in Config or reconnect after changing conditions. Real-device boot,
+Always-on and package routing require runtime verification.
 
 ## Widgets and notification
 

@@ -16,6 +16,12 @@ public enum SystemTunnelControl {
     public static func perform(_ action: SystemTunnelAction) async throws -> ServiceState {
         guard let manager = try await configuredManager() else { throw ControlError.needsSetup }
         let current = NETunnelController.serviceState(for: manager.connection.status)
+        // Turning an already-stopped VPN off must also disarm on-demand.
+        if case .disconnect = action, manager.isOnDemandEnabled {
+            manager.isOnDemandEnabled = false
+            try await manager.saveToPreferences()
+            try await manager.loadFromPreferences()
+        }
         switch SystemTunnelPolicy.decision(for: action, state: current) {
         case .busy: throw ControlError.busy
         case .unchanged: return current
@@ -23,16 +29,47 @@ public enum SystemTunnelControl {
             guard UserDefaults(suiteName: SystemSurfaceStore.groupIdentifier)?.bool(forKey: "sakamoto.profile.requiresApply") != true else {
                 throw ControlError.needsApply
             }
-            guard manager.isEnabled,
-                  let protocolConfiguration = manager.protocolConfiguration as? NETunnelProviderProtocol,
+            guard let protocolConfiguration = manager.protocolConfiguration as? NETunnelProviderProtocol,
                   let options = TunnelStartOptions(providerConfiguration: protocolConfiguration.providerConfiguration ?? [:]),
                   !options.configContent.isEmpty else { throw ControlError.needsSetup }
+            if !manager.isEnabled {
+                manager.isEnabled = true
+                try await manager.saveToPreferences()
+                try await manager.loadFromPreferences()
+            }
             try manager.connection.startVPNTunnel()
             return .starting
         case .stop:
+            // A manual stop must survive the next network request.
+            if manager.isOnDemandEnabled {
+                manager.isOnDemandEnabled = false
+                try await manager.saveToPreferences()
+                try await manager.loadFromPreferences()
+            }
             manager.connection.stopVPNTunnel()
             return .stopping
         }
+    }
+
+    public static func automaticConnectionSettings() async throws -> AutomaticConnectionSettings {
+        guard let manager = try await configuredManager() else { return .init() }
+        return AutomaticConnectionPolicy.settings(from: manager)
+    }
+
+    public static func setAutomaticConnection(_ settings: AutomaticConnectionSettings) async throws {
+        guard let manager = try await configuredManager() else { throw ControlError.needsSetup }
+        if settings.mode != .off {
+            guard UserDefaults(suiteName: SystemSurfaceStore.groupIdentifier)?.bool(forKey: "sakamoto.profile.requiresApply") != true else {
+                throw ControlError.needsApply
+            }
+            guard let proto = manager.protocolConfiguration as? NETunnelProviderProtocol,
+                  let options = TunnelStartOptions(providerConfiguration: proto.providerConfiguration ?? [:]),
+                  !options.configContent.isEmpty else { throw ControlError.needsSetup }
+            manager.isEnabled = true
+        }
+        try AutomaticConnectionPolicy.apply(settings, to: manager)
+        try await manager.saveToPreferences()
+        try await manager.loadFromPreferences()
     }
 
     private static func configuredManager() async throws -> NETunnelProviderManager? {

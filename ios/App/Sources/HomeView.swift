@@ -44,38 +44,33 @@ struct HomeView: View {
                 .textCase(nil)
             }
 
-            Section {
-                HStack {
-                    Text("Connection check")
-                    Spacer()
-                    Text(model.probe.state)
-                        .foregroundStyle(probeColor)
-                }
-                if !model.probe.path.isEmpty {
-                    Text("Network reachable: \(model.probe.path)")
-                        .font(.footnote)
-                }
-                if !model.probe.error.isEmpty {
-                    Text(model.probe.error)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                Button("Check connection") {
-                    Task { await model.runProbe() }
-                }
-                .buttonStyle(.borderless)
-                .disabled(model.phase != .tunRunning && model.phase != .reachable && model.phase != .unverified)
-            } header: {
-                Text("Network")
-
-            }
-
             groupsSection
             Section {
                 DisclosureGroup("Connection details") {
                     LabeledRow("VPN status", model.phase.rawValue)
                     LabeledRow("Command channel", model.commandChannelActive ? "Connected" : "Unavailable")
                     LabeledRow("Service", model.serviceState.rawValue)
+                    Button {
+                        Task { await model.runProbe() }
+                    } label: {
+                        HStack {
+                            Text(model.probe.state == ProbeState.checking.rawValue ? "Checking connection…" : "Check connection")
+                            Spacer()
+                            if model.probe.state == ProbeState.checking.rawValue {
+                                ProgressView()
+                            } else if model.probe.state != ProbeState.idle.rawValue {
+                                Text(model.probe.state).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(!model.serviceState.running || model.probe.state == ProbeState.checking.rawValue)
+                    if !model.probe.path.isEmpty {
+                        Text("Network reachable: \(model.probe.path)").font(.footnote)
+                    }
+                    if !model.probe.error.isEmpty {
+                        Text(model.probe.error).font(.footnote).foregroundStyle(.secondary)
+                    }
                 }
             }
         }
@@ -132,23 +127,6 @@ struct HomeView: View {
         }
         .buttonStyle(.plain)
         .disabled(!model.commandChannelActive)
-    }
-
-    /// The command channel is a fact, not a guess: it starts with the
-    /// tunnel and says so while it is down (docs/tui.md: an unavailable
-    /// control action is surfaced, never a silent no-op).
-    @ViewBuilder
-    private var commandChannelSection: some View {
-        Section {
-            HStack {
-                Text("Command channel")
-                Spacer()
-                Text(model.commandChannelActive ? "Connected" : "Unavailable")
-                    .foregroundStyle(model.commandChannelActive ? Color.primary : Color.secondary)
-            }
-        } header: {
-            Text("Control plane")
-        }
     }
 
     @ViewBuilder
@@ -208,15 +186,6 @@ struct HomeView: View {
                     .font(.footnote).lineLimit(1).fixedSize(horizontal: true, vertical: false)
                     .sakamotoGlassButton().disabled(!model.commandChannelActive || model.testingAll || node.status == .testing)
             }
-        }
-    }
-
-    private var probeColor: Color {
-        switch model.probe.state {
-        case ProbeState.reachable.rawValue: return Color.primary
-        case ProbeState.checking.rawValue: return Color.secondary
-        case ProbeState.unverified.rawValue: return Color.secondary
-        default: return Color.secondary
         }
     }
 

@@ -3,12 +3,12 @@ import WidgetKit
 import SakamotoKit
 import SakamotoNE
 
-/// Operations run in the containing app so the VPN capability belongs to the
-/// same process as the main Connect button. No shared config or keys are needed.
+/// App and widget targets both carry the VPN entitlement. Actions operate on
+/// the already-authorized system profile without foregrounding the app.
 struct ConnectTunnelIntent: AppIntent {
     static var title: LocalizedStringResource = "Connect VPN"
-    static var description = IntentDescription("Connect the saved sakamoto VPN profile.")
-    static var openAppWhenRun = true
+    static var description = IntentDescription("Connect the saved sakamoto VPN without opening the app. Use with an App → Is Opened automation; an already-connected VPN stays connected.", categoryName: "VPN connection", searchKeywords: ["App automation", "Connect", "VPN"])
+    static var openAppWhenRun = false
     func perform() async throws -> some IntentResult {
         try await SystemSurfaceActions.perform(.connect)
         return .result()
@@ -17,7 +17,8 @@ struct ConnectTunnelIntent: AppIntent {
 
 struct DisconnectTunnelIntent: AppIntent {
     static var title: LocalizedStringResource = "Disconnect VPN"
-    static var openAppWhenRun = true
+    static var description = IntentDescription("Disconnect the device VPN and pause on-demand connection. Use with an optional App → Is Closed automation; switching away from the app also triggers it.", categoryName: "VPN connection", searchKeywords: ["App automation", "Disconnect", "VPN"])
+    static var openAppWhenRun = false
     func perform() async throws -> some IntentResult {
         try await SystemSurfaceActions.perform(.disconnect)
         return .result()
@@ -26,7 +27,8 @@ struct DisconnectTunnelIntent: AppIntent {
 
 struct ToggleTunnelIntent: AppIntent {
     static var title: LocalizedStringResource = "Toggle VPN"
-    static var openAppWhenRun = true
+    static var description = IntentDescription("Switch the saved VPN on or off. For App automations, use Connect VPN or Disconnect VPN to keep the requested state explicit.", categoryName: "VPN connection")
+    static var openAppWhenRun = false
     func perform() async throws -> some IntentResult {
         try await SystemSurfaceActions.perform(.toggle)
         return .result()
@@ -35,7 +37,7 @@ struct ToggleTunnelIntent: AppIntent {
 
 struct TunnelStatusIntent: AppIntent {
     static var title: LocalizedStringResource = "Get VPN status"
-    static var openAppWhenRun = true
+    static var openAppWhenRun = false
     func perform() async throws -> some IntentResult & ReturnsValue<String> & ProvidesDialog {
         let state = try await SystemTunnelControl.status()
         return .result(value: state.rawValue, dialog: "VPN: \(state.rawValue)")
@@ -45,7 +47,7 @@ struct TunnelStatusIntent: AppIntent {
 @available(iOS 18.0, *)
 struct SetTunnelEnabledIntent: SetValueIntent {
     static var title: LocalizedStringResource = "Set VPN connection"
-    static var openAppWhenRun = true
+    static var openAppWhenRun = false
     @Parameter(title: "Connected") var value: Bool
     func perform() async throws -> some IntentResult {
         try await SystemSurfaceActions.perform(value ? .connect : .disconnect)

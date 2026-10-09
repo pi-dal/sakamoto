@@ -219,7 +219,7 @@ class NativeBindingSmokeTest : Instrumentation() {
                     content.getDrawingRect(contentRect); root.offsetDescendantRectToMyCoords(content, contentRect)
                     check(kotlin.math.abs(contentRect.centerX() - root.width / 2) <= 2) { "Compact content is not horizontally centered" }
                     check(kotlin.math.abs(contentRect.centerY() - root.height / 2) <= 2) { "Compact content is not vertically centered" }
-                    val showNode = height >= 96 && width >= 176
+                    val showNode = height >= (48 + 36 * configuration.fontScale.coerceAtLeast(1f)).toInt() && width >= 176
                     check(root.findViewById<android.view.View>(R.id.widget_detail).visibility == if (showNode) android.view.View.VISIBLE else android.view.View.GONE)
                     check(root.findViewById<android.view.View>(R.id.widget_node_info).visibility == if (showNode) android.view.View.VISIBLE else android.view.View.GONE)
                     if (showNode) {
