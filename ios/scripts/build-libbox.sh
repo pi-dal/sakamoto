@@ -46,6 +46,7 @@ PY
 cd "${WORK}/sing-box"
 # The upstream iOS stubs disable every debug knob, including DERP-only binds.
 # Patch one checked anchor in a private dependency copy; never mutate GOMODCACHE.
+go mod download github.com/sagernet/tailscale
 TAILSCALE_SOURCE="$(go list -m -f '{{.Dir}}' github.com/sagernet/tailscale)"
 cp -R "${TAILSCALE_SOURCE}" "${WORK}/tailscale"
 chmod -R u+w "${WORK}/tailscale"

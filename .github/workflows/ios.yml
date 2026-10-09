@@ -80,7 +80,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ios/Frameworks
-          key: ios-frameworks-v4-combined-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.build }}-${{ hashFiles('mise.toml', 'go.mod', 'go.sum', 'pkg/**', 'internal/**', 'ios/scripts/build-*.sh', 'ios/scripts/flatten-gomobile-framework.sh') }}
+          key: ios-frameworks-v4-combined-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.build }}-${{ hashFiles('mise.toml', 'go.mod', 'go.sum', 'pkg/**', 'internal/**', 'ios/scripts/build-*.sh', 'ios/scripts/patch-tailscale-derp.py', 'ios/scripts/flatten-gomobile-framework.sh') }}
 
       - name: Build combined Libbox and Mobilecore framework
         if: steps.frameworks.outputs.cache-hit != 'true'
