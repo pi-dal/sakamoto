@@ -30,7 +30,12 @@ struct HomeView: View {
                 HStack {
                     Text("Tunnel")
                     Spacer()
-                    tunnelSwitch.sakamotoInspectTag("TunnelConnect")
+                    if model.hasLoadedStatus {
+                        tunnelSwitch.sakamotoInspectTag("TunnelConnect")
+                    } else {
+                        ProgressView().frame(width: 61, height: 44)
+                            .accessibilityLabel("Checking VPN status")
+                    }
                 }
                 .textCase(nil)
             }
@@ -102,7 +107,7 @@ struct HomeView: View {
         .frame(minHeight: 44)
         .accessibilityValue("\(tunnelIsOn ? "On" : "Off"), \(model.phase.rawValue)")
         .accessibilityHint(tunnelIsOn ? "Disconnect tunnel" : "Connect tunnel")
-        .disabled(model.busy || model.serviceState == .starting || model.serviceState == .stopping || (!tunnelIsOn && !model.store.canConnect))
+        .disabled(model.busy || model.serviceState == .stopping || (!tunnelIsOn && !model.store.canConnect))
     }
 
     private var modeButton: some View {

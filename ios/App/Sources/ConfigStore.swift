@@ -82,15 +82,9 @@ final class ConfigStore: ObservableObject {
                let data = try? Data(contentsOf: url),
                let manifest = try? JSONDecoder().decode(TunnelProfile.self, from: data) { profiles[index] = manifest }
         }
-        for index in profiles.indices where profiles[index].files.isEmpty {
-            guard UUID(uuidString: profiles[index].id) != nil,
-                  let root = try? AppPaths.sharedDirectory().appendingPathComponent(profiles[index].ruleRevisionID.map { "RuleSnapshots/\($0)/rules" } ?? "Profiles/\(profiles[index].id)/rules", isDirectory: true),
-                  let urls = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { continue }
-            for url in urls {
-                let name = "rules/" + url.lastPathComponent
-                if TunnelProfile.validFileName(name), let data = try? Data(contentsOf: url) { profiles[index].files[name] = data }
-            }
-        }
+        let initialID = profiles.first { $0.id == persistence.string(forKey: Self.selectedProfileKey) }?.id ?? profiles.first?.id
+        if let index = profiles.firstIndex(where: { $0.id == initialID }),
+           let loaded = try? loadRuleFiles(profiles[index]) { profiles[index] = loaded }
         self.selectedProfileID = persistence.string(forKey: Self.selectedProfileKey)
         if profiles.isEmpty && !content.isEmpty {
             let legacy = TunnelProfile(name: "Previous configuration", config: content)
@@ -138,6 +132,7 @@ final class ConfigStore: ObservableObject {
         var profile = profile
         profile.pendingApply = true
         profiles.append(profile)
+        releaseOtherRuleFiles(keeping: profile.id)
         profileError = nil
         selectedProfileID = profile.id
         content = profile.config
@@ -149,15 +144,38 @@ final class ConfigStore: ObservableObject {
 
     func selectProfile(_ id: String) throws {
         if let old = selectedProfileID, old != id { UserDefaults(suiteName: SystemSurfaceStore.groupIdentifier)?.set(true, forKey: "sakamoto.experiment.pause." + old) }
-        guard let profile = profiles.first(where: { $0.id == id }) else { return }
+        guard let index = profiles.firstIndex(where: { $0.id == id }) else { return }
+        let profile = try loadRuleFiles(profiles[index])
         if !profile.sourcesChanged && !profile.config.isEmpty { _ = try prepare(profile) }
         let sources = try decodeSources(profile)
         profileError = nil
         selectedProfileID = id; content = profile.config
-        if let index = profiles.firstIndex(where: { $0.id == id }) { profiles[index].pendingApply = true }
+        profiles[index] = profile
+        profiles[index].pendingApply = true
+        releaseOtherRuleFiles(keeping: id)
         adoptProfileSources(sources)
         persistence.set(content, forKey: Self.storageKey)
         persistProfiles(); transition(.modified)
+    }
+
+    private func releaseOtherRuleFiles(keeping id: String) {
+        for index in profiles.indices where profiles[index].id != id { profiles[index].files = [:] }
+    }
+
+    private func loadRuleFiles(_ profile: TunnelProfile) throws -> TunnelProfile {
+        guard profile.files.isEmpty else { return profile }
+        guard UUID(uuidString: profile.id) != nil,
+              profile.ruleRevisionID == nil || UUID(uuidString: profile.ruleRevisionID!) != nil else {
+            throw TunnelProfile.InvalidProfile("Invalid rule snapshot identifier")
+        }
+        let root = try AppPaths.sharedDirectory().appendingPathComponent(profile.ruleRevisionID.map { "RuleSnapshots/\($0)/rules" } ?? "Profiles/\(profile.id)/rules", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: root.path) else { return profile }
+        var loaded = profile
+        for url in try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) {
+            let name = "rules/" + url.lastPathComponent
+            if TunnelProfile.validFileName(name) { loaded.files[name] = try Data(contentsOf: url, options: .mappedIfSafe) }
+        }
+        return loaded
     }
 
     private struct ProfileSources {
@@ -235,7 +253,9 @@ final class ConfigStore: ObservableObject {
             guard TunnelProfile.validFileName(name) else { throw TunnelProfile.InvalidProfile("Invalid rule file path") }
             let target = root.appendingPathComponent(name)
             try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            try data.write(to: target, options: .atomic)
+            if (try? Data(contentsOf: target, options: .mappedIfSafe)) != data {
+                try data.write(to: target, options: .atomic)
+            }
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
         }
         var error: NSError?

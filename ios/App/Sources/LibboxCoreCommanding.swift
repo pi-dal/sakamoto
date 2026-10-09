@@ -120,11 +120,10 @@ final class LibboxCoreCommanding: CoreCommanding, @unchecked Sendable {
 
     func availability() -> AsyncStream<Bool> {
         lock.lock()
-        let current = active
-        lock.unlock()
-        // Subscribes before yielding the current value, so no change that
-        // happens after this call can be missed.
-        return availabilityBroadcaster.stream(startingWith: current)
+        defer { lock.unlock() }
+        // Register while the state lock is held, so a new event cannot
+        // overtake the initial value. Streams retain only the newest snapshot.
+        return availabilityBroadcaster.stream(startingWith: active)
     }
 
     /// The live client for surfaces that need a raw RPC outside this
@@ -543,7 +542,7 @@ private final class GroupStreamHandler: NSObject, LibboxCommandClientHandlerProt
 /// Small fan-out for stream subscribers: every `stream()` call returns an
 /// independent AsyncStream; yields fan out to all live subscribers. Yields
 /// happen on Libbox handler threads; AsyncStream continuations are Sendable.
-private final class Broadcaster<T>: @unchecked Sendable {
+final class Broadcaster<T>: @unchecked Sendable {
     private let lock = NSLock()
     private var continuations: [UUID: AsyncStream<T>.Continuation] = [:]
 
@@ -551,14 +550,12 @@ private final class Broadcaster<T>: @unchecked Sendable {
     ///   subsequent change is missed); nil starts the stream empty.
     func stream(startingWith initial: T? = nil) -> AsyncStream<T> {
         let broadcaster = self
-        return AsyncStream { continuation in
+        return AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
             let id = UUID()
             broadcaster.lock.lock()
             broadcaster.continuations[id] = continuation
+            if let initial { continuation.yield(initial) }
             broadcaster.lock.unlock()
-            if let initial {
-                continuation.yield(initial)
-            }
             continuation.onTermination = { _ in
                 broadcaster.lock.lock()
                 broadcaster.continuations[id] = nil

@@ -27,6 +27,29 @@ final class ConfigStoreTests: XCTestCase {
         {"log":{"level":"warn"},"dns":{"servers":[]},"inbounds":[{"type":"tun","tag":"tun-in","address":["172.19.0.1/30"],"auto_route":true}],"outbounds":[{"type":"direct","tag":"direct"}],"route":{"final":"direct","rules":[]}}
         """, sourceBundleJSON: raw)
     }
+    func testOnlySelectedRuleFilesAreLoadedAndSwitchingReloadsExactBytes() throws {
+        let store = ConfigStore(persistence: defaults, keyStore: EmptyKeys())
+        var first = try profile("First"), second = try profile("Second")
+        first.files["rules/first.srs"] = Data(repeating: 0x11, count: 1 << 20)
+        second.files["rules/second.srs"] = Data(repeating: 0x22, count: 1 << 20)
+        let root = try AppPaths.sharedDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: root.appendingPathComponent("Profiles/" + first.id))
+            try? FileManager.default.removeItem(at: root.appendingPathComponent("Profiles/" + second.id))
+        }
+        try store.installProfile(first)
+        try store.installProfile(second)
+        XCTAssertTrue(store.profiles.first { $0.id == first.id }!.files.isEmpty)
+        let restored = ConfigStore(persistence: defaults, keyStore: EmptyKeys())
+        XCTAssertTrue(restored.profiles.first { $0.id == first.id }!.files.isEmpty)
+        XCTAssertEqual(restored.selectedProfile?.files["rules/second.srs"], second.files["rules/second.srs"])
+        try restored.selectProfile(first.id)
+        XCTAssertEqual(restored.selectedProfile?.files["rules/first.srs"], first.files["rules/first.srs"])
+        XCTAssertTrue(restored.profiles.first { $0.id == second.id }!.files.isEmpty)
+        try restored.selectProfile(second.id)
+        XCTAssertEqual(restored.selectedProfile?.files["rules/second.srs"], second.files["rules/second.srs"])
+    }
+
     func testProfileSelectionOwnsSourcesAndPersistsAcrossRelaunch() throws {
         let store = ConfigStore(persistence: defaults, keyStore: EmptyKeys())
         let first = try profile("First", node: "trojan://test@example.com:443#first")

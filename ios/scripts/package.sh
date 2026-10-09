@@ -70,6 +70,11 @@ elif [ "${MODE}" = store-archive ]; then
         -archivePath "${OUTPUT_DIR}/Sakamoto.xcarchive" \
         CODE_SIGNING_ALLOWED=NO archive
     APP="${OUTPUT_DIR}/Sakamoto.xcarchive/Products/Applications/Sakamoto.app"
+    # Seal the shared core before its containing app and extensions.
+    for framework in "${APP}"/Frameworks/*.framework; do
+        [ -d "${framework}" ] || continue
+        codesign --force --sign - "${framework}"
+    done
     codesign --force --sign - --entitlements Extension/SakamotoPacketTunnel.entitlements \
         "${APP}/PlugIns/SakamotoPacketTunnel.appex"
     codesign --force --sign - --entitlements Widgets/SakamotoWidgets.entitlements \

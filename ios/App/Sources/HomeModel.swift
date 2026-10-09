@@ -42,6 +42,7 @@ final class HomeModel: ObservableObject {
     @Published private(set) var notice: Notice?
     @Published private(set) var testingAll = false
     @Published private(set) var busy = false
+    @Published private(set) var hasLoadedStatus = false
     /// Live fact from the command channel; false before the first tunnel
     /// start and while it is down. Drives honest "unavailable" states.
     @Published private(set) var commandChannelActive = false
@@ -55,6 +56,7 @@ final class HomeModel: ObservableObject {
     private var groupsTask: Task<Void, Never>?
     private var lifecycleTask: Task<Void, Never>?
     private var observationStarted = false
+    private var stateReadID: UInt64 = 0
     private var lastSurface: SystemSurfaceSnapshot?
     private var measuredNode = ""
     private var measuredLatency: Int32?
@@ -65,6 +67,7 @@ final class HomeModel: ObservableObject {
     private var requestedConfig: String?
     private var requestedProfileID: String?
     private var requestedExperiment: String?
+    private var statusReadNotice: Notice?
 
     init(
         tunnel: TunnelControlling,
@@ -87,6 +90,12 @@ final class HomeModel: ObservableObject {
         // command channel started here; the observation stream yields the
         // current state first, so this also covers it.
         syncCommandChannel()
+        // Refresh the cached core fact when returning to Home, without
+        // installing another availability/group subscription.
+        if let commanding, commanding.isAvailable {
+            routingMode = commanding.currentClashMode()
+            publishSurface()
+        }
     }
 
     // MARK: Connect / Disconnect
@@ -149,21 +158,31 @@ final class HomeModel: ObservableObject {
     }
 
     func refreshProviderState() async {
+        stateReadID &+= 1
+        let readID = stateReadID
         do {
-            let snapshot = try await tunnel.ping()
-            serviceState = snapshot.serviceState
+            let state = try await tunnel.status()
+            guard readID == stateReadID else { return }
+            clearStatusReadNotice()
+            serviceState = state
             confirmRequestedConfiguration()
-            if let detail = snapshot.detail, !detail.isEmpty {
-                notice = Notice(kind: .warning, text: detail)
-            } else if notice?.kind == .progress && serviceState != .starting && serviceState != .stopping {
-                notice = nil
-            }
+            if notice?.kind == .progress && state != .starting && state != .stopping { notice = nil }
         } catch {
-            // The provider handle cannot be reached at all.
-            serviceState = .unavailable
-            notice = Notice(kind: .error, text: "provider unreachable: \(error.localizedDescription)")
+            guard readID == stateReadID else { return }
+            // A read failure is not evidence that a previously observed VPN
+            // stopped. Status notifications remain the authoritative updates.
+            if !hasLoadedStatus { serviceState = .unavailable }
+            let warning = Notice(kind: .warning, text: "Could not refresh VPN status: \(error.localizedDescription)")
+            statusReadNotice = warning
+            notice = warning
         }
+        hasLoadedStatus = true
         refoldPhase()
+    }
+
+    private func clearStatusReadNotice() {
+        if let statusReadNotice, notice == statusReadNotice { notice = nil }
+        statusReadNotice = nil
     }
 
     // MARK: Command-channel lifecycle (tunnel-following)
@@ -175,7 +194,10 @@ final class HomeModel: ObservableObject {
             let observations = self?.tunnel.observations()
             for await observation in observations ?? AsyncStream { $0.finish() } {
                 guard let self else { return }
+                self.stateReadID &+= 1
+                self.hasLoadedStatus = true
                 self.serviceState = observation.serviceState
+                self.clearStatusReadNotice()
                 self.confirmRequestedConfiguration()
                 if let detail = observation.detail, !detail.isEmpty {
                     self.notice = Notice(kind: .warning, text: detail)
@@ -189,7 +211,7 @@ final class HomeModel: ObservableObject {
     }
 
     private func startObservingCommandChannel() {
-        guard let commanding else { return }
+        guard channelTask == nil, let commanding else { return }
         channelTask = Task { [weak self] in
             let availability = commanding.availability()
             for await active in availability {
@@ -219,10 +241,13 @@ final class HomeModel: ObservableObject {
 
     private func syncCommandChannel() {
         guard let commanding else { return }
-        if serviceState.running {
-            commanding.start()
-        } else {
-            commanding.stop()
+        switch serviceState {
+        case .running: commanding.start()
+        case .stopped, .stopping, .unavailable: commanding.stop()
+        case .starting:
+            // NE reasserting maps to Starting. Preserve an existing command
+            // channel during this transition; it handles its own reconnects.
+            break
         }
     }
 

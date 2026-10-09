@@ -121,8 +121,10 @@ public struct ConnectionRecord: Equatable, Sendable, Identifiable {
 /// type; the bridge owns one instance and applies batches under its lock.
 public struct ConnectionTable: Equatable, Sendable {
     private var records: [String: ConnectionRecord] = [:]
+    public let closedCapacity: Int
 
-    public init() {}
+    /// Keep live connections addressable; bound only completed history.
+    public init(closedCapacity: Int = 300) { self.closedCapacity = max(0, closedCapacity) }
 
     public var count: Int { records.count }
 
@@ -173,6 +175,14 @@ public struct ConnectionTable: Equatable, Sendable {
                 }
             }
         }
+        let closed = records.values.filter(\.closed)
+        if closed.count > closedCapacity {
+            let expired = closed.sorted {
+                if $0.closedAt != $1.closedAt { return $0.closedAt > $1.closedAt }
+                return $0.id > $1.id
+            }.dropFirst(closedCapacity)
+            for record in expired { records.removeValue(forKey: record.id) }
+        }
     }
 
     /// Local removal after a successful close-connection action (the TUI's
@@ -199,19 +209,31 @@ public struct ConnectionTable: Equatable, Sendable {
 /// bounded slice of the newest lines, oldest first).
 public struct LogBuffer: Equatable, Sendable {
     public let capacity: Int
+    public let byteCapacity: Int
+    public let lineByteCapacity: Int
     private var lines: [String] = []
+    private var bytes = 0
 
-    public init(capacity: Int = 300) {
+    public init(capacity: Int = 300, byteCapacity: Int = 256 << 10, lineByteCapacity: Int = 4 << 10) {
         self.capacity = max(1, capacity)
+        self.byteCapacity = max(1, byteCapacity)
+        self.lineByteCapacity = max(1, min(lineByteCapacity, byteCapacity))
     }
 
     public var allLines: [String] { lines }
 
     public mutating func append(contentsOf newLines: [String]) {
         guard !newLines.isEmpty else { return }
-        lines.append(contentsOf: newLines)
-        if lines.count > capacity {
-            lines.removeFirst(lines.count - capacity)
+        for line in newLines {
+            var end = line.utf8.index(line.utf8.startIndex, offsetBy: lineByteCapacity, limitedBy: line.utf8.endIndex) ?? line.utf8.endIndex
+            // Cut at a Unicode scalar boundary, without a replacement character.
+            while String.Index(end, within: line) == nil { end = line.utf8.index(before: end) }
+            let value = String(line[..<String.Index(end, within: line)!])
+            lines.append(value)
+            bytes += value.utf8.count
+            while lines.count > capacity || bytes > byteCapacity {
+                bytes -= lines.removeFirst().utf8.count
+            }
         }
     }
 

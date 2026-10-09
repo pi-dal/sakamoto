@@ -81,17 +81,20 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
     // MARK: Lifecycle (mirrors sing-box-for-apple ExtensionProvider)
 
     override open func startTunnel(options startOptions: [String: NSObject]?) async throws {
-        if startOptions?["configContent"] == nil,
-           UserDefaults(suiteName: SystemSurfaceStore.groupIdentifier)?.bool(forKey: "sakamoto.profile.requiresApply") == true {
-            throw ProviderStartupError("Open sakamoto and apply the selected configuration before automatic connection.")
-        }
         TunnelDiagnostics.clear()
-        do { try await startTunnelService(options: startOptions) }
-        catch {
+        do {
+            if startOptions?["configContent"] == nil,
+               UserDefaults(suiteName: SystemSurfaceStore.groupIdentifier)?.bool(forKey: "sakamoto.profile.requiresApply") == true {
+                throw ProviderStartupError("Open sakamoto and apply the selected configuration before automatic connection.")
+            }
+            try await startTunnelService(options: startOptions)
+        } catch {
             TunnelDiagnostics.record(stage: "VPN startup", error: error)
             await stopExperiments()
             commandServer?.close(); commandServer = nil
             platformInterface.reset()
+            SystemSurfaceStore.write(SystemSurfaceSnapshot(serviceState: .unavailable, phase: .unavailable))
+            reloadSystemSurfaces()
             throw error
         }
     }
@@ -147,14 +150,9 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
         }
         try commandServer!.start()
 
-        do {
-            try await applyProfile(options)
-            SystemSurfaceStore.write(SystemSurfaceSnapshot(serviceState: .running, phase: .tunRunning))
-            reloadSystemSurfaces()
-        } catch {
-            SystemSurfaceStore.write(SystemSurfaceSnapshot(serviceState: .unavailable, phase: .unavailable))
-            throw error
-        }
+        try await applyProfile(options)
+        SystemSurfaceStore.write(SystemSurfaceSnapshot(serviceState: .running, phase: .tunRunning))
+        reloadSystemSurfaces()
         writeTunnelMessage("(packet-tunnel): Here I stand")
     }
 

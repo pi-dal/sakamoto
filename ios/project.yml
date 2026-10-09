@@ -27,8 +27,8 @@ settings:
   base:
     DEVELOPMENT_TEAM: ""
     CODE_SIGN_STYLE: Automatic
-    CURRENT_PROJECT_VERSION: 13
-    MARKETING_VERSION: 0.1.4
+    CURRENT_PROJECT_VERSION: 14
+    MARKETING_VERSION: 0.1.5
     SWIFT_VERSION: "5.10"
 
 targets:
@@ -53,10 +53,11 @@ targets:
       - target: SakamotoWidgets
         embed: true
         codeSign: true
-      # Static combined gomobile archive includes both Libbox and Mobilecore
-      # APIs. It must be linked, not embedded as an installable framework.
+      # App and VPN extension load one combined dynamic Go core. The app owns
+      # the embedded framework; the extension resolves ../../Frameworks.
       - framework: Frameworks/Libbox.xcframework
-        embed: false
+        embed: true
+        codeSign: true
       - sdk: libresolv.tbd
     settings:
       base:

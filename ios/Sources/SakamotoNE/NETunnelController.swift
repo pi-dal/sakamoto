@@ -81,6 +81,11 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
         manager.connection.stopVPNTunnel()
     }
 
+    public func status() async throws -> ServiceState {
+        try await loadProviderPreferences()
+        return Self.serviceState(for: manager.connection.status)
+    }
+
     public func ping() async throws -> TunnelStateSnapshot {
         try await loadProviderPreferences()
         let service = Self.serviceState(for: manager.connection.status)

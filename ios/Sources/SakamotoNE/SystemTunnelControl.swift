@@ -6,7 +6,7 @@ import SakamotoKit
 /// They never create a profile, read private app config, or persist credentials.
 @MainActor
 public enum SystemTunnelControl {
-    private static var actionInFlight = false
+    private static let requests = SystemTunnelRequestGate()
     public static let providerIdentifier = "com.pidal.sakamoto.PacketTunnel"
 
     public static func status() async throws -> ServiceState {
@@ -14,41 +14,56 @@ public enum SystemTunnelControl {
         return NETunnelController.serviceState(for: manager.connection.status)
     }
 
+    /// Control reads can arrive before a cold accepted Start reaches NE status.
+    /// Raw status() remains an immediate observation for other callers.
+    public static func controlEnabled() async throws -> Bool {
+        guard let manager = try await configuredManager() else { return false }
+        return try await SystemTunnelTransition.controlValue(
+            state: { NETunnelController.serviceState(for: manager.connection.status) },
+            snapshot: { SystemSurfaceStore.read() })
+    }
+
     @discardableResult
     public static func perform(_ action: SystemTunnelAction) async throws -> ServiceState {
-        guard !actionInFlight else { throw ControlError.busy }
-        actionInFlight = true
-        defer { actionInFlight = false }
+        let request = requests.begin()
         guard let manager = try await configuredManager() else { throw ControlError.needsSetup }
-        var current = NETunnelController.serviceState(for: manager.connection.status)
-        // Disconnect can cancel a connection that is still starting.
-        if current == .stopping || (current == .starting && !isDisconnect(action)) {
-            current = try await SystemTunnelTransition.wait(state: { NETunnelController.serviceState(for: manager.connection.status) },
-                                                           accepts: { $0 != .starting && $0 != .stopping })
-        }
+        var current = requests.actionState(observed: NETunnelController.serviceState(for: manager.connection.status))
+        guard requests.isCurrent(request) else { return current }
         // Turning an already-stopped VPN off must also disarm on-demand.
         if case .disconnect = action, manager.isOnDemandEnabled {
             manager.isOnDemandEnabled = false
             try await manager.saveToPreferences()
             try await manager.loadFromPreferences()
         }
+        current = try await SystemTunnelTransition.prepare(action,
+            state: { requests.actionState(observed: NETunnelController.serviceState(for: manager.connection.status)) },
+            isCurrent: { requests.isCurrent(request) })
+        guard requests.isCurrent(request) else { return current }
         switch SystemTunnelPolicy.decision(for: action, state: current) {
         case .busy: throw ControlError.busy
         case .unchanged: return current
         case .start:
-            guard UserDefaults(suiteName: SystemSurfaceStore.groupIdentifier)?.bool(forKey: "sakamoto.profile.requiresApply") != true else {
-                throw ControlError.needsApply
-            }
-            guard let protocolConfiguration = manager.protocolConfiguration as? NETunnelProviderProtocol,
-                  let options = TunnelStartOptions(providerConfiguration: protocolConfiguration.providerConfiguration ?? [:]),
-                  !options.configContent.isEmpty else { throw ControlError.needsSetup }
+            try validateStart(manager)
             if !manager.isEnabled {
                 manager.isEnabled = true
                 try await manager.saveToPreferences()
                 try await manager.loadFromPreferences()
             }
-            try manager.connection.startVPNTunnel()
-            return try await SystemTunnelTransition.wait(state: { NETunnelController.serviceState(for: manager.connection.status) }, accepts: { $0 == .running })
+            let result = try await SystemTunnelTransition.start(
+                state: { NETunnelController.serviceState(for: manager.connection.status) },
+                isCurrent: { requests.isCurrent(request) },
+                start: {
+                    try validateStart(manager)
+                    let requestedAt = Date()
+                    try manager.connection.startVPNTunnel()
+                    requests.didSubmitStart()
+                    SystemSurfaceStore.write(SystemSurfaceStore.read().recordingControlStart(at: requestedAt))
+                },
+                reload: { try await manager.loadFromPreferences() })
+            guard requests.isCurrent(request) else {
+                return requests.actionState(observed: NETunnelController.serviceState(for: manager.connection.status))
+            }
+            return result
         case .stop:
             // A manual stop must survive the next network request.
             if manager.isOnDemandEnabled {
@@ -56,8 +71,12 @@ public enum SystemTunnelControl {
                 try await manager.saveToPreferences()
                 try await manager.loadFromPreferences()
             }
-            manager.connection.stopVPNTunnel()
-            return try await SystemTunnelTransition.wait(state: { NETunnelController.serviceState(for: manager.connection.status) }, accepts: { $0 == .stopped || $0 == .unavailable })
+            return try requests.submit(request, state: { NETunnelController.serviceState(for: manager.connection.status) }) {
+                try SystemTunnelTransition.submit(.disconnect, state: { requests.actionState(observed: NETunnelController.serviceState(for: manager.connection.status)) }, start: {}, stop: {
+                    manager.connection.stopVPNTunnel()
+                    requests.didSubmitStop()
+                })
+            }
         }
     }
 
@@ -82,9 +101,13 @@ public enum SystemTunnelControl {
         try await manager.loadFromPreferences()
     }
 
-    private static func isDisconnect(_ action: SystemTunnelAction) -> Bool {
-        if case .disconnect = action { return true }
-        return false
+    private static func validateStart(_ manager: NETunnelProviderManager) throws {
+        guard UserDefaults(suiteName: SystemSurfaceStore.groupIdentifier)?.bool(forKey: "sakamoto.profile.requiresApply") != true else {
+            throw ControlError.needsApply
+        }
+        guard let proto = manager.protocolConfiguration as? NETunnelProviderProtocol,
+              let options = TunnelStartOptions(providerConfiguration: proto.providerConfiguration ?? [:]),
+              !options.configContent.isEmpty else { throw ControlError.needsSetup }
     }
 
     private static func configuredManager() async throws -> NETunnelProviderManager? {
@@ -102,13 +125,12 @@ public enum SystemTunnelControl {
     }
 
     public enum ControlError: LocalizedError {
-        case needsSetup, needsApply, busy, timedOut
+        case needsSetup, needsApply, busy
         public var errorDescription: String? {
             switch self {
             case .needsSetup: return "Open sakamoto and connect once to set up and authorize the VPN."
             case .needsApply: return "Open sakamoto and apply the selected configuration before connecting from a widget or shortcut."
-            case .busy: return "The VPN is starting or stopping. Try again after it finishes."
-            case .timedOut: return "The VPN has not finished changing state. Open sakamoto to check its status, or retry the control."
+            case .busy: return "The VPN is stopping. Try again after it finishes."
             }
         }
     }

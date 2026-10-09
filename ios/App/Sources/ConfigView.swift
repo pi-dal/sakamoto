@@ -964,6 +964,9 @@ struct ConfigView: View {
             Section("Diagnostics") {
                 LabeledRow("Config state", model.store.configState.rawValue)
                 if let failure = TunnelDiagnostics.latest() { Text("\(failure.stage): \(failure.message)").font(.footnote) }
+                if let failure = TunnelDiagnostics.latestControlFailure() {
+                    Text("Last control error (\(failure.stage)): \(failure.message)").font(.footnote)
+                }
                 if let error = model.importError { Text(error).font(.footnote) }
             }
         }

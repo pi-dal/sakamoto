@@ -55,10 +55,37 @@ request start/stop without opening the app. Both the app and widget targets
 carry the NetworkExtension entitlement; signed-device operation still needs
 verification. Starting and Stopping are requests, not connection confirmation.
 Manual disconnect pauses on-demand connection to prevent immediate restart. On iOS 16 the widget opens Home; interactive widget buttons require
-iOS 17, and the Control Center toggle requires iOS 18. Actions reload the saved
-manager on the main actor, wait up to 12 seconds for a settled system state, and
-refresh controls even after a timeout or error. A temporary status-read failure
-uses a recent display snapshot so the control remains available for retry.
+iOS 17, and the Control Center toggle requires iOS 18. Actions refresh the saved
+manager on the main actor and submit start/stop requests; starts briefly allow
+system status to catch up before refreshing controls. The system/provider confirms
+the eventual state. Repeated Connect while Starting
+and Disconnect while Stopping are idempotent; Toggle while Starting can cancel
+connection. The Control Center switch sets an explicit state: On connects, Off
+disconnects, and repeated On never reverses the request. On during Stopping waits
+up to two seconds for teardown before submitting one start; a newer Off in the
+same intent host supersedes that wait. This does not wait for VPN establishment.
+A cold Start briefly waits, at most one second, for NE to publish Connecting or
+Connected before refreshing system controls. Expiry remains an unconfirmed
+Starting request and never causes an automatic restart. If NE rejects Start with
+configuration-stale, reload the saved profile and retry once; other errors and
+accepted starts are not retried. A following Off in the same intent host can
+cancel an accepted Start even before NE publishes Connecting. After an accepted
+Start, a separate Control Center value read can also wait within that request's
+two-second window if NE still reports Disconnected. It returns the observed
+native On/Off state; an expired request never makes the control appear connected.
+The request timestamp is separate from network-probe freshness. Off, a provider
+terminal snapshot or an observed terminal state removes it. Rejected system
+requests retain their latest sanitized error/domain/code in Config → Advanced →
+Diagnostics even after a later successful start.
+A newer request supersedes older preference preparation. Controls
+refresh on errors, and all provider startup failures publish a failed snapshot
+and request a system-surface refresh. Widget buttons do not become disabled by stale timeline
+states. A temporary status-read failure uses a recent display snapshot for retry.
+
+Opening Home reads system VPN status without provider IPC or reloading the VPN.
+Subscriptions are installed once. An established command channel survives a
+Starting/reasserting observation and closes on actual stop. Until the first system
+read completes, Home displays a status check rather than a misleading Off switch.
 
 The app and provider write a display-only App Group snapshot. Widgets show the
 system VPN state, node label, mode and measured latency; no config, credentials or
@@ -248,10 +275,13 @@ changes are the Rule → Global → Direct cycle; unavailable modes surface
 ## Config sources, generation and Apply
 
 `pkg/mobileconf` is the platform-independent parser (stdlib only, no
-sing-box imports). The app and extension link the combined static
-`Libbox.xcframework` without embedding it. Its umbrella header exports both
-Libbox and Mobilecore APIs through `import Libbox`. Binding these packages
-separately would initialize two Go runtimes and can crash at startup.
+sing-box imports). The app and extension link one combined dynamic
+`Libbox.xcframework`; the app embeds it in `Frameworks`, and the extension
+loads that copy through its `../../Frameworks` runpath. The framework builder
+converts the upstream archive into a dylib while preserving the combined
+public bindings. Its umbrella header exports both Libbox and Mobilecore APIs
+through `import Libbox`. Each process initializes one Go runtime; binding the
+packages separately can initialize two runtimes and crash at startup.
 `internal/gen` delegates to it, so the iOS importer validates with the exact
 host semantics. On device:
 

@@ -8,7 +8,6 @@ struct VPNWidgetContent: View {
     let snapshot: SystemSurfaceSnapshot
     let date: Date
     let family: WidgetFamily
-    private var busy: Bool { snapshot.serviceState == .starting || snapshot.serviceState == .stopping }
 
     var body: some View {
         Group {
@@ -137,8 +136,7 @@ struct VPNWidgetContent: View {
                     .background(.quaternary, in: Circle())
             }
             .buttonStyle(.plain)
-            .disabled(busy)
-            .accessibilityLabel(snapshot.serviceState == .running ? "Disconnect VPN" : "Connect VPN")
+            .accessibilityLabel(snapshot.serviceState == .running || snapshot.serviceState == .starting ? "Disconnect VPN" : "Connect VPN")
         } else {
             Link(destination: URL(string: "sakamoto://home")!) {
                 Image(systemName: "power").frame(width: 44, height: 44)

@@ -61,6 +61,8 @@ for slice in Libbox.xcframework/ios-*; do
         [ ! -d "${fw}" ] || "${REPO_ROOT}/ios/scripts/flatten-gomobile-framework.sh" -p Libbox.xcframework/Info.plist "${fw}"
     done
 done
+# Both processes link the same core; only the app embeds the installable dylib.
+python3 "${REPO_ROOT}/ios/scripts/share-libbox.py" Libbox.xcframework
 mkdir -p "${OUTPUT_DIR}"
 rm -rf "${OUTPUT_DIR}/Libbox.xcframework"
 mv Libbox.xcframework "${OUTPUT_DIR}/Libbox.xcframework"

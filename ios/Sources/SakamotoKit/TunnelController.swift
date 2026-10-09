@@ -53,6 +53,9 @@ public protocol TunnelControlling: AnyObject, Sendable {
     /// [ Disconnect ]: stop the tunnel.
     func disconnect() async throws
 
+    /// System VPN status, independent of provider IPC availability.
+    func status() async throws -> ServiceState
+
     /// Liveness + provider state snapshot (TunnelRequest.ping).
     func ping() async throws -> TunnelStateSnapshot
 
@@ -71,6 +74,7 @@ public protocol TunnelControlling: AnyObject, Sendable {
 }
 
 public extension TunnelControlling {
+    func status() async throws -> ServiceState { try await ping().serviceState }
     func reload(options: TunnelStartOptions) async throws { try await reload(configContent: options.configContent) }
     func recoverExperiment() async throws { throw TunnelProfile.InvalidProfile("Experiment recovery is unavailable on this transport") }
     func removeLearnedDomain(_ domain: String) async throws { throw TunnelProfile.InvalidProfile("Learned routes are unavailable on this transport") }

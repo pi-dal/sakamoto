@@ -56,9 +56,9 @@ private struct VPNControlProvider: ControlValueProvider {
     var previewValue: Bool { false }
     func currentValue() async throws -> Bool {
         do {
-            let state = try await SystemTunnelControl.status()
-            return state == .running || state == .starting
+            return try await SystemTunnelControl.controlEnabled()
         } catch {
+            TunnelDiagnostics.recordControlFailure(error, stage: "Control status read")
             // A transient NE IPC error must not permanently disable the control.
             let snapshot = SystemSurfaceStore.read()
             guard (0...30).contains(Date().timeIntervalSince(snapshot.updatedAt)) else { return false }

@@ -55,6 +55,23 @@ final class ConnectionTableTests: XCTestCase {
         XCTAssertEqual(table.count, 1, "CLOSED rows survive so totals stay visible")
     }
 
+    func testCompletedHistoryIsBoundedWithoutDroppingLiveConnections() {
+        var table = ConnectionTable(closedCapacity: 2)
+        table.apply([.init(kind: .new, id: "live", record: record(id: "live", createdAt: 0), uplinkDelta: 0, downlinkDelta: 0, closedAt: 0)], reset: false)
+        for time in 1...1000 {
+            let id = String(time)
+            table.apply([
+                .init(kind: .new, id: id, record: record(id: id, createdAt: Int64(time)), uplinkDelta: 0, downlinkDelta: 0, closedAt: 0),
+                .init(kind: .closed, id: id, record: nil, uplinkDelta: 0, downlinkDelta: 0, closedAt: Int64(time))
+            ], reset: false)
+        }
+        XCTAssertEqual(table.count, 3)
+        XCTAssertEqual(table.openCount, 1)
+        XCTAssertNotNil(table.record(id: "live"))
+        XCTAssertNil(table.record(id: "1"))
+        XCTAssertEqual(table.sortedByRecent().map(\.id), ["live", "1000", "999"])
+    }
+
     func testResetClearsThenApplies() {
         var table = ConnectionTable()
         table.apply([.init(kind: .new, id: "a", record: record(id: "a", createdAt: 1), uplinkDelta: 0, downlinkDelta: 0, closedAt: 0)], reset: false)
@@ -87,6 +104,15 @@ final class LogBufferTests: XCTestCase {
         var buffer = LogBuffer(capacity: 3)
         buffer.append(contentsOf: ["a", "b", "c", "d"])
         XCTAssertEqual(buffer.allLines, ["b", "c", "d"])
+    }
+
+    func testByteBudgetAndUnicodeTruncationBoundLargeMessages() {
+        var buffer = LogBuffer(capacity: 100, byteCapacity: 12, lineByteCapacity: 8)
+        buffer.append(contentsOf: ["abcde", "κόσ", "🙂🙂🙂"])
+        XCTAssertEqual(buffer.allLines, ["🙂🙂"])
+        XCTAssertLessThanOrEqual(buffer.allLines.reduce(0) { $0 + $1.utf8.count }, 12)
+        buffer.append(contentsOf: [String(repeating: "x", count: 1 << 20)])
+        XCTAssertEqual(buffer.allLines, ["xxxxxxxx"])
     }
 
     func testRecentReturnsOldestFirstSuffix() {

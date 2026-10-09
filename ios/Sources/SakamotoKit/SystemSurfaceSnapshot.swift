@@ -10,10 +10,12 @@ public struct SystemSurfaceSnapshot: Codable, Equatable, Sendable {
     public var latencyMS: Int32?
     public var measuredAt: Date?
     public var updatedAt: Date
+    /// Only set after NE accepts a control Start; separate from probe freshness.
+    public var controlStartRequestedAt: Date?
 
     public init(serviceState: ServiceState = .unavailable, phase: SessionPhase = .unavailable,
                 selectedNode: String = "", routingMode: String = "", latencyMS: Int32? = nil,
-                measuredAt: Date? = nil, updatedAt: Date = Date()) {
+                measuredAt: Date? = nil, updatedAt: Date = Date(), controlStartRequestedAt: Date? = nil) {
         self.serviceState = serviceState
         self.phase = phase
         self.selectedNode = selectedNode
@@ -21,6 +23,18 @@ public struct SystemSurfaceSnapshot: Codable, Equatable, Sendable {
         self.latencyMS = latencyMS
         self.measuredAt = measuredAt
         self.updatedAt = updatedAt
+        self.controlStartRequestedAt = controlStartRequestedAt
+    }
+
+    public func hasPendingControlStart(at date: Date) -> Bool {
+        guard let requestedAt = controlStartRequestedAt else { return false }
+        return (0..<2).contains(date.timeIntervalSince(requestedAt))
+    }
+
+    public func recordingControlStart(at date: Date) -> Self {
+        var result = self
+        result.controlStartRequestedAt = date
+        return result
     }
 
     public func latencyIsFresh(at date: Date) -> Bool {
@@ -33,6 +47,7 @@ public struct SystemSurfaceSnapshot: Codable, Equatable, Sendable {
     public func reconciled(with service: ServiceState, at date: Date) -> Self {
         var result = self
         result.serviceState = service
+        if service != .starting { result.controlStartRequestedAt = nil }
         if serviceState != service || service != .running {
             result.latencyMS = nil
             result.measuredAt = nil
@@ -73,19 +88,23 @@ public enum SystemTunnelAction: Sendable { case connect, disconnect, toggle }
 public enum SystemTunnelDecision: Equatable, Sendable { case start, stop, unchanged, busy }
 
 public enum SystemTunnelPolicy {
+    /// A system switch sets the requested state; repeated On never reverses it.
+    public static func action(enabled: Bool) -> SystemTunnelAction {
+        enabled ? .connect : .disconnect
+    }
+
     public static func decision(for action: SystemTunnelAction, state: ServiceState) -> SystemTunnelDecision {
         switch action {
         case .connect:
-            if state == .running { return .unchanged }
-            if state == .starting || state == .stopping { return .busy }
+            if state == .running || state == .starting { return .unchanged }
+            if state == .stopping { return .busy }
             return .start
         case .disconnect:
-            if state == .stopped || state == .unavailable { return .unchanged }
-            if state == .stopping { return .busy }
+            if state == .stopped || state == .unavailable || state == .stopping { return .unchanged }
             return .stop
         case .toggle:
-            if state == .starting || state == .stopping { return .busy }
-            return state == .running ? .stop : .start
+            if state == .stopping { return .busy }
+            return state == .running || state == .starting ? .stop : .start
         }
     }
 }

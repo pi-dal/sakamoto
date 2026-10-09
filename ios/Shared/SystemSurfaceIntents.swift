@@ -50,7 +50,7 @@ struct SetTunnelEnabledIntent: SetValueIntent {
     static var openAppWhenRun = false
     @Parameter(title: "Connected") var value: Bool
     func perform() async throws -> some IntentResult {
-        try await SystemSurfaceActions.perform(value ? .connect : .disconnect)
+        try await SystemSurfaceActions.perform(SystemTunnelPolicy.action(enabled: value))
         return .result()
     }
 }
@@ -64,6 +64,7 @@ enum SystemSurfaceActions {
             // An idempotent Connect must not renew an older network probe.
             SystemSurfaceStore.write(snapshot)
         } catch {
+            TunnelDiagnostics.recordControlFailure(error)
             // Clear stale requested values even when a transition times out.
             if let state = try? await SystemTunnelControl.status() {
                 SystemSurfaceStore.write(SystemSurfaceStore.read().reconciled(with: state, at: Date()))
