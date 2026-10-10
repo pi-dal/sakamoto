@@ -40,6 +40,7 @@ struct SakamotoApp: App {
         )
         let commanding = LibboxCoreCommanding()
         let store = ConfigStore(keyStore: TailscaleKeychainStore())
+        SystemSurfaceConfiguration.store = store
         self.tunnel = tunnel
         self.commanding = commanding
         _store = StateObject(wrappedValue: store)

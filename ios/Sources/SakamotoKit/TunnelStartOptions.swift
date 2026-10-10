@@ -31,6 +31,37 @@ public struct TunnelStartOptions: Codable, Equatable, Sendable {
         self.forceTailscaleDERP = forceTailscaleDERP
     }
 
+    // MARK: Provider cold/manual start authorization
+
+    public enum ResolutionError: LocalizedError {
+        case needsApply, missingConfiguration
+        public var errorDescription: String? {
+            switch self {
+            case .needsApply: return "Open sakamoto and apply the selected configuration before automatic connection."
+            case .missingConfiguration: return "Missing or invalid configuration in VPN start options."
+            }
+        }
+    }
+
+    /// Explicit manual starts carry the validated current payload. Unprepared
+    /// automatic starts must keep respecting the pending-Apply guard. Never
+    /// fall back to an old saved payload when an explicit config is malformed.
+    public static func resolveForProvider(startOptions: [String: NSObject]?,
+                                          providerConfiguration: [String: Any],
+                                          requiresApply: Bool) throws -> Self {
+        let explicit = Self(startTunnelOptions: startOptions ?? [:])
+        if startOptions?[CodingKeys.configContent.rawValue] != nil,
+           explicit?.configContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+            throw ResolutionError.missingConfiguration
+        }
+        if requiresApply && explicit == nil { throw ResolutionError.needsApply }
+        guard let resolved = explicit ?? Self(providerConfiguration: providerConfiguration),
+              !resolved.configContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ResolutionError.missingConfiguration
+        }
+        return resolved
+    }
+
     // MARK: NETunnelProviderProtocol.providerConfiguration
 
     /// The dictionary stored on NETunnelProviderProtocol.providerConfiguration

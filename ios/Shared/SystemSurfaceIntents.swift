@@ -71,7 +71,10 @@ enum SystemSurfaceActions {
         let name = String(describing: action)
         TunnelDiagnostics.recordControlExecution(action: name, stage: "Requested")
         do {
-            let state = try await SystemTunnelControl.perform(action)
+            let state = try await SystemTunnelControl.perform(action,
+                prepareConfiguration: SystemSurfaceConfiguration.prepare,
+                isPreparedConfigurationCurrent: SystemSurfaceConfiguration.isCurrent)
+            await SystemSurfaceConfiguration.reconcile(state)
             TunnelDiagnostics.recordControlExecution(action: name, stage: "Submitted", state: state)
             let snapshot = SystemSurfaceStore.read().reconciled(with: state, at: Date())
             // An idempotent Connect must not renew an older network probe.

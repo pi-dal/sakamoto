@@ -143,6 +143,7 @@ final class ConfigStore: ObservableObject {
     }
 
     func selectProfile(_ id: String) throws {
+        guard id != selectedProfileID else { return }
         if let old = selectedProfileID, old != id { UserDefaults(suiteName: SystemSurfaceStore.groupIdentifier)?.set(true, forKey: "sakamoto.experiment.pause." + old) }
         guard let index = profiles.firstIndex(where: { $0.id == id }) else { return }
         let profile = try loadRuleFiles(profiles[index])
@@ -624,6 +625,31 @@ final class ConfigStore: ObservableObject {
             transition(.regenerateFailed)
             lastAction = "regenerate failed: \(error.localizedDescription)"
         }
+    }
+
+    /// A system On prepares the current generated configuration just as Home
+    /// Connect does. Preparing is not evidence that the provider applied it.
+    func systemConnectionOptions() throws -> TunnelStartOptions {
+        guard !applying && !generating else {
+            throw TunnelProfile.InvalidProfile("Wait for configuration generation or Apply to finish before connecting.")
+        }
+        guard canConnect else {
+            throw TunnelProfile.InvalidProfile("Generate the selected configuration in Config before connecting.")
+        }
+        let prepared = try connectionContent()
+        let injected = try TailscaleConfigInjection.inject(authKey: keyStore.readAuthKey() ?? "", into: prepared)
+        return try connectionOptions(content: injected)
+    }
+
+    /// A background intent can finish before Connected. The provider's exact
+    /// applied receipt plus native Running confirms the same selected payload
+    /// when the app later observes it; stale/different receipts never clear edits.
+    func reconcileAppliedConnection(service: ServiceState,
+                                    receipt: TunnelConfigurationReceipt? = TunnelConfigurationReceiptStore.read()) {
+        guard service == .running, selectedProfile?.pendingApply != false,
+              let receipt, let options = try? systemConnectionOptions(), receipt.matches(options) else { return }
+        transition(.regenerateSucceeded)
+        transition(.applied)
     }
 
     func connectionConfirmed(content appliedContent: String) {

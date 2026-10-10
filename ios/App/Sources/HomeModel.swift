@@ -166,6 +166,7 @@ final class HomeModel: ObservableObject {
             clearStatusReadNotice()
             serviceState = state
             confirmRequestedConfiguration()
+            store.reconcileAppliedConnection(service: state)
             if notice?.kind == .progress && state != .starting && state != .stopping { notice = nil }
         } catch {
             guard readID == stateReadID else { return }
@@ -199,6 +200,7 @@ final class HomeModel: ObservableObject {
                 self.serviceState = observation.serviceState
                 self.clearStatusReadNotice()
                 self.confirmRequestedConfiguration()
+                self.store.reconcileAppliedConnection(service: observation.serviceState)
                 if let detail = observation.detail, !detail.isEmpty {
                     self.notice = Notice(kind: .warning, text: detail)
                 } else if self.notice?.kind == .progress && self.serviceState != .starting && self.serviceState != .stopping {

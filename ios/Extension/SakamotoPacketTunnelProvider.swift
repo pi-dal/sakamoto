@@ -83,10 +83,6 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
     override open func startTunnel(options startOptions: [String: NSObject]?) async throws {
         TunnelDiagnostics.clear()
         do {
-            if startOptions?["configContent"] == nil,
-               UserDefaults(suiteName: SystemSurfaceStore.groupIdentifier)?.bool(forKey: "sakamoto.profile.requiresApply") == true {
-                throw ProviderStartupError("Open sakamoto and apply the selected configuration before automatic connection.")
-            }
             try await startTunnelService(options: startOptions)
         } catch {
             TunnelDiagnostics.record(stage: "VPN startup", error: error)
@@ -108,15 +104,9 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
 
         // Per-start options win; providerConfiguration is the cold-launch
         // fallback persisted by SakamotoNE.NETunnelController.
-        let resolved = TunnelStartOptions(startTunnelOptions: startOptions ?? [:])
-            ?? TunnelStartOptions(
-                providerConfiguration: (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration ?? [:]
-            )
-        guard let options = resolved else {
-            throw ProviderStartupError(
-                "(sakamoto) missing configContent in tunnel options and provider configuration"
-            )
-        }
+        let options = try TunnelStartOptions.resolveForProvider(startOptions: startOptions,
+            providerConfiguration: (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration ?? [:],
+            requiresApply: UserDefaults(suiteName: SystemSurfaceStore.groupIdentifier)?.bool(forKey: "sakamoto.profile.requiresApply") == true)
         overridePreferences = OverridePreferences(
             includeAllNetworks: (startOptions?["includeAllNetworks"] as? NSNumber)?.boolValue ?? false,
             systemProxyEnabled: (startOptions?["systemProxyEnabled"] as? NSNumber)?.boolValue ?? true,
@@ -270,6 +260,7 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
             try await startService(content: content, forceDERP: options.forceTailscaleDERP == true)
             try startExperiments(options: options, settings: settings, content: content, root: root)
             tunnelStartOptions = options
+            TunnelConfigurationReceiptStore.record(options)
         } catch {
             // startOrReloadService can close the old service before rejecting
             // its replacement. Restore both runtime and monitor, not just NE

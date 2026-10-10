@@ -36,7 +36,9 @@ public enum SystemTunnelControl {
     }
 
     @discardableResult
-    public static func perform(_ action: SystemTunnelAction) async throws -> ServiceState {
+    public static func perform(_ action: SystemTunnelAction,
+                               prepareConfiguration: (@MainActor () throws -> TunnelStartOptions?)? = nil,
+                               isPreparedConfigurationCurrent: (@MainActor (TunnelStartOptions) -> Bool)? = nil) async throws -> ServiceState {
         let request = requests.begin()
         guard let manager = try await configuredManager() else { throw ControlError.needsSetup }
         var current = requests.actionState(observed: NETunnelController.serviceState(for: manager.connection.status))
@@ -55,19 +57,40 @@ public enum SystemTunnelControl {
         case .busy: throw ControlError.busy
         case .unchanged: return current
         case .start:
-            try validateStart(manager)
-            if !manager.isEnabled {
+            // A manual On follows the same validated configuration preparation
+            // as Home Connect. Pending Apply still blocks unprepared cold starts.
+            let prepared = try prepareConfiguration?()
+            if let prepared {
+                guard !prepared.configContent.isEmpty else { throw ControlError.needsSetup }
+                guard isPreparedConfigurationCurrent?(prepared) != false else { throw ControlError.needsApply }
+                manager.protocolConfiguration = NETunnelController.makeProviderProtocol(
+                    bundleIdentifier: providerIdentifier, options: prepared)
                 manager.isEnabled = true
                 try await manager.saveToPreferences()
                 try await manager.loadFromPreferences()
+            } else {
+                try validateStart(manager)
+                if !manager.isEnabled {
+                    manager.isEnabled = true
+                    try await manager.saveToPreferences()
+                    try await manager.loadFromPreferences()
+                }
             }
             let result = try await SystemTunnelTransition.start(
                 state: { NETunnelController.serviceState(for: manager.connection.status) },
                 isCurrent: { requests.isCurrent(request) },
                 start: {
-                    try validateStart(manager)
+                    if let prepared {
+                        guard isPreparedConfigurationCurrent?(prepared) != false else { throw ControlError.needsApply }
+                        // Reject a preference race instead of starting another
+                        // caller's configuration after save/load or stale retry.
+                        guard let proto = manager.protocolConfiguration as? NETunnelProviderProtocol,
+                              TunnelStartOptions(providerConfiguration: proto.providerConfiguration ?? [:]) == prepared else {
+                            throw ControlError.needsApply
+                        }
+                    } else { try validateStart(manager) }
                     let requestedAt = Date()
-                    try manager.connection.startVPNTunnel()
+                    try manager.connection.startVPNTunnel(options: prepared?.startTunnelOptions)
                     requests.didSubmitStart()
                     SystemSurfaceStore.write(SystemSurfaceStore.read().recordingControlStart(at: requestedAt))
                 },

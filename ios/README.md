@@ -57,7 +57,14 @@ provide equivalent routing on iOS 16.4–25. No action requests foreground
 continuation. Declaring `openAppWhenRun = false` and adding VPN entitlements to
 the widget alone do not select the execution process. Both targets retain their
 existing entitlements; signed-device operation still needs verification.
-Starting and Stopping are requests, not connection confirmation.
+Starting and Stopping are requests, not connection confirmation. A manual
+system On now prepares and validates the current generated configuration through
+the app's existing ConfigStore, including rule files, proxy-chain and Tailscale
+settings, before saving the matching VPN profile and submitting explicit start
+options. A pending Apply alone does not prohibit that prepared manual Start;
+ungenerated sources and invalid configurations still do. Selection/configuration
+changes during preparation are checked again before submission. Off and an
+already-active Connect do not prepare a configuration.
 Manual disconnect pauses on-demand connection to prevent immediate restart. On iOS 16 the widget opens Home; interactive widget buttons require
 iOS 17, and the Control Center toggle requires iOS 18. Actions refresh the saved
 manager on the main actor and submit start/stop requests; starts briefly allow
@@ -94,6 +101,11 @@ clears the request. A provider crash that cannot publish its terminal snapshot
 can leave the cached display stale until a native read or app refresh succeeds.
 Diagnostic action and profile-read slots retain the host bundle ID, PID, time,
 profile count and native status, without profile contents or credentials.
+The provider also stores a digest receipt only after applying a configuration.
+Native Running plus a receipt matching the current profile/configuration/settings
+can clear pending Apply after a background intent or app relaunch; Starting,
+stale receipts and changed sources cannot. Selecting the already-selected profile
+does not mark it pending again. Receipts contain no configuration or credentials.
 
 Opening Home reads system VPN status without provider IPC or reloading the VPN.
 Subscriptions are installed once. An established command channel survives a
@@ -140,7 +152,8 @@ The same screen can stage PROXY policy rules; apply them in Config before enabli
 
 Manual disconnect in Home, Shortcuts, the widget or Control Center disables
 on-demand until the user enables it again in Settings. Unapplied profile edits
-block automatic cold starts. Per-app VPN on iOS requires managed apps and device
+block unprepared automatic cold starts; manual On prepares a validated generated
+selection as described above. Per-app VPN on iOS requires managed apps and device
 management. Settings → Automatic connection → Connect when an app opens
 provides a native Shortcuts link and setup instructions. The same entry is in
 Widgets & Shortcuts. App launch refreshes the four preconfigured App Shortcuts;

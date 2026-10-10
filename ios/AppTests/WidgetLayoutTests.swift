@@ -47,6 +47,11 @@ final class WidgetLayoutTests: XCTestCase {
         }
     }
 
+    func testBackgroundIntentHasTheAppsConfigurationOwnerAtLaunch() {
+        XCTAssertNotNil(SystemSurfaceConfiguration.store,
+            "Background intents must prepare through the app's existing store")
+    }
+
     func testSystemIntentsCanExecuteInTheBackgroundApp() {
         if #available(iOS 26.0, *) {
             let required = IntentModes.foreground(.dynamic)

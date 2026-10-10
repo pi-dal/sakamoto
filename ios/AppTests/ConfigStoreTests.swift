@@ -101,6 +101,68 @@ final class ConfigStoreTests: XCTestCase {
         XCTAssertEqual(confirmed.configState, .clean)
     }
 
+    func testSystemOnCanPrepareGeneratedPendingConfigurationWithoutClaimingItIsApplied() throws {
+        let store = ConfigStore(persistence: defaults, keyStore: EmptyKeys())
+        try store.installProfile(profile("Pending"))
+        let restored = ConfigStore(persistence: defaults, keyStore: EmptyKeys())
+        XCTAssertEqual(restored.configState, .needsReconnect)
+        let prepared = try restored.systemConnectionOptions()
+        XCTAssertEqual(prepared.profileID, restored.selectedProfileID)
+        XCTAssertFalse(prepared.configContent.isEmpty)
+        XCTAssertEqual(restored.selectedProfile?.pendingApply, true)
+        XCTAssertEqual(restored.configState, .needsReconnect, "Preparing a Start is not provider confirmation")
+        let receipt = try TunnelConfigurationReceipt(options: prepared)
+        for state: ServiceState in [.starting, .stopped, .stopping, .unavailable] {
+            restored.reconcileAppliedConnection(service: state, receipt: receipt)
+            XCTAssertEqual(restored.selectedProfile?.pendingApply, true)
+        }
+        restored.reconcileAppliedConnection(service: .running, receipt: receipt)
+        XCTAssertEqual(restored.configState, .clean)
+        XCTAssertEqual(restored.selectedProfile?.pendingApply, false)
+        XCTAssertEqual(ConfigStore(persistence: defaults, keyStore: EmptyKeys()).configState, .clean)
+    }
+
+    func testSystemOnStillRejectsUngeneratedSourcesAndStaleConfirmation() throws {
+        let store = ConfigStore(persistence: defaults, keyStore: EmptyKeys())
+        try store.installProfile(profile("Current"))
+        let receipt = try TunnelConfigurationReceipt(options: store.systemConnectionOptions())
+        let changed = try SettingsOverrides.setBlockQUIC(true, in: store.content)
+        store.save(changed)
+        store.reconcileAppliedConnection(service: .running, receipt: receipt)
+        XCTAssertEqual(store.selectedProfile?.pendingApply, true)
+        let node = try ConfigModel.validateNode("trojan://test@example.com:443#pending")
+        store.commitNodesSources(NodesSourcesBook(nodes: [node]))
+        XCTAssertThrowsError(try store.systemConnectionOptions())
+        store.reconcileAppliedConnection(service: .running, receipt: receipt)
+        XCTAssertEqual(store.selectedProfile?.pendingApply, true)
+    }
+
+    func testSelectingCurrentAppliedProfileDoesNotMakeSystemOnRequireApplyAgain() throws {
+        let store = ConfigStore(persistence: defaults, keyStore: EmptyKeys())
+        try store.installProfile(profile("Current"))
+        store.connectionConfirmed(content: try store.connectionContent())
+        let id = try XCTUnwrap(store.selectedProfileID)
+        try store.selectProfile(id)
+        XCTAssertEqual(store.configState, .clean)
+        XCTAssertEqual(store.selectedProfile?.pendingApply, false)
+        let restored = ConfigStore(persistence: defaults, keyStore: EmptyKeys())
+        XCTAssertEqual(restored.configState, .clean)
+    }
+
+    func testSystemIntentPreparationUsesTheCurrentAppStoreAndRejectsSubsequentEdits() throws {
+        let original = SystemSurfaceConfiguration.store
+        defer { SystemSurfaceConfiguration.store = original }
+        let store = ConfigStore(persistence: defaults, keyStore: EmptyKeys())
+        try store.installProfile(profile("Intent"))
+        SystemSurfaceConfiguration.store = store
+        let prepared = try XCTUnwrap(SystemSurfaceConfiguration.prepare())
+        XCTAssertTrue(SystemSurfaceConfiguration.isCurrent(prepared))
+        store.save(try SettingsOverrides.setBlockQUIC(true, in: store.content))
+        XCTAssertFalse(SystemSurfaceConfiguration.isCurrent(prepared), "An edit during preference saving must prevent an old Start")
+        let current = try XCTUnwrap(SystemSurfaceConfiguration.prepare())
+        XCTAssertTrue(SystemSurfaceConfiguration.isCurrent(current))
+    }
+
     /// Optional owner-provided fixture, staged privately into the simulator
     /// Documents directory. It is never committed or printed by the test.
     func testProvisionedCompleteHostPackageUsesAppGroupRuleFiles() throws {
