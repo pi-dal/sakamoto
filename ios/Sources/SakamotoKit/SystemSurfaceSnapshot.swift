@@ -37,6 +37,19 @@ public struct SystemSurfaceSnapshot: Codable, Equatable, Sendable {
         return result
     }
 
+    /// Use the last app/provider observation only when this host cannot read
+    /// the saved manager. Terminal observations clear the accepted request;
+    /// an unfinished start is bounded independently of probe freshness.
+    public func controlDisplayEnabled(at date: Date) -> Bool {
+        switch serviceState {
+        case .running: return true
+        case .starting:
+            return (0..<30).contains(date.timeIntervalSince(controlStartRequestedAt ?? updatedAt))
+        case .stopped: return hasPendingControlStart(at: date)
+        case .stopping, .unavailable: return false
+        }
+    }
+
     public func latencyIsFresh(at date: Date) -> Bool {
         guard let measuredAt, let latencyMS, latencyMS > 0 else { return false }
         return (0...120).contains(date.timeIntervalSince(measuredAt))

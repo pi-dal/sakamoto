@@ -967,6 +967,13 @@ struct ConfigView: View {
                 if let failure = TunnelDiagnostics.latestControlFailure() {
                     Text("Last control error (\(failure.stage)): \(failure.message)").font(.footnote)
                 }
+                if let observation = TunnelDiagnostics.latestControlExecution() {
+                    Text("Last control: \(observation.detail) · \(observation.stage)").font(.footnote)
+                    Text("\(observation.host) (PID \(observation.processID)) · \(observation.date.formatted())").font(.footnote)
+                }
+                if let observation = TunnelDiagnostics.latestControlProfileRead() {
+                    Text("\(observation.detail) · \(observation.host) · \(observation.date.formatted())").font(.footnote)
+                }
                 if let error = model.importError { Text(error).font(.footnote) }
             }
         }

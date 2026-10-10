@@ -19,7 +19,7 @@ tunnel process; this is not a CLI probe and not an external-daemon count).
 | Config tab: Import / Policy / Nodes & sources / Generate·Apply | `App/Sources/ConfigView.swift` + `ConfigStore.swift`; parsing/validation via `pkg/mobileconf` + `pkg/mobilecore/importer.go` (real, tested) |
 | iCloud source sync (Settings → Sync sources to iCloud) | `SakamotoKit/ICloudSyncStore.swift` (actor, conflict-safe baseline pass, unit-tested in memory) + `App/Sources/ICloudSyncModel.swift` + real ubiquity container / `NSFileCoordinator` writes; entitlements are real declarations with a **placeholder container id** |
 | Unsigned simulator build | `xcodebuild … CODE_SIGNING_ALLOWED=NO build` (verified) |
-| Home Screen widgets (small/medium/large) | `Widgets/SakamotoWidgets.swift`; interactive on iOS 17+, opens the app to execute VPN actions |
+| Home Screen widgets (small/medium/large) | `Widgets/SakamotoWidgets.swift`; interactive on iOS 17+, executes VPN actions in the background app |
 | Shortcuts / Siri | Connect, Disconnect, Toggle and Get VPN status in `Shared/SystemSurfaceIntents.swift` |
 | Control Center control | Native VPN toggle on iOS 18+, directly operates the saved profile without opening the app |
 | App Store Connect signing | distribution export verified with Team `6Y2YB464VU`, NetworkExtension, shared App Group and production iCloud entitlements; device VPN behavior still needs runtime verification |
@@ -50,10 +50,14 @@ content can include private UI data; keep it local and do not publish it.
 ## Widgets, Shortcuts and Control Center
 
 Connect once in the app to create and authorize its VPN profile. System actions
-load only the sakamoto provider's saved profile, read current system state and
-request start/stop without opening the app. Both the app and widget targets
-carry the NetworkExtension entitlement; signed-device operation still needs
-verification. Starting and Stopping are requests, not connection confirmation.
+load only the sakamoto provider's saved profile and request start/stop in the
+containing app's background process. iOS 26 intents declare
+`.foreground(.dynamic)`; app-only `ForegroundContinuableIntent` conformances
+provide equivalent routing on iOS 16.4–25. No action requests foreground
+continuation. Declaring `openAppWhenRun = false` and adding VPN entitlements to
+the widget alone do not select the execution process. Both targets retain their
+existing entitlements; signed-device operation still needs verification.
+Starting and Stopping are requests, not connection confirmation.
 Manual disconnect pauses on-demand connection to prevent immediate restart. On iOS 16 the widget opens Home; interactive widget buttons require
 iOS 17, and the Control Center toggle requires iOS 18. Actions refresh the saved
 manager on the main actor and submit start/stop requests; starts briefly allow
@@ -80,7 +84,16 @@ Diagnostics even after a later successful start.
 A newer request supersedes older preference preparation. Controls
 refresh on errors, and all provider startup failures publish a failed snapshot
 and request a system-surface refresh. Widget buttons do not become disabled by stale timeline
-states. A temporary status-read failure uses a recent display snapshot for retry.
+states. Native status takes precedence whenever a matching manager is visible.
+An empty profile read is recorded as unknown visibility rather than proof of
+Off; the widget/control then uses the last app/provider display observation.
+Cached Running does not expire with network-probe freshness; cached Starting
+expires after 30 seconds, and an accepted request awaiting its first state
+observation holds the display for at most two seconds. A terminal observation
+clears the request. A provider crash that cannot publish its terminal snapshot
+can leave the cached display stale until a native read or app refresh succeeds.
+Diagnostic action and profile-read slots retain the host bundle ID, PID, time,
+profile count and native status, without profile contents or credentials.
 
 Opening Home reads system VPN status without provider IPC or reloading the VPN.
 Subscriptions are installed once. An established command channel survives a

@@ -1,4 +1,5 @@
 import XCTest
+import AppIntents
 import SwiftUI
 import WidgetKit
 import SakamotoKit
@@ -43,6 +44,17 @@ final class WidgetLayoutTests: XCTestCase {
                 window.isHidden = true
                 window.rootViewController = nil
             }
+        }
+    }
+
+    func testSystemIntentsCanExecuteInTheBackgroundApp() {
+        if #available(iOS 26.0, *) {
+            let required = IntentModes.foreground(.dynamic)
+            XCTAssertTrue(ConnectTunnelIntent.supportedModes.contains(required))
+            XCTAssertTrue(DisconnectTunnelIntent.supportedModes.contains(required))
+            XCTAssertTrue(ToggleTunnelIntent.supportedModes.contains(required))
+            XCTAssertTrue(TunnelStatusIntent.supportedModes.contains(required))
+            XCTAssertTrue(SetTunnelEnabledIntent.supportedModes.contains(required))
         }
     }
 

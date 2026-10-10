@@ -21,8 +21,8 @@ private struct VPNProvider: TimelineProvider {
     }
     private func entry() async -> VPNEntry {
         let now = Date()
-        let state = (try? await SystemTunnelControl.status()) ?? .unavailable
-        return VPNEntry(date: now, snapshot: SystemSurfaceStore.read().reconciled(with: state, at: now))
+        let snapshot = (try? await SystemTunnelControl.surfaceSnapshot()) ?? SystemSurfaceStore.read()
+        return VPNEntry(date: now, snapshot: snapshot)
     }
 }
 
@@ -60,9 +60,7 @@ private struct VPNControlProvider: ControlValueProvider {
         } catch {
             TunnelDiagnostics.recordControlFailure(error, stage: "Control status read")
             // A transient NE IPC error must not permanently disable the control.
-            let snapshot = SystemSurfaceStore.read()
-            guard (0...30).contains(Date().timeIntervalSince(snapshot.updatedAt)) else { return false }
-            return snapshot.serviceState == .running || snapshot.serviceState == .starting
+            return SystemSurfaceStore.read().controlDisplayEnabled(at: Date())
         }
     }
 }

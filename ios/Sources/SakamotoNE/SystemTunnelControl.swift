@@ -2,8 +2,9 @@ import Foundation
 import NetworkExtension
 import SakamotoKit
 
-/// Extensions operate only on this app's already-authorized provider profile.
-/// They never create a profile, read private app config, or persist credentials.
+/// Operates only on this app's already-authorized provider profile. System
+/// actions execute in the containing app; extension readers may use the
+/// display-only App Group observation if no manager is visible to their host.
 @MainActor
 public enum SystemTunnelControl {
     private static let requests = SystemTunnelRequestGate()
@@ -14,10 +15,21 @@ public enum SystemTunnelControl {
         return NETunnelController.serviceState(for: manager.connection.status)
     }
 
+    /// No visible manager is an unknown observation, not proof of Off. When
+    /// available, native status always overrides the shared display snapshot.
+    public static func surfaceSnapshot() async throws -> SystemSurfaceSnapshot {
+        let manager = try await configuredManager()
+        let saved = SystemSurfaceStore.read()
+        let state = manager.map { NETunnelController.serviceState(for: $0.connection.status) } ?? saved.serviceState
+        return saved.reconciled(with: state, at: Date())
+    }
+
     /// Control reads can arrive before a cold accepted Start reaches NE status.
     /// Raw status() remains an immediate observation for other callers.
     public static func controlEnabled() async throws -> Bool {
-        guard let manager = try await configuredManager() else { return false }
+        guard let manager = try await configuredManager() else {
+            return SystemSurfaceStore.read().controlDisplayEnabled(at: Date())
+        }
         return try await SystemTunnelTransition.controlValue(
             state: { NETunnelController.serviceState(for: manager.connection.status) },
             snapshot: { SystemSurfaceStore.read() })
@@ -119,8 +131,12 @@ public enum SystemTunnelControl {
         }
         guard let manager = managers.first(where: {
             ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == providerIdentifier
-        }) else { return nil }
+        }) else {
+            TunnelDiagnostics.recordControlProfileRead(managerCount: managers.count, matched: false, nativeStatus: nil)
+            return nil
+        }
         try await manager.loadFromPreferences()
+        TunnelDiagnostics.recordControlProfileRead(managerCount: managers.count, matched: true, nativeStatus: manager.connection.status.rawValue)
         return manager
     }
 
