@@ -36,8 +36,8 @@ For a source build in this repository, use `./sakamoto setup` instead. `setup` l
 
 ## Android
 
-The first official Android client is available from
-[Android v0.1.0](https://github.com/pi-dal/sakamoto/releases/tag/android-v0.1.0).
+The official Android client is available from
+[Android v0.1.3](https://github.com/pi-dal/sakamoto/releases/tag/android-v0.1.3).
 Download the signed APK and verify `SHA256SUMS`. Android 7.0+ is supported;
 configuration and servers are supplied by the user. Native VPN diagnostics,
 node/group editing, widgets, notification controls and optional experiments
@@ -58,6 +58,7 @@ mise trust
 mise install
 mise run ci:check
 mise run icons
+mise run cli:build                      # optimized arm64/Intel CLI + resources
 mise run ios:build                       # macOS + Xcode
 mise run ios:package                     # simulator .app zip
 mise -E android install
@@ -70,6 +71,16 @@ mise -E android run android:install     # attached Pixel, USB debugging
 pinned by the checked-in wrapper; SDK packages are installed by the
 mise-managed Android SDK. Language dependency management is unchanged.
 The Homebrew tap above remains an end-user distribution option.
+
+`mise run cli:build` packages the macOS CLI and TUI together for arm64 and Intel
+in `dist/cli`, with setup scripts, launchd templates, example configurations,
+checksums and build metadata. On macOS it verifies an ad-hoc code signature.
+Release binaries use `-trimpath`, stripped debug information, and the shared
+`scripts/go-size-profile.json` policy. Standard-library networking/crypto and
+TUI rendering packages keep their default inlining. The macOS builder keeps CGO
+enabled for upstream native TLS/certificate-store helpers and requires the Xcode
+command-line tools. Ordinary `go build` remains available for debugging; no build
+task installs services or changes the live VPN.
 
 ## Interface
 

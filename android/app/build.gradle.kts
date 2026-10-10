@@ -21,10 +21,26 @@ android {
         // flavor split — see android/README.md "API levels".
         minSdk = 24
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.1.2"
-        testInstrumentationRunner = "com.pidal.sakamoto.NativeBindingSmokeTest"
+        versionCode = 5
+        versionName = "0.1.3"
+        testInstrumentationRunner = if (providers.gradleProperty("sakamotoTestBuildType").orNull == "release") {
+            "com.pidal.sakamoto.ReleaseBindingSmokeTest"
+        } else {
+            "com.pidal.sakamoto.NativeBindingSmokeTest"
+        }
     }
+
+    // Keep debug APK/test output paths compatible; the release script requests
+    // all ABI-specific installers plus a universal fallback in one build.
+    splits {
+        abi {
+            isEnable = providers.gradleProperty("sakamotoAbiSplits").orNull == "true"
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+            isUniversalApk = true
+        }
+    }
+    testBuildType = providers.gradleProperty("sakamotoTestBuildType").orNull ?: "debug"
 
     signingConfigs {
         if (releaseStore != null) create("official") {
@@ -38,7 +54,8 @@ android {
     buildTypes {
         release {
             if (releaseStore != null) signingConfig = signingConfigs.getByName("official")
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             isDebuggable = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

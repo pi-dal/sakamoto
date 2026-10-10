@@ -37,11 +37,15 @@ description = "Run Go tests, vet, lint and executable build"
 tools.sing-box = "1.14.2"
 run = ["python3 scripts/check-english.py", "go test ./...", "go vet ./...", "go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run ./...", "go build ./cmd/sakamoto"]
 
+[tasks."cli:build"]
+description = "Package optimized macOS arm64 and Intel CLI/TUI binaries with setup resources"
+run = "python3 scripts/build-cli.py"
+
 [tasks."ci:check"]
 description = "Validate Actions, shell scripts and repository text"
 tools.actionlint = "1.7.12"
 tools.shellcheck = "0.11.0"
-run = ["actionlint", "shellcheck android/scripts/*.sh ios/scripts/*.sh", "python3 scripts/check-english.py", "git diff --check"]
+run = ["actionlint", "shellcheck android/scripts/*.sh ios/scripts/*.sh", "python3 scripts/test-mobile-go.py", "python3 scripts/check-english.py", "git diff --check"]
 
 [tasks."ios:libbox"]
 description = "Build upstream iOS/simulator Libbox framework"

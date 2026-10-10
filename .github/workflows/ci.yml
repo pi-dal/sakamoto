@@ -18,3 +18,11 @@ jobs:
         run: mise run ci:check
       - name: Check and build shared Go code
         run: mise run go:check
+      - name: Package optimized macOS CLI/TUI
+        run: mise run cli:build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sakamoto-cli-${{ github.sha }}
+          path: dist/cli/
+          if-no-files-found: error
+          retention-days: 14

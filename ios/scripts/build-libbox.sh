@@ -25,6 +25,15 @@ fi
 }
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/sakamoto-ios-bind.XXXXXX")"
 trap 'rm -rf "${WORK}"' EXIT
+# go run prepends GOROOT/bin to PATH. The private Apple builder restores this
+# wrapper immediately before gomobile, without changing the installed tools.
+SAKAMOTO_MOBILE_REAL_GO="$(go env GOROOT)/bin/go"
+export SAKAMOTO_MOBILE_REAL_GO
+export SAKAMOTO_MOBILE_SIZE_PROFILE="${REPO_ROOT}/scripts/go-size-profile.json"
+export SAKAMOTO_MOBILE_GO_BIN="${WORK}/compiler-bin"
+mkdir -p "${SAKAMOTO_MOBILE_GO_BIN}"
+cp "${REPO_ROOT}/scripts/mobile-go.py" "${SAKAMOTO_MOBILE_GO_BIN}/go"
+chmod +x "${SAKAMOTO_MOBILE_GO_BIN}/go"
 cp -R "${SOURCE}" "${WORK}/sing-box"
 chmod -R u+w "${WORK}/sing-box"
 
@@ -41,8 +50,12 @@ assert s.count(anchor) == 2, "Upstream bind target drift"
 # Only change the Apple occurrence, never the Android builder.
 pos = s.index('func buildApple()')
 s = s[:pos] + s[pos:].replace(anchor, 'args = append(args, "./experimental/libbox", "github.com/pi-dal/sakamoto/pkg/mobilecore", "github.com/pi-dal/sakamoto/pkg/mobileexperiment", "github.com/pi-dal/sakamoto/pkg/mobilegen")', 1)
+anchor = 'func buildApple() {'
+assert s.count(anchor) == 1, "Upstream Apple builder drift"
+s = s.replace(anchor, anchor + '\n\tif wrapper := os.Getenv("SAKAMOTO_MOBILE_GO_BIN"); wrapper != "" {\n\t\tif err := os.Setenv("PATH", wrapper+string(os.PathListSeparator)+os.Getenv("PATH")); err != nil { panic(err) }\n\t}')
 p.write_text(s)
 PY
+gofmt -w "${WORK}/sing-box/cmd/internal/build_libbox/main.go"
 cd "${WORK}/sing-box"
 # The upstream iOS stubs disable every debug knob, including DERP-only binds.
 # Patch one checked anchor in a private dependency copy; never mutate GOMODCACHE.

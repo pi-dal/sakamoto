@@ -5,6 +5,9 @@ on:
   push:
     branches: [main]
     paths:
+      - 'scripts/mobile-go.py'
+      - 'scripts/go-size-profile.json'
+      - 'scripts/test-mobile-go.py'
       - 'ios/**'
       - 'pkg/**'
       - 'internal/**'
@@ -16,6 +19,9 @@ on:
       - '.github/workflows/ios.yml'
   pull_request:
     paths:
+      - 'scripts/mobile-go.py'
+      - 'scripts/go-size-profile.json'
+      - 'scripts/test-mobile-go.py'
       - 'ios/**'
       - 'pkg/**'
       - 'internal/**'
@@ -72,6 +78,9 @@ jobs:
           restore-keys: |
             ios-go-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.build }}-
 
+      - name: Check mobile compiler policy
+        run: python3 scripts/test-mobile-go.py
+
       - name: Prepare mobile tool paths
         run: mise run mobile:tools
 
@@ -80,7 +89,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ios/Frameworks
-          key: ios-frameworks-v4-combined-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.build }}-${{ hashFiles('mise.toml', 'go.mod', 'go.sum', 'pkg/**', 'internal/**', 'ios/scripts/build-*.sh', 'ios/scripts/patch-tailscale-derp.py', 'ios/scripts/flatten-gomobile-framework.sh', 'ios/scripts/share-libbox.py') }}
+          key: ios-frameworks-v4-combined-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.build }}-${{ hashFiles('mise.toml', 'go.mod', 'go.sum', 'pkg/**', 'internal/**', 'ios/scripts/build-*.sh', 'ios/scripts/patch-tailscale-derp.py', 'ios/scripts/flatten-gomobile-framework.sh', 'ios/scripts/share-libbox.py', 'scripts/mobile-go.py', 'scripts/go-size-profile.json') }}
 
       - name: Build combined Libbox and Mobilecore framework
         if: steps.frameworks.outputs.cache-hit != 'true'

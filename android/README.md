@@ -6,8 +6,10 @@ JNI runtime. Native frameworks and private configuration are never committed.
 
 ## Install the official release
 
-Download `sakamoto-android-v0.1.2.apk` and `SHA256SUMS` from the
-[Android v0.1.2 release](https://github.com/pi-dal/sakamoto/releases/tag/android-v0.1.2).
+Download `sakamoto-android-v0.1.3-arm64-v8a.apk` and `SHA256SUMS` from the
+[Android v0.1.3 release](https://github.com/pi-dal/sakamoto/releases/tag/android-v0.1.3).
+Most current phones use arm64-v8a. Use `sakamoto-android-v0.1.3.apk` as the
+universal fallback when the architecture is unknown.
 Verify the checksum before installation. The APK is a non-debuggable release
 signed with the project's dedicated Android certificate:
 
@@ -15,7 +17,7 @@ signed with the project's dedicated Android certificate:
 SHA-256: a6fb9d4b3070023b52c0efcf254b2cad251fa3fa79cab6eeec2c378f6daa66bc
 ```
 
-The package is `com.pidal.sakamoto`, versionName `0.1.2`, versionCode `4`.
+The package is `com.pidal.sakamoto`, versionName `0.1.3`, versionCode `5`.
 Future official versions retain the signing certificate for upgrades.
 A development APK uses a different debug certificate and cannot be replaced
 in place by the official APK. Preserve/export configuration and credentials
@@ -153,7 +155,7 @@ mise -E android run android:checksum
 # AAR already built:
 mise -E android run android:verify
 
-# Official signature required; testReleaseUnitTest + lintVital + assembleRelease:
+# Official signature required; release tests + lint + universal/ABI APKs:
 mise -E android run android:release
 ```
 
@@ -162,6 +164,28 @@ and NDK 28.2.13676358 are pinned. The upstream builder produces API-24 and
 legacy AARs; this app ships the main API-24 variant only. The combined AAR
 binds `experimental/libbox`, `pkg/mobilecore` and `pkg/mobileexperiment` so
 there is one `go.Seq` and one native library. Do not mix independent AARs.
+Native archive/shared builds use the ordered `scripts/go-size-profile.json`
+compiler policy; standard-library networking/crypto, routing, protocols and
+packet stacks keep their default optimization. The policy is shared with iOS
+and the macOS CLI/TUI, and invalidates the native CI cache when it changes.
+
+Release builds enable R8 and resource shrinking. Keep rules retain all generated
+JNI classes in `io.nekohasekai.libbox`, `io.nekohasekai.mobilecore`,
+`io.nekohasekai.mobileexperiment` and `go`. `release.py` requests ABI splits and
+verifies five APKs: the existing universal filename and installers ending in
+`-arm64-v8a`, `-armeabi-v7a`, `-x86_64` and `-x86`. Most current Android phones use
+arm64-v8a; choose the universal APK if the architecture is unknown. All variants
+have the same application ID, version and release certificate. Splitting reduces
+download size; installed native-library comparisons must use the same ABI.
+Direct Gradle/debug builds retain their existing universal output paths.
+
+For isolated release JNI/UI smoke tests, pass `--instrumentation` to
+`release.py` and install its release test APK alongside a matching signed
+application APK. This selects the Java `ReleaseBindingSmokeTest` runner, which
+uses platform APIs and the kept JNI interfaces; production R8 can remove Kotlin
+helpers and app methods referenced only by tests. It covers all three JNI modules,
+widget layouts/provider registrations and page navigation without starting a VPN.
+The ordinary debug runner retains its additional layout and opt-in VPN checks.
 
 `release.py` requires `SAKAMOTO_ANDROID_KEYSTORE`, `SAKAMOTO_ANDROID_STORE_PASSWORD`,
 `SAKAMOTO_ANDROID_KEY_ALIAS` and `SAKAMOTO_ANDROID_KEY_PASSWORD`, or the owner's

@@ -308,6 +308,16 @@ converts the upstream archive into a dylib while preserving the combined
 public bindings. Its umbrella header exports both Libbox and Mobilecore APIs
 through `import Libbox`. Each process initializes one Go runtime; binding the
 packages separately can initialize two runtimes and crash at startup.
+Release Swift targets use `-Osize`. The Apple builder applies the ordered
+`scripts/go-size-profile.json` compiler policy to Go archive builds through a
+private wrapper; installed gomobile/gobind and the module cache stay unchanged.
+The policy disables inlining outside its explicit optimized-package list while
+preserving standard-library, routing, protocol, crypto and packet-stack settings.
+All upstream feature tags and public bindings remain enabled. Changes to this
+policy invalidate the native framework CI cache. Run
+`python3 scripts/test-mobile-go.py` to check command isolation and override
+ordering. Installed-size comparisons must use final signed device bundles;
+unsigned and signed binaries have different signature overhead.
 `internal/gen` delegates to it, so the iOS importer validates with the exact
 host semantics. On device:
 
