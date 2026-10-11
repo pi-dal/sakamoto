@@ -26,6 +26,7 @@ object ExperimentRuntime {
     @Volatile private var settling = false
     private var attempts = Channel<String>(Channel.RENDEZVOUS)
     private val recoveries = mutableMapOf<String, Int>()
+    @Volatile private var updateDomains: ((String) -> Unit)? = null
     private var context: Context? = null
 
     fun settings(context: Context): Settings {
@@ -68,8 +69,16 @@ object ExperimentRuntime {
         check(prefs.edit().remove("pendingBefore").remove("pendingCandidate").commit())
     }
 
-    fun start(context: Context) {
+    fun prepareContent(context: Context, content: String): String {
+        val settings = settings(context)
+        if (settings.mode != "auto" && !settings.cfRegion) return content
+        val domains = JSONArray(learned(context)).toString()
+        return Mobileexperiment.prepareLiveRulesJSON(content, domains, domains)
+    }
+
+    fun start(context: Context, update: (String) -> Unit) {
         if (job != null) return
+        updateDomains = update
         this.context = context.applicationContext
         activeSettings = settings(context)
         tracker = Mobileexperiment.newExperimentTracker(activeSettings.threshold)
@@ -85,9 +94,14 @@ object ExperimentRuntime {
             }
         }
     }
+    fun quiesce() {
+        val running = job
+        stop()
+        runBlocking { running?.join() }
+    }
     fun stop() {
         scope?.cancel(); scope = null; job = null
-        attempts.close(); tracker = null; context = null; settling = false; recoveries.clear()
+        attempts.close(); tracker = null; updateDomains = null; context = null; settling = false; recoveries.clear()
         _status.value = _status.value.copy(message = "Stopped", pending = false)
     }
     fun connection(events: ConnectionEvents) {
@@ -116,6 +130,7 @@ object ExperimentRuntime {
     }
     private suspend fun promote(context: Context, domain: String) {
         val known = learned(context)
+        val update = updateDomains ?: return
         if (MobilecoreRuntime.state.value.routingMode.lowercase() != "rule") return
         if (domain in known || known.size >= 1000 || !CommandClientRuntime.channelConnected.value) return
         val before = ConfigRepository.load(context)
@@ -134,12 +149,13 @@ object ExperimentRuntime {
             check(prefs.edit().putString("pendingBefore", before.generatedContent).putString("pendingCandidate", candidate).commit())
             ConfigRepository.save(context, before.copy(generatedContent = candidate)); wrote = true
             MobilecoreRuntime.configEvent("modified")
-            check(CommandClientRuntime.reloadService()) { "Reload request failed" }
-            withTimeout(15_000) {
-                delay(250)
-                while (MobilecoreRuntime.state.value.configApplyPending || MobilecoreRuntime.state.value.configState != "Clean") delay(100)
-            }
+            // The live inline rule-set affects future connections only. Keep
+            // the core/TUN/Tailscale instance and established SSH streams.
+            update(JSONArray(known + domain).toString())
+            currentCoroutineContext().ensureActive()
+            check(ConfigRepository.load(context).generatedContent == candidate) { "Configuration changed during learning" }
             check(MobilecoreRuntime.state.value.serviceState == "Running" && CommandClientRuntime.channelConnected.value)
+            MobilecoreRuntime.completeConfigApply()
             check(context.getSharedPreferences("experiments", Context.MODE_PRIVATE).edit().putString("learned", JSONArray(known + domain).toString()).remove("pendingBefore").remove("pendingCandidate").commit())
             _status.value = Status("Learned proxy route applied", known.size + 1)
         } catch (cancelled: CancellationException) {
@@ -150,7 +166,13 @@ object ExperimentRuntime {
         } catch (_: Exception) {
             if (wrote && ConfigRepository.load(context).generatedContent == candidate) {
                 ConfigRepository.save(context, before)
-                CommandClientRuntime.reloadService()
+                try {
+                    update(JSONArray(known).toString())
+                    MobilecoreRuntime.completeConfigApply()
+                } catch (_: Exception) {
+                    _status.value = Status("Learning rollback failed; reconnect", known.size)
+                    return // Keep the journal for next-start recovery.
+                }
             }
             context.getSharedPreferences("experiments", Context.MODE_PRIVATE).edit().remove("pendingBefore").remove("pendingCandidate").commit()
             _status.value = Status("Learning failed; previous configuration restored", known.size)

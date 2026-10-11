@@ -29,8 +29,9 @@ import SakamotoKit
 final class TailscaleController: ObservableObject {
     @Published private(set) var endpoints: [TailscaleEndpointSummary] = []
     @Published private(set) var lastError: String?
-    /// Present while a peer ping is in flight (tag -> result when done).
+    /// Recent probe samples, scoped by endpoint and peer.
     @Published private(set) var pingResults: [String: TailscalePingOutcome] = [:]
+    private var pingRequests: [String: UUID] = [:]
     /// Mirrors the command channel: false means "no tunnel / no status".
     @Published private(set) var channelActive = false
 
@@ -47,8 +48,15 @@ final class TailscaleController: ObservableObject {
         self.commanding = commanding
     }
 
-    fileprivate func recordPingResult(peerID: String, outcome: TailscalePingOutcome) {
-        pingResults[peerID] = outcome
+    fileprivate func recordPingResult(key: String, requestID: UUID, attachmentID: UUID, outcome: TailscalePingOutcome) {
+        guard channelActive, self.attachmentID == attachmentID, pingRequests[key] == requestID else { return }
+        pingResults[key] = outcome
+    }
+
+    func pingResult(endpointTag: String, peerID: String, now: Date = Date()) -> TailscalePingOutcome? {
+        guard channelActive, let result = pingResults[endpointTag + "/" + peerID],
+              now.timeIntervalSince(result.measuredAt) < 60 else { return nil }
+        return result
     }
 
     struct TailscalePingOutcome: Equatable {
@@ -57,6 +65,7 @@ final class TailscaleController: ObservableObject {
         var viaRelay: String?
         var derpRegion: String?
         var error: String?
+        var measuredAt = Date()
 
         var pathDescription: String {
             if isDirect == true { return "direct" }
@@ -143,6 +152,8 @@ final class TailscaleController: ObservableObject {
         statusHandler = nil
         client = nil
         retryDelay = NSEC_PER_SEC
+        pingResults = [:]
+        pingRequests = [:]
     }
 
     // MARK: Actions
@@ -158,7 +169,11 @@ final class TailscaleController: ObservableObject {
 
     func ping(endpointTag: String, peer: TailscalePeerSummary) async {
         guard let address = peer.tailscaleIPs.first else { return }
-        let handler = PingHandler(controller: self, peerID: peer.stableID)
+        let key = endpointTag + "/" + peer.stableID
+        let requestID = UUID()
+        pingRequests[key] = requestID
+        pingResults.removeValue(forKey: key)
+        let handler = PingHandler(controller: self, key: key, requestID: requestID, attachmentID: attachmentID)
         await run { (client: LibboxCommandClient) in
             // The session reports once through the handler and is closed
             // below after a bounded wait (a one-shot probe, not a stream).
@@ -297,11 +312,13 @@ private final class StatusHandler: NSObject, LibboxTailscaleStatusHandlerProtoco
 
 private final class PingHandler: NSObject, LibboxTailscalePingHandlerProtocol {
     private weak var controller: TailscaleController?
-    private let peerID: String
+    private let key: String
+    private let requestID: UUID
+    private let attachmentID: UUID
 
-    init(controller: TailscaleController, peerID: String) {
+    init(controller: TailscaleController, key: String, requestID: UUID, attachmentID: UUID) {
         self.controller = controller
-        self.peerID = peerID
+        self.key = key; self.requestID = requestID; self.attachmentID = attachmentID
     }
 
     func onPingResult(_ result: LibboxTailscalePingResult?) {
@@ -316,7 +333,8 @@ private final class PingHandler: NSObject, LibboxTailscalePingHandlerProtocol {
             error: result.error.isEmpty ? nil : result.error
         )
         Task { @MainActor [weak self] in
-            self?.controller?.recordPingResult(peerID: self?.peerID ?? "", outcome: outcome)
+            guard let self else { return }
+            self.controller?.recordPingResult(key: self.key, requestID: self.requestID, attachmentID: self.attachmentID, outcome: outcome)
         }
     }
 
@@ -325,7 +343,8 @@ private final class PingHandler: NSObject, LibboxTailscalePingHandlerProtocol {
             latencyMS: nil, isDirect: nil, viaRelay: nil, derpRegion: nil, error: message
         )
         Task { @MainActor [weak self] in
-            self?.controller?.recordPingResult(peerID: self?.peerID ?? "", outcome: outcome)
+            guard let self else { return }
+            self.controller?.recordPingResult(key: self.key, requestID: self.requestID, attachmentID: self.attachmentID, outcome: outcome)
         }
     }
 }

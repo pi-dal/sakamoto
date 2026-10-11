@@ -1,0 +1,67 @@
+package tailscale
+
+import (
+    "context"
+    "io"
+    "net"
+    "testing"
+    "time"
+    "github.com/sagernet/sing-box/adapter"
+    "github.com/sagernet/sing-box/common/dialer"
+    "github.com/sagernet/sing-box/log"
+    "github.com/sagernet/sing-box/option"
+    "github.com/sagernet/sing-box/route"
+    M "github.com/sagernet/sing/common/metadata"
+    "github.com/sagernet/sing/service"
+)
+
+type mobilePlatform struct { adapter.PlatformInterface }
+func (mobilePlatform) UnderNetworkExtension() bool { return true }
+
+func TestSakamotoMobileTransportSurvivesGlobalResetAndClosesWithEndpoint(t *testing.T) {
+    listener, err := net.Listen("tcp", "127.0.0.1:0")
+    if err != nil { t.Fatal(err) }
+    defer listener.Close()
+    go func() {
+        for {
+            conn, err := listener.Accept(); if err != nil { return }
+            go func() { defer conn.Close(); io.Copy(conn, conn) }()
+        }
+    }()
+    logger := log.NewNOPFactory().Logger()
+    ctx := service.ContextWithDefaultRegistry(context.Background())
+    original := route.NewConnectionManager(logger)
+    service.MustRegister[adapter.ConnectionManager](ctx, original)
+    service.MustRegister[adapter.PlatformInterface](ctx, mobilePlatform{})
+    child, owner := mobileTransportContext(ctx, logger)
+    if owner == nil || owner == original { t.Fatal("missing private transport owner") }
+    if service.FromContext[adapter.ConnectionManager](ctx) != original { t.Fatal("parent registry was modified") }
+    ordinary, err := dialer.NewDefault(ctx, option.DialerOptions{}); if err != nil { t.Fatal(err) }
+    protected, err := dialer.NewDefault(child, option.DialerOptions{}); if err != nil { t.Fatal(err) }
+    dial := func(d *dialer.DefaultDialer) net.Conn {
+        conn, err := d.DialContext(ctx, "tcp", M.ParseSocksaddr(listener.Addr().String()))
+        if err != nil { t.Fatal(err) }; t.Cleanup(func() { conn.Close() }); return conn
+    }
+    normal, tailnet := dial(ordinary), dial(protected)
+    echo := func(conn net.Conn) {
+        conn.SetDeadline(time.Now().Add(2*time.Second))
+        if _, err := conn.Write([]byte("pty")); err != nil { t.Fatal(err) }
+        result := make([]byte, 3)
+        if _, err := io.ReadFull(conn, result); err != nil { t.Fatal(err) }
+        if string(result) != "pty" { t.Fatal("echo mismatch") }
+    }
+    echo(tailnet)
+    for range 5 { original.CloseAll(); echo(tailnet) }
+    if _, err := normal.Write([]byte("closed")); err == nil { t.Fatal("ordinary proxy socket was incorrectly retained") }
+    endpoint := &Endpoint{transportConnections: owner, taildrop: &taildropManager{}}
+    if err := endpoint.Close(); err != nil { t.Fatal(err) }
+    if _, err := tailnet.Write([]byte("closed")); err == nil { t.Fatal("private transport leaked after owner close") }
+}
+
+func TestSakamotoDesktopKeepsGlobalConnectionPolicy(t *testing.T) {
+    ctx := service.ContextWithDefaultRegistry(context.Background())
+    owner := route.NewConnectionManager(log.NewNOPFactory().Logger())
+    service.MustRegister[adapter.ConnectionManager](ctx, owner)
+    child, private := mobileTransportContext(ctx, log.NewNOPFactory().Logger())
+    if child != ctx || private != nil { t.Fatal("desktop transport policy changed") }
+}

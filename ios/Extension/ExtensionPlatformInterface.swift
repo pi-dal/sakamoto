@@ -41,7 +41,22 @@ import UserNotifications
 
 final class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtocol, LibboxCommandServerHandlerProtocol {
     private let tunnel: SakamotoPacketTunnelProvider
-    private var networkSettings: NEPacketTunnelNetworkSettings?
+    private let networkSettingsLock = NSLock()
+    private let networkSettingsQueue = DispatchQueue(label: "com.pidal.sakamoto.network-settings")
+    private var storedNetworkSettings: NEPacketTunnelNetworkSettings?
+    private var networkSettings: NEPacketTunnelNetworkSettings? {
+        get { networkSettingsLock.lock(); defer { networkSettingsLock.unlock() }; return storedNetworkSettings }
+        set { networkSettingsLock.lock(); defer { networkSettingsLock.unlock() }; storedNetworkSettings = newValue }
+    }
+
+    private func configureNetwork(_ work: @escaping () async throws -> Void) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            networkSettingsQueue.async {
+                do { try runBlocking(work); continuation.resume() }
+                catch { continuation.resume(throwing: error) }
+            }
+        }
+    }
 
     init(_ tunnel: SakamotoPacketTunnelProvider) {
         self.tunnel = tunnel
@@ -233,7 +248,10 @@ final class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoco
         }
 
         networkSettings = settings
-        try await tunnel.setTunnelNetworkSettings(settings)
+        try await configureNetwork {
+            guard self.networkSettings === settings, self.tunnel.canConfigureNetwork() else { throw CancellationError() }
+            try await self.tunnel.setTunnelNetworkSettings(settings)
+        }
 
         if let tunFd = tunnel.packetFlow.value(forKeyPath: "socket.fileDescriptor") as? Int32 {
             ret0_.pointee = tunFd
@@ -410,22 +428,38 @@ final class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoco
     }
 
     func clearDNSCache() {
-        guard let networkSettings else {
-            return
-        }
-        runBlocking {
-            self.tunnel.reasserting = true
-            defer { self.tunnel.reasserting = false }
-            await withCheckedContinuation { continuation in
-                self.tunnel.setTunnelNetworkSettings(nil) { _ in
-                    continuation.resume()
+        do {
+            try runBlocking {
+                try await self.configureNetwork {
+                    guard let settings = self.networkSettings, self.tunnel.canConfigureNetwork() else { return }
+                    let started = Date()
+                    var withdrawn = false
+                    self.tunnel.reasserting = true
+                    defer { self.tunnel.reasserting = false }
+                    self.tunnel.writeTunnelMessage("(packet-tunnel) system DNS flush started")
+                    do {
+                        try await self.tunnel.setTunnelNetworkSettings(nil)
+                        withdrawn = true
+                        guard self.networkSettings === settings, self.tunnel.canConfigureNetwork() else { return }
+                        try await self.tunnel.setTunnelNetworkSettings(settings)
+                        self.tunnel.writeTunnelMessage("(packet-tunnel) system DNS flush completed; elapsed_ms=\(Int(Date().timeIntervalSince(started) * 1000))")
+                    } catch {
+                        // Restore only this runtime's settings. A stopping or
+                        // replacement provider must never receive the old set.
+                        if withdrawn, self.networkSettings === settings, self.tunnel.canConfigureNetwork() {
+                            do { try await self.tunnel.setTunnelNetworkSettings(settings) }
+                            catch {
+                                self.tunnel.cancelTunnelWithError(error)
+                                throw error
+                            }
+                        }
+                        throw error
+                    }
                 }
             }
-            await withCheckedContinuation { continuation in
-                self.tunnel.setTunnelNetworkSettings(networkSettings) { _ in
-                    continuation.resume()
-                }
-            }
+        } catch {
+            TunnelDiagnostics.record(stage: "System DNS flush", error: error)
+            tunnel.writeTunnelMessage("(packet-tunnel) system DNS flush failed: \(TunnelDiagnostics.sanitized(error.localizedDescription))")
         }
     }
 
@@ -567,7 +601,10 @@ final class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoco
         proxySettings.httpsEnabled = enabled
         networkSettings.proxySettings = proxySettings
         try runBlocking {
-            try await self.tunnel.setTunnelNetworkSettings(networkSettings)
+            try await self.configureNetwork {
+                guard self.networkSettings === networkSettings, self.tunnel.canConfigureNetwork() else { throw CancellationError() }
+                try await self.tunnel.setTunnelNetworkSettings(networkSettings)
+            }
         }
     }
 

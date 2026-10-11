@@ -72,7 +72,7 @@ class TunnelBoxService(
 
     var fileDescriptor: ParcelFileDescriptor? = null
 
-    private var commandServer: CommandServer? = null
+    @Volatile private var commandServer: CommandServer? = null
     @Volatile private var reloading = false
     @Volatile private var starting = false
 
@@ -142,7 +142,8 @@ class TunnelBoxService(
             DefaultNetworkMonitor.start()
             // The one libbox entry point that runs the box: the same call
             // upstream makes with its profile content.
-            server.startOrReloadService(content, OverrideOptions())
+            server.startOrReloadService(com.pidal.sakamoto.runtime.ExperimentRuntime.prepareContent(service, content), OverrideOptions())
+            check(server.isServiceRunning()) { "Core startup was interrupted" }
             if (server.needWIFIState()) {
                 // Wi-Fi rule matching would need location permissions this
                 // client does not request yet — refuse instead of misbehaving.
@@ -151,7 +152,8 @@ class TunnelBoxService(
             }
             MobilecoreRuntime.setServiceState("Running")
             if (!ConfigRepository.load(service).sourceNeedsGenerate) MobilecoreRuntime.completeConfigApply()
-            com.pidal.sakamoto.runtime.ExperimentRuntime.start(service)
+            val instanceID = server.runningInstanceID()
+            com.pidal.sakamoto.runtime.ExperimentRuntime.start(service) { domains -> server.updateAutomaticDomains(domains, instanceID) }
             CommandClientRuntime.start()
             showForegroundNotification(starting = false)
             com.pidal.sakamoto.runtime.SystemStatusSurface.start(service)
@@ -178,6 +180,7 @@ class TunnelBoxService(
     /** CommandServerHandler: the core asked for a reload with current staged config. */
     override fun serviceReload() {
         val server = commandServer ?: return
+        com.pidal.sakamoto.runtime.ExperimentRuntime.quiesce()
         try {
             val base = ConfigRepository.readGeneratedContent(service)
             if (base == null) {
@@ -195,7 +198,10 @@ class TunnelBoxService(
             }
             MobilecoreRuntime.beginConfigApply()
             reloading = true
-            server.startOrReloadService(content, OverrideOptions())
+            server.startOrReloadService(com.pidal.sakamoto.runtime.ExperimentRuntime.prepareContent(service, content), OverrideOptions())
+            check(server.isServiceRunning()) { "Core reload was interrupted" }
+            val instanceID = server.runningInstanceID()
+            com.pidal.sakamoto.runtime.ExperimentRuntime.start(service) { domains -> server.updateAutomaticDomains(domains, instanceID) }
             MobilecoreRuntime.setServiceState("Running")
             MobilecoreRuntime.completeConfigApply()
             showForegroundNotification(starting = false)

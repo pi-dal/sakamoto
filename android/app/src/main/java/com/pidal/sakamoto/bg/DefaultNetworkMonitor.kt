@@ -19,14 +19,20 @@ object DefaultNetworkMonitor {
     private var underlyingChanged: ((Network?) -> Unit)? = null
     private val networks = linkedMapOf<Network, NetworkCapabilities>()
     private val links = mutableMapOf<Network, LinkProperties>()
+    private data class Snapshot(val network: Network?, val linkSignature: String, val capabilitiesSignature: String, val index: Int)
+    private var lastInterface: Snapshot? = null
+    private var underlyingInitialized = false
+    private var lastUnderlying: Network? = null
 
     fun setListener(value: InterfaceUpdateListener?) = synchronized(lock) {
         listener = value
+        lastInterface = null
         notifyCurrent()
     }
 
     fun setUnderlyingListener(value: ((Network?) -> Unit)?) = synchronized(lock) {
         underlyingChanged = value
+        underlyingInitialized = false
         notifyCurrent()
     }
 
@@ -85,6 +91,7 @@ object DefaultNetworkMonitor {
         networks.clear(); links.clear()
         listener = null
         underlyingChanged = null
+        lastInterface = null; lastUnderlying = null; underlyingInitialized = false
     }
 
     private fun eligible(capabilities: NetworkCapabilities): Boolean =
@@ -104,13 +111,20 @@ object DefaultNetworkMonitor {
 
     private fun notifyCurrent() {
         val network = chooseNetwork()
-        underlyingChanged?.invoke(network)
+        if (underlyingChanged != null && (!underlyingInitialized || lastUnderlying != network)) {
+            underlyingChanged?.invoke(network)
+            lastUnderlying = network; underlyingInitialized = true
+        }
         val name = network?.let { links[it]?.interfaceName }
+        val index = name?.let { runCatching { NetworkInterface.getByName(it)?.index ?: -1 }.getOrDefault(-1) } ?: -1
+        val snapshot = Snapshot(network, network?.let { links[it]?.toString() ?: "" } ?: "",
+            network?.let { networks[it]?.toString() ?: "" } ?: "", index)
+        if (listener == null || snapshot == lastInterface) return
+        lastInterface = snapshot
         if (network == null || name == null) {
             listener?.updateDefaultInterface("", -1, false, false)
             return
         }
-        val index = runCatching { NetworkInterface.getByName(name)?.index ?: -1 }.getOrDefault(-1)
         val expensive = !networks.getValue(network).hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
         listener?.updateDefaultInterface(name, index, expensive, false)
     }

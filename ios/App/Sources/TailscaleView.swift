@@ -335,7 +335,7 @@ struct TailscaleView: View {
             .font(.footnote)
             .sakamotoGlassButton()
             .disabled(!controller.channelActive)
-            if let result = controller.pingResults[peer.stableID] {
+            if let result = controller.pingResult(endpointTag: endpoint.endpointTag, peerID: peer.stableID) {
                 Text(result.error ?? "\(result.latencyMS ?? 0) ms · \(result.pathDescription)")
                     .font(.footnote.monospacedDigit())
                     .foregroundStyle(.primary)

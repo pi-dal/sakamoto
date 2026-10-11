@@ -21,7 +21,7 @@ final class ProviderExperimentTests: XCTestCase {
     }
     override func tearDown() async throws { try? FileManager.default.removeItem(at: root) }
 
-    func testCorrelatedFailureUpdatesActualReloadAndPrivateLearnedState() async throws {
+    func testCorrelatedFailureUpdatesLiveDomainsAndPrivateLearnedState() async throws {
         var settings = ExperimentSettings(); settings.mode = .auto; settings.threshold = 1
         var applied: [String] = []
         let id = UUID().uuidString
@@ -37,14 +37,13 @@ final class ProviderExperimentTests: XCTestCase {
         }
         XCTAssertEqual(try ExperimentFiles.read(profileID: id, root: root).learned, ["learned.example"])
         XCTAssertEqual(applied.count, 1)
-        XCTAssertTrue(applied[0].contains("learned.example"))
-        XCTAssertLessThan(try XCTUnwrap(applied[0].range(of: "explicit.example")?.lowerBound), try XCTUnwrap(applied[0].range(of: "learned.example")?.lowerBound))
+        XCTAssertEqual(applied[0], "[\"learned.example\"]")
         try await runner.remove("learned.example")
         XCTAssertTrue(try ExperimentFiles.read(profileID: id, root: root).learned.isEmpty)
         XCTAssertFalse(applied.last!.contains("learned.example"))
         await runner.quiesce()
     }
-    func testReloadFailureDoesNotPublishLearnedDomainAndRestoresOldConfig() async throws {
+    func testLiveUpdateFailureDoesNotPublishLearnedDomainAndRestoresOldDomains() async throws {
         var settings = ExperimentSettings(); settings.mode = .auto; settings.threshold = 1
         var attempts: [String] = []
         let id = UUID().uuidString, before = try runtime()
@@ -62,7 +61,7 @@ final class ProviderExperimentTests: XCTestCase {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
         XCTAssertEqual(attempts.count, 2)
-        XCTAssertEqual(attempts.last, before)
+        XCTAssertEqual(attempts.last, "[]")
         XCTAssertTrue(try ExperimentFiles.read(profileID: id, root: root).learned.isEmpty)
         await runner.quiesce()
     }

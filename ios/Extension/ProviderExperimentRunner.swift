@@ -9,7 +9,6 @@ final class ProviderExperimentRunner {
     private let root: URL
     let profileID: String
     let settings: ExperimentSettings
-    private var content: String
     private let apply: (String) async throws -> Void
     private var client: LibboxCommandClient?
     private var handler: ExperimentCommandHandler?
@@ -40,7 +39,7 @@ final class ProviderExperimentRunner {
     init(profileID: String, settings: ExperimentSettings, content: String, root: URL, recoveryCommands: RecoveryCommands? = nil, apply: @escaping (String) async throws -> Void) throws {
         try settings.validate()
         _ = try ExperimentFiles.directory(profileID: profileID, root: root)
-        self.profileID = profileID; self.settings = settings; self.content = content
+        self.profileID = profileID; self.settings = settings
         self.root = root; self.apply = apply; self.recoveryCommands = recoveryCommands
         state = try ExperimentFiles.read(profileID: profileID, root: root)
         var error: NSError?
@@ -53,12 +52,13 @@ final class ProviderExperimentRunner {
         let settings = try JSONDecoder().decode(ExperimentSettings.self, from: Data(raw.utf8))
         try settings.validate()
         let state = try ExperimentFiles.read(profileID: id, root: root)
-        // Only committed domains survive a cold start. An interrupted reload
-        // cannot publish its candidate learned list to the next session.
+        // Reserve one live slot even when the committed list is empty.
+        // Later learning changes matching for new flows without restarting
+        // Tailscale or discarding an existing SSH/PTY session.
         var content = options.configContent
-        if settings.mode == .auto || settings.cfRegionBlock, !state.learned.isEmpty {
+        if settings.mode == .auto || settings.cfRegionBlock {
             var error: NSError?
-            content = MobileexperimentOwnedRulesJSON(content, "[]", json(state.learned), &error)
+            content = MobileexperimentPrepareLiveRulesJSON(content, "[]", json(state.learned), &error)
             if let error { throw error }
         }
         return (content, settings)
@@ -162,15 +162,10 @@ final class ProviderExperimentRunner {
         try await task.value
     }
     private func replaceLearned(_ next: [String]) async throws {
-        let previous = content
-        var error: NSError?
-        let active = settings.mode == .auto || settings.cfRegionBlock
-        let candidate = MobileexperimentOwnedRulesJSON(content, Self.json(active ? state.learned : []), Self.json(active ? next : []), &error)
-        if let error { throw error }
-        _ = LibboxCheckConfig(candidate, &error)
-        if let error { throw error }
+        let previous = Self.json(state.learned)
+        let candidate = Self.json(next)
         guard connected, !stopped, !editsPending(), mode == "rule" else { throw TunnelProfile.InvalidProfile("Automatic changes require Rule mode and a live tunnel") }
-        status("Validating learned route")
+        status("Updating learned routes")
         do {
             try await apply(candidate)
             try Task.checkCancellation()
@@ -178,7 +173,7 @@ final class ProviderExperimentRunner {
             guard !editsPending() else { throw TunnelProfile.InvalidProfile("Profile edits arrived during learning; previous runtime restored") }
             var updated = state; updated.learned = next; updated.status = "Learned routes applied"; updated.updatedAt = Date()
             try ExperimentFiles.write(updated, profileID: profileID, root: root)
-            state = updated; content = candidate
+            state = updated
         } catch {
             // Roll back the actual service as well as its display state. If
             // rollback fails, keep a loud failure, not a false success.

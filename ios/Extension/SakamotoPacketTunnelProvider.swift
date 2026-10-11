@@ -34,6 +34,8 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
     private var commandServer: LibboxCommandServer?
     private var tunnelStartOptions: TunnelStartOptions?
     @MainActor private var experimentRunner: ProviderExperimentRunner?
+    private let operationGate = TunnelOperationGate()
+    @MainActor private var appliedFingerprint: String?
 
     /// Preferences carried through start options (upstream Override-
     /// Preferences). Read by ExtensionPlatformInterface when the core opens
@@ -81,6 +83,7 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
     // MARK: Lifecycle (mirrors sing-box-for-apple ExtensionProvider)
 
     override open func startTunnel(options startOptions: [String: NSObject]?) async throws {
+        operationGate.start()
         TunnelDiagnostics.clear()
         do {
             try await startTunnelService(options: startOptions)
@@ -154,6 +157,7 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override open func stopTunnel(with reason: NEProviderStopReason) async {
+        operationGate.stop()
         SystemSurfaceStore.write(SystemSurfaceSnapshot(serviceState: .stopping, phase: .stopping))
         defer {
             SystemSurfaceStore.write(SystemSurfaceSnapshot(serviceState: .stopped, phase: .disconnected))
@@ -186,7 +190,7 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
         switch request {
         case .ping:
             let snapshot = TunnelStateSnapshot(
-                serviceState: commandServer != nil ? .running : .unavailable,
+                serviceState: operationGate.state ?? (commandServer?.isServiceRunning() == true ? .running : .unavailable),
                 detail: nil
             )
             return try? TunnelResponse(ok: true, state: snapshot).encode()
@@ -199,7 +203,6 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
         case .reloadProfile(let options):
             do {
                 try await applyProfile(options)
-                tunnelStartOptions = options
                 TunnelDiagnostics.clear()
                 return try? TunnelResponse(ok: true).encode()
             } catch {
@@ -211,7 +214,6 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
                 var options = tunnelStartOptions ?? TunnelStartOptions(configContent: content)
                 options.configContent = content
                 try await applyProfile(options)
-                tunnelStartOptions = options
                 TunnelDiagnostics.clear()
                 return try? TunnelResponse(ok: true).encode()
             } catch {
@@ -222,12 +224,16 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override open func sleep() async {
+        writeTunnelMessage("(packet-tunnel) ne-sleep; core_running=\(commandServer?.isServiceRunning() == true)")
         commandServer?.pause()
     }
 
     override open func wake() {
+        writeTunnelMessage("(packet-tunnel) ne-wake; core_running=\(commandServer?.isServiceRunning() == true)")
         commandServer?.wake()
     }
+
+    func canConfigureNetwork() -> Bool { operationGate.state != .stopping }
 
     // MARK: Service control
 
@@ -248,7 +254,16 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
         try await runner.remove(domain)
     }
     @MainActor private func applyProfile(_ options: TunnelStartOptions) async throws {
+        guard let ticket = operationGate.beginApply() else {
+            throw ProviderStartupError("Configuration application is already running or the VPN is stopping")
+        }
+        defer { operationGate.finishApply(ticket) }
         let root = URL(fileURLWithPath: try Paths.sharedDirectory())
+        let fingerprint = try? TunnelRuntimeFingerprint.make(options: options, baseDirectory: root)
+        if let fingerprint, fingerprint == appliedFingerprint, commandServer?.isServiceRunning() == true {
+            writeTunnelMessage("(packet-tunnel) unchanged runtime retained; existing sessions preserved")
+            return
+        }
         let (content, settings) = try ProviderExperimentRunner.prepared(options, root: root)
         // Preflight before closing the previous monitor or service.
         var error: NSError?
@@ -256,20 +271,24 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
         if let error { throw error }
         let previous = tunnelStartOptions
         await stopExperiments()
+        guard operationGate.isCurrent(ticket) else { throw CancellationError() }
         do {
-            try await startService(content: content, forceDERP: options.forceTailscaleDERP == true)
+            try await startService(content: content, forceDERP: options.forceTailscaleDERP == true, ticket: ticket)
+            guard operationGate.isCurrent(ticket) else { throw CancellationError() }
             try startExperiments(options: options, settings: settings, content: content, root: root)
             tunnelStartOptions = options
+            appliedFingerprint = fingerprint
             TunnelConfigurationReceiptStore.record(options)
         } catch {
             // startOrReloadService can close the old service before rejecting
             // its replacement. Restore both runtime and monitor, not just NE
             // preferences in the app process.
-            if let previous {
+            if let previous, operationGate.isCurrent(ticket) {
                 do {
                     await stopExperiments()
                     let (oldContent, oldSettings) = try ProviderExperimentRunner.prepared(previous, root: root)
-                    try await startService(content: oldContent, forceDERP: previous.forceTailscaleDERP == true)
+                    try await startService(content: oldContent, forceDERP: previous.forceTailscaleDERP == true, ticket: ticket)
+                    guard operationGate.isCurrent(ticket) else { throw CancellationError() }
                     try startExperiments(options: previous, settings: oldSettings, content: oldContent, root: root)
                 } catch {
                     TunnelDiagnostics.record(stage: "VPN reload rollback", error: error)
@@ -282,33 +301,53 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
 
     @MainActor private func startExperiments(options: TunnelStartOptions, settings: ExperimentSettings?, content: String, root: URL) throws {
         guard let id = options.profileID, let settings else { return }
+        let instanceID = commandServer?.runningInstanceID() ?? 0
         let runner = try ProviderExperimentRunner(profileID: id, settings: settings, content: content, root: root) { [weak self] candidate in
-            guard let self else { throw ProviderStartupError("Provider stopped") }
-            try await self.startService(content: candidate, forceDERP: options.forceTailscaleDERP == true)
+            guard let self, let server = self.commandServer, self.operationGate.state == nil else {
+                throw ProviderStartupError("Provider stopped or configuration is being applied")
+            }
+            let started = Date()
+            try await Task.detached(priority: .userInitiated) {
+                try server.updateAutomaticDomains(candidate, expectedInstanceID: instanceID)
+            }.value
+            self.writeTunnelMessage("(packet-tunnel) automatic rules updated without core reload; elapsed_ms=\(Int(Date().timeIntervalSince(started) * 1000))")
         }
         experimentRunner = runner; runner.start()
     }
 
-    @MainActor private func startService(content: String, forceDERP: Bool) async throws {
+    @MainActor private func startService(content: String, forceDERP: Bool, ticket: UInt64) async throws {
         guard let commandServer else {
             throw ProviderStartupError("(sakamoto) command server not started")
         }
         // Libbox's synchronous start calls openTun, which blocks while its
         // async network-settings callback runs. Never hold the main actor
         // across that native call (or starve lifecycle/IPC callbacks).
+        let gate = operationGate
+        let started = Date()
+        writeTunnelMessage("(packet-tunnel) core apply started")
         try await Task.detached(priority: .userInitiated) {
+            guard gate.isCurrent(ticket) else { throw CancellationError() }
             if MobilegenTailscaleForceDERPEnabled() != forceDERP {
                 // Rebuild peer sockets only after closing the previous service.
                 // An atomic policy alone cannot close an already-direct socket.
                 try commandServer.closeService()
                 MobilegenSetTailscaleForceDERP(forceDERP)
             }
+            guard gate.isCurrent(ticket) else { throw CancellationError() }
             try commandServer.startOrReloadService(content, options: LibboxOverrideOptions())
+            guard gate.isCurrent(ticket), commandServer.isServiceRunning() else {
+                // Stop may win between the check above and the native call.
+                // Close this captured server's late result, never publish it.
+                try? commandServer.closeService()
+                throw CancellationError()
+            }
         }.value
+        writeTunnelMessage("(packet-tunnel) core apply completed; elapsed_ms=\(Int(Date().timeIntervalSince(started) * 1000))")
     }
 
     /// CommandServerHandler.serviceStop entry point (ExtensionPlatformInterface).
     func stopTunnelService() {
+        operationGate.stop()
         do {
             try commandServer?.closeService()
         } catch {
