@@ -39,6 +39,9 @@ final class TailscaleController: ObservableObject {
     private var subscription: LibboxTailscaleStatusSubscription?
     private var statusHandler: StatusHandler?
     private var availabilityTask: Task<Void, Never>?
+    private var subscriptionTask: Task<Void, Never>?
+    private var attachmentID = UUID()
+    private var retryDelay: UInt64 = NSEC_PER_SEC
 
     init(commanding: LibboxCoreCommanding?) {
         self.commanding = commanding
@@ -52,7 +55,15 @@ final class TailscaleController: ObservableObject {
         var latencyMS: Int32?
         var isDirect: Bool?
         var viaRelay: String?
+        var derpRegion: String?
         var error: String?
+
+        var pathDescription: String {
+            if isDirect == true { return "direct" }
+            if let viaRelay, !viaRelay.isEmpty { return "peer-relay(\(viaRelay))" }
+            if let derpRegion, !derpRegion.isEmpty { return "DERP(\(derpRegion))" }
+            return "relayed"
+        }
     }
 
     func subscribe() {
@@ -64,8 +75,8 @@ final class TailscaleController: ObservableObject {
         availabilityTask = Task { [weak self] in
             let availability = commanding.availability()
             for await active in availability {
-                guard let self else { return }
-                await self.handleChannel(active)
+                guard let self, !Task.isCancelled else { return }
+                self.handleChannel(active)
             }
         }
     }
@@ -73,29 +84,20 @@ final class TailscaleController: ObservableObject {
     func cancel() {
         availabilityTask?.cancel()
         availabilityTask = nil
+        channelActive = false
         detach()
         endpoints = []
         lastError = nil
     }
 
-    @MainActor
-    private func handleChannel(_ active: Bool) async {
+    private func handleChannel(_ active: Bool) {
         channelActive = active
         if active {
-            guard let commanding, subscription == nil, let client = commanding.currentClient else { return }
-            statusHandler = StatusHandler(controller: self)
-            do {
-                let handler = statusHandler!
-                let subscription = try await Task.detached(priority: .userInitiated) {
-                    try client.subscribeTailscaleStatus(handler)
-                }.value
-                self.client = client
-                self.subscription = subscription
-                lastError = nil
-            } catch {
-                statusHandler = nil
-                lastError = "tailscale status: \(error.localizedDescription)"
-            }
+            guard let client = commanding?.currentClient else { return }
+            if self.client === client, subscription != nil || subscriptionTask != nil { return }
+            detach()
+            self.client = client
+            attach(after: 0)
         } else {
             detach()
             endpoints = []
@@ -103,11 +105,44 @@ final class TailscaleController: ObservableObject {
         }
     }
 
+    private func attach(after delay: UInt64) {
+        guard subscriptionTask == nil, channelActive, let client else { return }
+        let id = UUID()
+        attachmentID = id
+        subscriptionTask = Task { [weak self] in
+            if delay > 0 {
+                do { try await Task.sleep(nanoseconds: delay) } catch { return }
+            }
+            guard let self, !Task.isCancelled, self.attachmentID == id else { return }
+            let handler = StatusHandler(controller: self, attachmentID: id)
+            self.statusHandler = handler
+            do {
+                let attached = try await Task.detached(priority: .userInitiated) {
+                    try client.subscribeTailscaleStatus(handler)
+                }.value
+                // cancel()/channel replacement may run while the bind call
+                // is suspended. Close that result rather than reattaching it.
+                guard !Task.isCancelled, self.attachmentID == id, self.channelActive else {
+                    try? attached.close()
+                    return
+                }
+                self.subscription = attached
+                self.subscriptionTask = nil
+            } catch {
+                self.applyError("tailscale status: \(error.localizedDescription)", attachmentID: id)
+            }
+        }
+    }
+
     private func detach() {
+        attachmentID = UUID()
+        subscriptionTask?.cancel()
+        subscriptionTask = nil
         try? subscription?.close()
         subscription = nil
         statusHandler = nil
         client = nil
+        retryDelay = NSEC_PER_SEC
     }
 
     // MARK: Actions
@@ -128,8 +163,8 @@ final class TailscaleController: ObservableObject {
             // The session reports once through the handler and is closed
             // below after a bounded wait (a one-shot probe, not a stream).
             let session = try client.startTailscalePing(endpointTag, peerIP: address, handler: handler)
+            defer { try? session.close() }
             try await Task.sleep(nanoseconds: 5 * NSEC_PER_SEC)
-            try? session.close()
         }
     }
 
@@ -149,15 +184,22 @@ final class TailscaleController: ObservableObject {
 
     // MARK: Status intake (MainActor)
 
-    fileprivate func applySummaries(_ summaries: [TailscaleEndpointSummary]) {
+    fileprivate func applySummaries(_ summaries: [TailscaleEndpointSummary], attachmentID: UUID) {
+        guard self.attachmentID == attachmentID, channelActive else { return }
         endpoints = summaries
         lastError = nil
+        retryDelay = NSEC_PER_SEC
     }
 
-    fileprivate func applyError(_ message: String?) {
-        // Stream-level errors while attached (endpoint stopped, core
-        // reload); show the cause, the channel watcher re-attaches.
-        lastError = message
+    fileprivate func applyError(_ message: String?, attachmentID: UUID) {
+        guard self.attachmentID == attachmentID, channelActive else { return }
+        lastError = message ?? "tailscale status stream disconnected"
+        let delay = retryDelay
+        let client = self.client
+        detach()
+        self.client = client
+        retryDelay = min(delay * 2, 8 * NSEC_PER_SEC)
+        attach(after: delay)
     }
 
     // MARK: Mapping (pure, unit-testable)
@@ -228,23 +270,27 @@ final class TailscaleController: ObservableObject {
 
 private final class StatusHandler: NSObject, LibboxTailscaleStatusHandlerProtocol {
     private weak var controller: TailscaleController?
+    private let attachmentID: UUID
 
-    init(controller: TailscaleController) {
+    init(controller: TailscaleController, attachmentID: UUID) {
         self.controller = controller
+        self.attachmentID = attachmentID
     }
 
     func onStatusUpdate(_ status: LibboxTailscaleStatusUpdate?) {
         // Libbox calls on its own thread; the mapping is pure, the publish
         // hop is MainActor.
         let summaries = TailscaleController.map(status)
-        Task { @MainActor [weak self] in
-            self?.controller?.applySummaries(summaries)
+        let id = attachmentID
+        Task { @MainActor [weak controller] in
+            controller?.applySummaries(summaries, attachmentID: id)
         }
     }
 
     func onError(_ message: String?) {
-        Task { @MainActor [weak self] in
-            self?.controller?.applyError(message)
+        let id = attachmentID
+        Task { @MainActor [weak controller] in
+            controller?.applyError(message, attachmentID: id)
         }
     }
 }
@@ -264,6 +310,9 @@ private final class PingHandler: NSObject, LibboxTailscalePingHandlerProtocol {
             latencyMS: result.error.isEmpty ? Int32(result.latencyMs) : nil,
             isDirect: result.error.isEmpty ? result.isDirect : nil,
             viaRelay: result.peerRelay.isEmpty ? nil : result.peerRelay,
+            derpRegion: result.derpRegionCode.isEmpty
+                ? (result.derpRegionID > 0 ? "#\(result.derpRegionID)" : nil)
+                : result.derpRegionCode,
             error: result.error.isEmpty ? nil : result.error
         )
         Task { @MainActor [weak self] in
@@ -273,7 +322,7 @@ private final class PingHandler: NSObject, LibboxTailscalePingHandlerProtocol {
 
     func onError(_ message: String?) {
         let outcome = TailscaleController.TailscalePingOutcome(
-            latencyMS: nil, isDirect: nil, viaRelay: nil, error: message
+            latencyMS: nil, isDirect: nil, viaRelay: nil, derpRegion: nil, error: message
         )
         Task { @MainActor [weak self] in
             self?.controller?.recordPingResult(peerID: self?.peerID ?? "", outcome: outcome)

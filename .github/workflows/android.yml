@@ -5,6 +5,7 @@ on:
   push:
     branches: [main]
     paths:
+      - 'scripts/patch-libbox-network.py'
       - 'scripts/mobile-go.py'
       - 'scripts/go-size-profile.json'
       - 'scripts/test-mobile-go.py'
@@ -18,6 +19,7 @@ on:
       - '.github/workflows/android.yml'
   pull_request:
     paths:
+      - 'scripts/patch-libbox-network.py'
       - 'scripts/mobile-go.py'
       - 'scripts/go-size-profile.json'
       - 'scripts/test-mobile-go.py'
@@ -80,7 +82,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: android/app/libs/libbox.aar
-          key: android-libbox-v4-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise*.toml', 'go.mod', 'go.sum', 'pkg/**', 'internal/**', 'android/scripts/build-libbox.sh', 'scripts/mobile-go.py', 'scripts/go-size-profile.json') }}
+          key: android-libbox-v4-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise*.toml', 'go.mod', 'go.sum', 'pkg/**', 'internal/**', 'android/scripts/build-libbox.sh', 'scripts/patch-libbox-network.py', 'scripts/mobile-go.py', 'scripts/go-size-profile.json') }}
 
       - name: Build upstream libbox
         if: steps.libbox.outputs.cache-hit != 'true'

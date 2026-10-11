@@ -36,6 +36,8 @@ cp "${REPO_ROOT}/scripts/mobile-go.py" "${SAKAMOTO_MOBILE_GO_BIN}/go"
 chmod +x "${SAKAMOTO_MOBILE_GO_BIN}/go"
 cp -R "${SOURCE}" "${WORK}/sing-box"
 chmod -R u+w "${WORK}/sing-box"
+python3 "${REPO_ROOT}/scripts/patch-libbox-network.py" "${WORK}/sing-box"
+gofmt -w "${WORK}/sing-box/experimental/libbox/command_server.go" "${WORK}/sing-box/experimental/libbox/monitor.go"
 
 python3 - "${WORK}/sing-box/cmd/internal/build_libbox/main.go" <<'PY'
 from pathlib import Path

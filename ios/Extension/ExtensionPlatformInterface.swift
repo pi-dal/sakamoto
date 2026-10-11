@@ -1,6 +1,7 @@
 import Foundation
 import Libbox
 import NetworkExtension
+import SakamotoKit
 import UserNotifications
 
 // Ported (iOS subset) from SagerNet/sing-box-for-apple, dev branch:
@@ -264,26 +265,42 @@ final class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoco
         let monitor = NWPathMonitor()
         nwMonitor = monitor
         let semaphore = DispatchSemaphore(value: 0)
-        monitor.pathUpdateHandler = { path in
-            self.onUpdateDefaultInterface(listener, path)
-            semaphore.signal()
-            monitor.pathUpdateHandler = { path in
-                self.onUpdateDefaultInterface(listener, path)
+        var initialized = false
+        monitor.pathUpdateHandler = { [weak self, weak monitor] path in
+            defer {
+                if !initialized {
+                    initialized = true
+                    semaphore.signal()
+                }
             }
+            guard let self, let monitor, self.nwMonitor === monitor else { return }
+            self.onUpdateDefaultInterface(listener, path)
         }
-        monitor.start(queue: DispatchQueue.global())
-        semaphore.wait()
+        // Serialize path updates; concurrent callbacks can publish an older
+        // interface after a newer one. Keep the same handler after startup.
+        monitor.start(queue: DispatchQueue(label: "com.pidal.sakamoto.network-path"))
+        guard semaphore.wait(timeout: .now() + 10) == .success else {
+            monitor.cancel()
+            if nwMonitor === monitor { nwMonitor = nil }
+            throw NSError(domain: "ExtensionPlatformInterface", code: 0,
+                          userInfo: [NSLocalizedDescriptionKey: "Timed out waiting for the initial network path"])
+        }
     }
 
     private func onUpdateDefaultInterface(_ listener: LibboxInterfaceUpdateListenerProtocol, _ path: Network.NWPath) {
         let networkPath = describeNetworkPath(path)
-        listener.updateNetworkPath(networkPath)
-        if networkPath == lastNetworkPath {
-            return
+        if networkPath != lastNetworkPath {
+            listener.updateNetworkPath(networkPath)
+            if lastNetworkPath != nil {
+                tunnel.writeTunnelMessage("(packet-tunnel) network path changed: \(networkPath)")
+            }
+            lastNetworkPath = networkPath
         }
-        lastNetworkPath = networkPath
+        // NWPath's description can stay identical after DHCP/IP changes.
+        // Always refresh native details; libbox deduplicates the full snapshot.
         guard path.status != .unsatisfied,
-              let defaultInterface = path.availableInterfaces.first
+              let defaultInterface = path.availableInterfaces.first(where: { path.usesInterfaceType($0.type) })
+                ?? path.availableInterfaces.first
         else {
             listener.updateDefaultInterface("", interfaceIndex: -1, isExpensive: false, isConstrained: false)
             return
@@ -341,11 +358,16 @@ final class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoco
         if path.status == .unsatisfied {
             return networkInterfaceArray([])
         }
+        let nativeInterfaces = try NativeNetworkInterface.read()
         var interfaces: [LibboxNetworkInterface] = []
         for it in path.availableInterfaces {
+            guard let native = nativeInterfaces[it.name] else { continue }
             let interface = LibboxNetworkInterface()
             interface.name = it.name
             interface.index = Int32(it.index)
+            interface.flags = Int32(bitPattern: native.flags)
+            interface.mtu = Int32(clamping: native.mtu)
+            interface.addresses = native.addresses.toStringIterator()
             switch it.type {
             case .wifi:
                 interface.type = LibboxInterfaceTypeWIFI

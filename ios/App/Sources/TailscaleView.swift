@@ -336,7 +336,7 @@ struct TailscaleView: View {
             .sakamotoGlassButton()
             .disabled(!controller.channelActive)
             if let result = controller.pingResults[peer.stableID] {
-                Text(result.error ?? (result.isDirect == true ? "\(result.latencyMS ?? 0) ms direct" : "\(result.latencyMS ?? 0) ms"))
+                Text(result.error ?? "\(result.latencyMS ?? 0) ms · \(result.pathDescription)")
                     .font(.footnote.monospacedDigit())
                     .foregroundStyle(.primary)
             }

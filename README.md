@@ -37,7 +37,7 @@ For a source build in this repository, use `./sakamoto setup` instead. `setup` l
 ## Android
 
 The official Android client is available from
-[Android v0.1.3](https://github.com/pi-dal/sakamoto/releases/tag/android-v0.1.3).
+[Android v0.1.4](https://github.com/pi-dal/sakamoto/releases/tag/android-v0.1.4).
 Download the signed APK and verify `SHA256SUMS`. Android 7.0+ is supported;
 configuration and servers are supplied by the user. Native VPN diagnostics,
 node/group editing, widgets, notification controls and optional experiments

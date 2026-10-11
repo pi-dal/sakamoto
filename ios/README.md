@@ -24,6 +24,24 @@ tunnel process; this is not a CLI probe and not an external-daemon count).
 | Control Center control | Native VPN toggle on iOS 18+, directly operates the saved profile without opening the app |
 | App Store Connect signing | distribution export verified with Team `6Y2YB464VU`, NetworkExtension, shared App Group and production iCloud entitlements; device VPN behavior still needs runtime verification |
 
+## Tailscale network recovery
+
+The iOS interface adapter supplies native IPv4/IPv6 prefixes, flags and MTU
+alongside NWPath interface identity. Every path callback refreshes these details,
+including IP changes whose NWPath description remains unchanged. The checked
+`scripts/patch-libbox-network.py` patch is applied to private libbox build copies
+on iOS and Android; unchanged interface snapshots remain deduplicated, while
+address/flag/MTU changes reach the existing network and Tailscale monitors.
+Explicit iOS wake immediately resumes the core; the minute timer remains a
+fallback when the system omits a wake callback.
+
+Tailscale status subscriptions retry independently of the shared command channel
+and reject stale callbacks after cancellation. Peer Ping displays direct,
+DERP region, peer relay, or an unspecified relay. These changes target network
+recovery, but sustained SSH sessions across switching networks and background
+intervals still require physical-device verification. An explicit configuration
+reload or tunnel process termination still rebuilds the shared Tailscale core.
+
 ## SimAgentationPlus simulator debugging
 
 With a simulator already booted, run from the repository root:
