@@ -112,7 +112,7 @@ func TestHTTPSProxyActuallyRewritesAndClearPassesThrough(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer p.Close()
+	defer func() { _ = p.Close() }()
 	roots := x509.NewCertPool()
 	roots.AddCert(ca.Leaf)
 	p.transport.TLSClientConfig = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
@@ -124,7 +124,7 @@ func TestHTTPSProxyActuallyRewritesAndClearPassesThrough(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		b, _ := io.ReadAll(resp.Body)
 		return b
 	}
@@ -166,7 +166,7 @@ func TestAuthorityProfileAndTrustServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	response, err := http.Get(s.DownloadURL())
 	if err != nil {
 		t.Fatal(err)

@@ -31,7 +31,7 @@ func TestOrdinaryHTTPUsesOriginalLocalProxy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer p.Close()
+	defer func() { _ = p.Close() }()
 	if err := p.SetFallback(strings.TrimPrefix(original.URL, "http://")); err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestUpstreamBodyStallHasAWholeRequestDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer p.Close()
+	defer func() { _ = p.Close() }()
 	transport := &http.Transport{Proxy: http.ProxyURL(proxyURL(p.Port()))}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 15 * time.Second}
