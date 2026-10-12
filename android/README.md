@@ -6,9 +6,9 @@ JNI runtime. Native frameworks and private configuration are never committed.
 
 ## Install the official release
 
-Download `sakamoto-android-v0.1.5-arm64-v8a.apk` and `SHA256SUMS` from the
-[Android v0.1.5 release](https://github.com/pi-dal/sakamoto/releases/tag/android-v0.1.5).
-Most current phones use arm64-v8a. Use `sakamoto-android-v0.1.5.apk` as the
+Download `sakamoto-android-v0.1.6-arm64-v8a.apk` and `SHA256SUMS` from the
+[Android v0.1.6 release](https://github.com/pi-dal/sakamoto/releases/tag/android-v0.1.6).
+Most current phones use arm64-v8a. Use `sakamoto-android-v0.1.6.apk` as the
 universal fallback when the architecture is unknown.
 Verify the checksum before installation. The APK is a non-debuggable release
 signed with the project's dedicated Android certificate:
@@ -17,7 +17,7 @@ signed with the project's dedicated Android certificate:
 SHA-256: a6fb9d4b3070023b52c0efcf254b2cad251fa3fa79cab6eeec2c378f6daa66bc
 ```
 
-The package is `com.pidal.sakamoto`, versionName `0.1.5`, versionCode `7`.
+The package is `com.pidal.sakamoto`, versionName `0.1.6`, versionCode `8`.
 Future official versions retain the signing certificate for upgrades.
 A development APK uses a different debug certificate and cannot be replaced
 in place by the official APK. Preserve/export configuration and credentials

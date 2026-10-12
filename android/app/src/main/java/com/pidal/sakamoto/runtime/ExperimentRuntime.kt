@@ -3,6 +3,7 @@ package com.pidal.sakamoto.runtime
 import android.content.Context
 import com.pidal.sakamoto.command.CommandClientRuntime
 import io.nekohasekai.mobileexperiment.Mobileexperiment
+import io.nekohasekai.mobilecore.Mobilecore
 import io.nekohasekai.libbox.ConnectionEvents
 import io.nekohasekai.libbox.Libbox
 import kotlinx.coroutines.*
@@ -70,10 +71,11 @@ object ExperimentRuntime {
     }
 
     fun prepareContent(context: Context, content: String): String {
+        val connected = Mobilecore.prepareTailscaleConnectivityJSON(content)
         val settings = settings(context)
-        if (settings.mode != "auto" && !settings.cfRegion) return content
+        if (settings.mode != "auto" && !settings.cfRegion) return connected
         val domains = JSONArray(learned(context)).toString()
-        return Mobileexperiment.prepareLiveRulesJSON(content, domains, domains)
+        return Mobileexperiment.prepareLiveRulesJSON(connected, domains, domains)
     }
 
     fun start(context: Context, update: (String) -> Unit) {

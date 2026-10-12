@@ -8,6 +8,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.10.1
 	github.com/sagernet/gomobile v0.1.12
 	github.com/sagernet/sing-box v1.14.2
+	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba
 	golang.org/x/net v0.57.0
 	google.golang.org/grpc v1.79.1
 	google.golang.org/protobuf v1.36.12
@@ -76,7 +77,6 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.1 // indirect
 	go.uber.org/zap/exp v0.3.0 // indirect
-	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba // indirect
 	golang.org/x/crypto v0.54.0 // indirect
 	golang.org/x/exp v0.0.0-20260410095643-746e56fc9e2f // indirect
 	golang.org/x/mod v0.37.0 // indirect

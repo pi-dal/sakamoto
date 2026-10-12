@@ -48,14 +48,17 @@ final class ProviderExperimentRunner {
     }
 
     static func prepared(_ options: TunnelStartOptions, root: URL) throws -> (String, ExperimentSettings?) {
-        guard let id = options.profileID, let raw = options.experimentJSON else { return (options.configContent, nil) }
+        var preparationError: NSError?
+        let connected = MobilecorePrepareTailscaleConnectivityJSON(options.configContent, &preparationError)
+        if let preparationError { throw preparationError }
+        guard let id = options.profileID, let raw = options.experimentJSON else { return (connected, nil) }
         let settings = try JSONDecoder().decode(ExperimentSettings.self, from: Data(raw.utf8))
         try settings.validate()
         let state = try ExperimentFiles.read(profileID: id, root: root)
         // Reserve one live slot even when the committed list is empty.
         // Later learning changes matching for new flows without restarting
         // Tailscale or discarding an existing SSH/PTY session.
-        var content = options.configContent
+        var content = connected
         if settings.mode == .auto || settings.cfRegionBlock {
             var error: NSError?
             content = MobileexperimentPrepareLiveRulesJSON(content, "[]", json(state.learned), &error)

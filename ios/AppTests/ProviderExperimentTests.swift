@@ -130,6 +130,28 @@ final class ProviderExperimentTests: XCTestCase {
         await runner.quiesce()
     }
 
+    func testTailnetBypassIsRepairedEvenWithoutExperimentMetadata() throws {
+        let config = """
+        {"endpoints":[{"type":"tailscale","tag":"tailnet"}],"inbounds":[{"type":"tun","tag":"tun-in","address":["172.18.0.1/30"],"auto_route":true,"route_exclude_address":["100.64.0.0/10","fc00::/7","10.0.0.0/8"]}],"outbounds":[{"type":"direct","tag":"direct"}],"route":{"final":"direct","rules":[{"action":"sniff"},{"protocol":"dns","action":"hijack-dns"},{"ip_is_private":true,"action":"route","outbound":"direct"}]}}
+        """
+        for experiment in [nil, String(decoding: try JSONEncoder().encode(ExperimentSettings()), as: UTF8.self)] {
+            let options = TunnelStartOptions(configContent: config, profileID: UUID().uuidString, experimentJSON: experiment)
+            let prepared = try ProviderExperimentRunner.prepared(options, root: root)
+            let parsed = try XCTUnwrap(JSONValueFactory.parse(prepared.0))
+            let excluded = try XCTUnwrap(parsed["inbounds"]?.arrayValue?.first?["route_exclude_address"]?.arrayValue).compactMap(\.stringValue)
+            XCTAssertTrue(excluded.contains("10.0.0.0/8"))
+            XCTAssertFalse(excluded.contains("100.64.0.0/10"))
+            XCTAssertFalse(excluded.contains("fc00::/7"))
+            let rules = try XCTUnwrap(parsed["route"]?["rules"]?.arrayValue)
+            XCTAssertEqual(rules[2]["preferred_by"]?.arrayValue?.first?.stringValue, "tailnet")
+            XCTAssertEqual(rules[3]["outbound"]?.stringValue, "tailnet")
+            var error: NSError?
+            _ = LibboxCheckConfig(prepared.0, &error)
+            XCTAssertNil(error)
+            XCTAssertEqual(try ProviderExperimentRunner.prepared(options, root: root).0, prepared.0)
+        }
+    }
+
     func testColdStartRestoresOnlyCommittedLearnedRules() throws {
         var settings = ExperimentSettings(); settings.mode = .auto
         let id = UUID().uuidString
