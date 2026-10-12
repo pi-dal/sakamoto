@@ -69,6 +69,9 @@
     <string name="notification_disabled">Notifications remain disabled</string>
     <string name="notification_required_for_status">Allow notifications to see VPN status and controls while the tunnel runs.</string>
     <string name="notification_note">While the VPN runs, its notification shows mode, selected node, network-check result and experiments. Actions disconnect, check connectivity or request recovery. Source URLs, credentials and learned domain names are not exposed.</string>
+    <string name="notification_manage">Manage Sakamoto notification</string>
+    <string name="vpn_indicator_title">System VPN indicator</string>
+    <string name="vpn_indicator_android_note">Android controls the VPN key/shield icon in the system status bar. Apps cannot hide it while a VpnService is active. This page can open Sakamoto’s notification settings, but disabling that notification only hides Sakamoto’s own foreground notification; it does not hide the system VPN indicator. Disconnect the VPN to remove the system indicator.</string>
     <string name="editor_fields">Configuration</string>
     <string name="editor_discard_title">Discard unsaved changes?</string>
     <string name="editor_discard_message">Your edits have not been saved.</string>

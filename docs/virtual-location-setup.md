@@ -55,7 +55,14 @@ On Android, the foreground service injects route positions with fresh timestamps
 
 MapKit renders/searches through Apple's map services. Android uses the public OpenFreeMap Liberty vector style (OpenMapTiles/OpenStreetMap data) and the public Photon geocoder. Map attribution remains visible in the editor, and Android **About → Map licenses** includes the SDK notice. Photon searches are submit-only, cancellable, bounded to 12 seconds and 256 KiB, spaced by at least one second, and cached for the last 50 queries; no autocomplete or location tracking request is sent to Photon. These public endpoints offer no availability guarantee, so map load failures expose **Retry map**, and place-search failures keep map selection and advanced inputs usable.
 
-## Diagnostic reports
+## System VPN indicator
+
+The VPN icon shown in the device status bar is controlled by the operating system and cannot be hidden by Sakamoto while the tunnel is active.
+
+- **iOS:** the Packet Tunnel Network Extension has no public API to suppress or replace the iOS VPN status indicator. Disconnecting the VPN is the supported way to remove it. The explanation appears under Settings → Widgets & Shortcuts → VPN status indicator.
+- **Android:** Android documents a VPN key icon in the status bar for an active `VpnService`, and requires a foreground service notification while the VPN runs. Settings → Widget & notifications → System VPN indicator explains this and opens Android's Sakamoto notification settings. Disabling Sakamoto's own notification may remove its notification entry, but it does not remove Android's system VPN icon; disconnecting the VPN does.
+
+This is separate from Sakamoto's own widgets, notification content and notification permission. Those controls can change app surfaces but cannot suppress the operating system's privacy indicator.
 
 Reports include the app/OS version, selected coordinates, timestamps, runtime evidence and the observed position. They exclude VPN configuration, authentication keys and CA private keys. Review the coordinates before sharing.
 

@@ -38,7 +38,12 @@ class SystemSurfacesFragment : androidx.fragment.app.Fragment() {
             if (Build.VERSION.SDK_INT >= 33) notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
             else startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, requireContext().packageName))
         }
+        page.button(notification, getString(R.string.notification_manage)) {
+            startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, requireContext().packageName))
+        }
         page.note(getString(R.string.notification_note))
+        val vpnIndicator = page.section(getString(R.string.vpn_indicator_title))
+        page.paragraph(vpnIndicator, getString(R.string.vpn_indicator_android_note))
         return page.root
     }
 }
