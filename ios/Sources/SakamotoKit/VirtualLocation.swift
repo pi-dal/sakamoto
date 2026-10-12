@@ -5,13 +5,16 @@ public struct VirtualLocationSettings: Codable, Equatable, Sendable {
     public var latitude: Double = 0
     public var longitude: Double = 0
     public var accuracy = 25
-    public init(enabled: Bool = false, latitude: Double = 0, longitude: Double = 0, accuracy: Int = 25) {
-        self.enabled = enabled; self.latitude = latitude; self.longitude = longitude; self.accuracy = accuracy
+    public var route: VirtualLocationRoute?
+    public init(enabled: Bool = false, latitude: Double = 0, longitude: Double = 0, accuracy: Int = 25, route: VirtualLocationRoute? = nil) {
+        self.enabled = enabled; self.latitude = latitude; self.longitude = longitude; self.accuracy = accuracy; self.route = route
     }
     public func validate() throws {
         guard latitude.isFinite, longitude.isFinite, (-90...90).contains(latitude), (-180...180).contains(longitude), (1...1000).contains(accuracy) else {
             throw TunnelProfile.InvalidProfile("Use latitude -90 to 90, longitude -180 to 180, and accuracy 1 to 1000 meters")
         }
+        if route != nil && !enabled { throw TunnelProfile.InvalidProfile("Moving routes require enabled simulation") }
+        try route?.validate()
     }
     public func json() throws -> String { try validate(); return String(decoding: try JSONEncoder().encode(self), as: UTF8.self) }
 }
@@ -26,6 +29,11 @@ public struct VirtualLocationSnapshot: Codable, Equatable, Sendable {
     public var lastRequest: Int64 = 0
     public var lastPatch: Int64 = 0
     public var error = ""
+    public var route: VirtualLocationRoute?
+    public var routeState: String?
+    public var routeElapsed: Double?
+    public var latitude: Double?
+    public var longitude: Double?
     public init() {}
 }
 
@@ -42,13 +50,16 @@ public struct SavedLocation: Codable, Equatable, Identifiable, Sendable {
 public enum VirtualLocationStore {
     public static let key = "sakamoto.location.settings"
     private static let favoritesKey = "sakamoto.location.favorites"
+    private static let routeKey = "sakamoto.location.routeDraft"
     public static var defaults: UserDefaults? { UserDefaults(suiteName: SystemSurfaceStore.groupIdentifier) }
     public static func load(defaults: UserDefaults? = defaults) -> VirtualLocationSettings {
         guard let data = defaults?.data(forKey: key), let value = try? JSONDecoder().decode(VirtualLocationSettings.self, from: data), (try? value.validate()) != nil else { return VirtualLocationSettings() }
         return value
     }
     public static func save(_ value: VirtualLocationSettings, defaults: UserDefaults? = defaults) throws {
-        try value.validate(); defaults?.set(try JSONEncoder().encode(value), forKey: key)
+        try value.validate()
+        var fixed = value; fixed.route = nil // Routes require an explicit start in a live VPN session.
+        defaults?.set(try JSONEncoder().encode(fixed), forKey: key)
     }
     public static func favorites(defaults: UserDefaults? = defaults) -> [SavedLocation] {
         guard let data = defaults?.data(forKey: favoritesKey) else { return [] }
@@ -59,5 +70,10 @@ public enum VirtualLocationStore {
     public static func saveFavorites(_ values: [SavedLocation], defaults: UserDefaults? = defaults) throws {
         defaults?.set(try JSONEncoder().encode(Array(values.prefix(20))), forKey: favoritesKey)
     }
+    public static func routeDraft(defaults: UserDefaults? = defaults) -> VirtualLocationRoute? {
+        guard let data = defaults?.data(forKey: routeKey), data.count <= 4096, let route = try? JSONDecoder().decode(VirtualLocationRoute.self, from: data), (try? route.validate()) != nil else { return nil }
+        return route
+    }
+    public static func saveRouteDraft(_ route: VirtualLocationRoute, defaults: UserDefaults? = defaults) throws { try route.validate(); defaults?.set(try JSONEncoder().encode(route), forKey: routeKey) }
     public static var supportsNetworkSimulation: Bool { ProcessInfo.processInfo.operatingSystemVersion.majorVersion < 27 }
 }

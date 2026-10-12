@@ -1,6 +1,6 @@
 # Virtual location setup
 
-Available from **Settings → Virtual location**. This release supports a fixed WGS84 coordinate, accuracy, saved favorites, explicit start/stop and diagnostic export. Enter decimal degrees; coordinates copied from GCJ-02 or BD-09 maps must first be converted to WGS84.
+Available from **Settings → Virtual location**. This release supports fixed WGS84 coordinates and moving routes, accuracy, saved favorites, explicit start/stop and diagnostic export. Enter decimal degrees; coordinates copied from GCJ-02 or BD-09 maps must first be converted to WGS84.
 
 ## iOS 26
 
@@ -24,7 +24,28 @@ The CA is unique to the device. Its private key stays in the existing App Group'
 4. Use **Check reported location** and the injection counters to verify the fix. Google-certified devices use fused mock mode as well as GPS/network providers. Devices without usable Google Play services use GPS/network providers.
 5. Stop from the page or notification. Sakamoto removes owned test providers and requests Google mock-mode exit. If cleanup cannot be confirmed, the page requires **Stop simulation** recovery before starting again; reselect Sakamoto in Developer options if authorization was withdrawn.
 
-Android marks injected fixes as mock, and apps can reject them. Updates run once per second while the service is scheduled; battery saving can delay them. Simulation never automatically resumes at boot. A pending cleanup is retained across restarts, so a previous unconfirmed session can require one Stop action before a new start. Apps may retain cached fixes after stopping.
+Android marks injected fixes as mock, and apps can reject them. Fixed-point updates run once per second while the service is scheduled; routes use their configured interval. battery saving can delay them. Simulation never automatically resumes at boot. A pending cleanup is retained across restarts, so a previous unconfirmed session can require one Stop action before a new start. Apps may retain cached fixes after stopping.
+
+## Moving routes
+
+In **Moving route**, enter 2 to 32 WGS84 points in travel order, one decimal `latitude, longitude` pair per line. For example, this illustrative path contains three points:
+
+```text
+22.500000, 114.000000
+22.505000, 114.005000
+22.510000, 114.015000
+```
+
+Set a **Duration** of 10 to 86400 seconds for the whole route and an **Update interval** of 1 to 10 seconds. **Start route** begins a new run at the first point. Points are connected along their shortest spherical arcs and distance, rather than point count, determines time spent on each leg. This follows the entered path; it does not calculate driving/walking roads or import GPX.
+
+- **Pause route** holds the current point and freezes elapsed route time. **Resume route** continues from that progress without restarting.
+- **Stop route and hold position** keeps simulation enabled at the current point. Turn the main simulation switch off, or use Android's notification Stop, to restore real positioning.
+- At completion the simulated point stays at the exact endpoint. A new Start restarts the route; completion does not loop.
+- Route drafts persist for editing. Routes require an explicit start and never automatically replay after a VPN reconnect or location-service restart.
+
+On iOS, connect the VPN and verify CA trust before starting. The VPN extension advances the route when the app page closes; only new intercepted WLOC responses receive the then-current target. The route progress alone cannot prove that iOS reports continuous movement. Measure the reported location separately.
+
+On Android, the foreground service injects route positions with fresh timestamps, speed and bearing, including fused mock mode where available. It continues after leaving the page. Wall-clock changes do not affect route timing on either platform; delayed ticks catch up to elapsed monotonic time. Device scheduling can still delay actual injection.
 
 ## Diagnostic reports
 

@@ -7,10 +7,14 @@ import SakamotoKit
 @MainActor
 final class VirtualLocationModel: NSObject, ObservableObject, @preconcurrency CLLocationManagerDelegate {
     let tunnel: TunnelControlling
+    let supportsSimulation: Bool
     @Published var settings = VirtualLocationStore.load()
     @Published var latitude = ""
     @Published var longitude = ""
     @Published var accuracy = ""
+    @Published var routeText = ""
+    @Published var routeDuration = "300"
+    @Published var routeInterval = "1"
     @Published var favorites = VirtualLocationStore.favorites()
     @Published var snapshot = VirtualLocationSnapshot()
     @Published var vpnRunning = false
@@ -28,10 +32,14 @@ final class VirtualLocationModel: NSObject, ObservableObject, @preconcurrency CL
     private var certificateTimeout: Task<Void, Never>?
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
 
-    init(tunnel: TunnelControlling) {
-        self.tunnel = tunnel
+    init(tunnel: TunnelControlling, supportsSimulation: Bool = VirtualLocationStore.supportsNetworkSimulation) {
+        self.tunnel = tunnel; self.supportsSimulation = supportsSimulation
         super.init()
         latitude = String(settings.latitude); longitude = String(settings.longitude); accuracy = String(settings.accuracy)
+        if let route = VirtualLocationStore.routeDraft() {
+            routeText = route.points.map { "\($0.latitude), \($0.longitude)" }.joined(separator: "\n")
+            routeDuration = String(route.durationSeconds); routeInterval = String(route.intervalSeconds)
+        }
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyBest
         if let raw = try? LocationAuthorityStore.load() {
@@ -52,8 +60,9 @@ final class VirtualLocationModel: NSObject, ObservableObject, @preconcurrency CL
             var value = settings
             if useEditedCoordinates { value = try proposed(enabled: enabled) }
             value.enabled = enabled
+            value.route = nil
             if enabled {
-                guard VirtualLocationStore.supportsNetworkSimulation else { throw TunnelProfile.InvalidProfile("This method supports iOS through version 26") }
+                guard supportsSimulation else { throw TunnelProfile.InvalidProfile("This method supports iOS through version 26") }
                 guard trustChecked else { throw TunnelProfile.InvalidProfile("Install the certificate, enable full trust, then Check certificate trust") }
             }
             let state = try await tunnel.status()
@@ -74,12 +83,42 @@ final class VirtualLocationModel: NSObject, ObservableObject, @preconcurrency CL
             vpnRunning = state == .running
         } catch { snapshotAvailable = false; message = error.localizedDescription }
     }
+    func startRoute() async {
+        do { try await applyRoute(VirtualLocationRoute.parse(routeText, duration: routeDuration.trimmingCharacters(in: .whitespaces), interval: routeInterval.trimmingCharacters(in: .whitespaces))) }
+        catch { message = error.localizedDescription }
+    }
+    func pauseRoute(_ paused: Bool) async {
+        guard var route = snapshot.route else { return }; route.paused = paused
+        do { try await applyRoute(route) } catch { message = error.localizedDescription }
+    }
+    func holdRoute() async {
+        do { try await applyRoute(nil) } catch { message = error.localizedDescription }
+    }
+    private func applyRoute(_ route: VirtualLocationRoute?) async throws {
+        guard !busy else { return }; busy = true; defer { busy = false }
+        guard supportsSimulation, trustChecked else { throw TunnelProfile.InvalidProfile("Install and check certificate trust on iOS through version 26 first") }
+        guard try await tunnel.status() == .running else { throw TunnelProfile.InvalidProfile("Connect Sakamoto VPN before starting or controlling a route") }
+        let current = try await tunnel.location(settings: nil)
+        let meters: Int
+        if route == nil || route?.id == current.route?.id { meters = settings.accuracy }
+        else {
+            guard let edited = Int(accuracy.trimmingCharacters(in: .whitespacesAndNewlines)), (1...1000).contains(edited) else { throw TunnelProfile.InvalidProfile("Use accuracy 1 to 1000 meters") }
+            meters = edited
+        }
+        let point = route?.points.first ?? LocationWaypoint(latitude: current.latitude ?? settings.latitude, longitude: current.longitude ?? settings.longitude)
+        let value = VirtualLocationSettings(enabled: true, latitude: point.latitude, longitude: point.longitude, accuracy: meters, route: route)
+        snapshot = try await tunnel.location(settings: value); snapshotAvailable = true; vpnRunning = true; settings = value
+        if let route { try VirtualLocationStore.saveRouteDraft(route) }
+        if route == nil { latitude = String(point.latitude); longitude = String(point.longitude) }
+        message = route == nil ? "Route stopped. Simulation holds the current point; turn simulation off to restore normal responses." : "Route \(snapshot.routeState?.lowercased() ?? "started"). Movement continues in the VPN extension when you leave this page."
+    }
     func refresh() async {
+        guard !busy else { return }
         vpnRunning = (try? await tunnel.status()) == .running
         if vpnRunning {
-            do { snapshot = try await tunnel.location(settings: nil); snapshotAvailable = true }
+            do { snapshot = try await tunnel.location(settings: nil); snapshotAvailable = true; settings.route = snapshot.route }
             catch { snapshotAvailable = false; snapshot = VirtualLocationSnapshot(); snapshot.error = "Location diagnostics unavailable — reconnect the VPN and retry" }
-        } else { snapshot = VirtualLocationSnapshot(); snapshotAvailable = false }
+        } else { snapshot = VirtualLocationSnapshot(); snapshotAvailable = false; settings = VirtualLocationStore.load() }
     }
     private func authority(create: Bool) throws -> String {
         if let raw = try LocationAuthorityStore.load() {
@@ -181,16 +220,20 @@ final class VirtualLocationModel: NSObject, ObservableObject, @preconcurrency CL
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard observing, let fix = locations.last, abs(fix.timestamp.timeIntervalSinceNow) < 30, fix.horizontalAccuracy >= 0 else { return }
         cancelObservation()
-        let target = CLLocation(latitude: settings.latitude, longitude: settings.longitude)
+        let target = CLLocation(latitude: snapshot.latitude ?? settings.latitude, longitude: snapshot.longitude ?? settings.longitude)
         let distance = fix.distance(from: target)
         let point = String(format: "%.6f, %.6f · ±%.0f m", fix.coordinate.latitude, fix.coordinate.longitude, fix.horizontalAccuracy)
         observed = point + "\n" + (distance <= max(100, Double(settings.accuracy) * 3) ? "Reported position is near the selected point." : "Reported position differs by \(Int(distance)) m. GPS or cached positioning may take precedence.")
     }
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) { cancelObservation(); observed = "Could not obtain a fresh location. Check Location Services and retry." }
     func cancelObservation() { observationTimeout?.cancel(); observationTimeout = nil; locationManager.stopUpdatingLocation(); observing = false }
+    var routeSummary: String {
+        guard let route = snapshot.route else { return "No route running" }
+        return "\(snapshot.routeState ?? "Unknown") · \(Int(snapshot.routeElapsed ?? 0)) / \(route.durationSeconds) s · \(route.points.count) points · \(String(format: "%.1f", route.distance / Double(route.durationSeconds) * 3.6)) km/h"
+    }
     var report: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
-        return "Sakamoto \(version) · iOS \(UIDevice.current.systemVersion)\nNetwork location diagnostic · \(Date().ISO8601Format())\nSelected WGS84: \(settings.latitude), \(settings.longitude); accuracy: \(settings.accuracy) m\nVPN running: \(vpnRunning); requested: \(settings.enabled); proxy enabled: \(snapshot.enabled)\nCA trust checked: \(trustChecked); fingerprint: \(fingerprint)\nTLS connections: \(snapshot.connections); requests: \(snapshot.requests); rewritten: \(snapshot.patched); passed through: \(snapshot.skipped); TLS failures: \(snapshot.tlsFailures)\nLast rewrite: \(snapshot.lastPatch > 0 ? Date(timeIntervalSince1970: Double(snapshot.lastPatch)).ISO8601Format() : "none")\nDetail: \(snapshot.error)\nObserved: \(observed ?? "not measured")"
+        return "Sakamoto \(version) · iOS \(UIDevice.current.systemVersion)\nNetwork location diagnostic · \(Date().ISO8601Format())\nSelected WGS84: \(settings.latitude), \(settings.longitude); accuracy: \(settings.accuracy) m\nVPN running: \(vpnRunning); requested: \(settings.enabled); proxy enabled: \(snapshot.enabled)\nCA trust checked: \(trustChecked); fingerprint: \(fingerprint)\nTLS connections: \(snapshot.connections); requests: \(snapshot.requests); rewritten: \(snapshot.patched); passed through: \(snapshot.skipped); TLS failures: \(snapshot.tlsFailures)\nLast rewrite: \(snapshot.lastPatch > 0 ? Date(timeIntervalSince1970: Double(snapshot.lastPatch)).ISO8601Format() : "none")\nDetail: \(snapshot.error)\nRoute: \(routeSummary); current WGS84: \(snapshot.latitude ?? settings.latitude), \(snapshot.longitude ?? settings.longitude)\nObserved: \(observed ?? "not measured")"
     }
 }
 
@@ -217,6 +260,25 @@ struct VirtualLocationView: View {
                 coordinateField("Accuracy (meters)", text: $model.accuracy)
                 Button(model.settings.enabled ? "Apply coordinates" : "Save coordinates") { Task { await model.apply(enabled: model.settings.enabled) } }.disabled(model.busy)
                 Button("Save favorite") { favoriteName = ""; namingFavorite = true }
+            }
+            Section {
+                TextField("Route points", text: $model.routeText, axis: .vertical)
+                    .lineLimit(3...8).autocorrectionDisabled().textInputAutocapitalization(.never)
+                    .accessibilityLabel("Route points, one latitude and longitude pair per line")
+                coordinateField("Duration (seconds)", text: $model.routeDuration)
+                coordinateField("Update interval (seconds)", text: $model.routeInterval)
+                Text(model.routeSummary).font(.footnote).foregroundStyle(.secondary)
+                if let route = model.snapshot.route {
+                    ProgressView(value: min(1, (model.snapshot.routeElapsed ?? 0) / Double(route.durationSeconds)))
+                    if let lat = model.snapshot.latitude, let lon = model.snapshot.longitude { Text(String(format: "Current: %.6f, %.6f", lat, lon)).font(.caption).textSelection(.enabled) }
+                    Button(model.snapshot.routeState == "Paused" ? "Resume route" : "Pause route") { Task { await model.pauseRoute(model.snapshot.routeState != "Paused") } }
+                        .disabled(model.busy || !["Moving", "Paused"].contains(model.snapshot.routeState ?? ""))
+                    Button("Stop route and hold position") { Task { await model.holdRoute() } }.disabled(model.busy)
+                }
+                Button(model.snapshot.route == nil ? "Start route" : "Restart with edited route") { Task { await model.startRoute() } }
+                    .disabled(model.busy || !model.vpnRunning || !model.trustChecked || !VirtualLocationStore.supportsNetworkSimulation)
+            } header: { Text("Moving route") } footer: {
+                Text("Enter 2 to 32 WGS84 points in travel order, one latitude, longitude pair per line. Moves between points at constant speed for the total duration. Follows the entered path; no automatic road planning. Stops at the last point. Routes do not resume after VPN reconnect.")
             }
             if !model.favorites.isEmpty {
                 Section("Favorites") {
@@ -254,7 +316,13 @@ struct VirtualLocationView: View {
             Button("Save") { model.saveFavorite(name: favoriteName) }
             Button("Cancel", role: .cancel) {}
         }
-        .task { await model.refresh() }
+        .task(id: model.settings.route?.id) {
+            repeat {
+                await model.refresh()
+                guard model.snapshot.route != nil else { return }
+                do { try await Task.sleep(nanoseconds: 2_000_000_000) } catch { return }
+            } while !Task.isCancelled
+        }
         .onDisappear { model.cancelObservation(); model.closeCertificateServer() }
     }
     private func coordinateField(_ label: String, text: Binding<String>) -> some View {

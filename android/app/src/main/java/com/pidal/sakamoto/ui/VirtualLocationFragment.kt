@@ -37,13 +37,15 @@ import com.pidal.sakamoto.bg.MockLocationService
 import com.pidal.sakamoto.runtime.MockCoordinates
 import com.pidal.sakamoto.runtime.MockLocationRuntime
 import com.pidal.sakamoto.runtime.MockLocationStore
+import com.pidal.sakamoto.runtime.MockLocationRoute
+import com.google.android.material.button.MaterialButton
 import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
 
 class VirtualLocationFragment : Fragment() {
-    private data class Controls(val page: GroupedPage, val toggle: MaterialSwitch, val status: TextView, val latitude: TextInputEditText, val longitude: TextInputEditText, val accuracy: TextInputEditText, val message: TextView, val observed: TextView)
+    private data class Controls(val page: GroupedPage, val toggle: MaterialSwitch, val status: TextView, val latitude: TextInputEditText, val longitude: TextInputEditText, val accuracy: TextInputEditText, val message: TextView, val observed: TextView, val routePoints: TextInputEditText, val duration: TextInputEditText, val interval: TextInputEditText, val routeStatus: TextView, val routeStart: MaterialButton, val routePause: MaterialButton, val routeHold: MaterialButton)
     private var ui: Controls? = null
     private var rendering = false
     private var pendingAction = ""
@@ -54,7 +56,7 @@ class VirtualLocationFragment : Fragment() {
     private var observationActive = false
     private var observationEpoch = 0L
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-        if (hasLocationPermission()) { if (pendingAction == "observe") observe() else start() }
+        if (hasLocationPermission()) { when (pendingAction) { "observe" -> observe(); "route" -> startRoute(); else -> start() } }
         else ui?.message?.text = getString(R.string.location_permission_denied)
         pendingAction = ""
     }
@@ -98,6 +100,24 @@ class VirtualLocationFragment : Fragment() {
             val values = store.favorites(); if (values.isEmpty()) { message.text = getString(R.string.location_no_favorites); return@button }
             MaterialAlertDialogBuilder(requireContext()).setTitle(R.string.location_delete_favorite).setItems(values.map { it.name }.toTypedArray()) { _, index -> store.removeFavorite(values[index].name) }.show()
         }
+        val route = page.section(getString(R.string.location_route))
+        val draft = store.loadRoute()
+        val routePoints = page.field(route, getString(R.string.location_route_points), draft?.points?.joinToString("\n") { "${it.latitude}, ${it.longitude}" } ?: "").apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            isSingleLine = false; minLines = 3; maxLines = 8; gravity = android.view.Gravity.TOP
+            filters = arrayOf(android.text.InputFilter.LengthFilter(4096))
+        }
+        val duration = page.field(route, getString(R.string.location_route_duration), (draft?.durationSeconds ?: 300).toString()).apply { inputType = InputType.TYPE_CLASS_NUMBER }
+        val interval = page.field(route, getString(R.string.location_route_interval), (draft?.intervalSeconds ?: 1).toString()).apply { inputType = InputType.TYPE_CLASS_NUMBER }
+        val routeStatus = page.paragraph(route, getString(R.string.location_route_none))
+        val routeStart = page.button(route, getString(R.string.location_route_start), primary = true) {
+            if (!hasLocationPermission()) { pendingAction = "route"; requestPermission() } else startRoute()
+        }
+        val routePause = page.button(route, getString(R.string.location_route_pause)) {
+            runCatching { MockLocationService.pauseRoute(requireContext(), MockLocationRuntime.snapshot.value.routeState != "Paused") }.onFailure { message.text = it.message }
+        }
+        val routeHold = page.button(route, getString(R.string.location_route_hold)) { runCatching { MockLocationService.holdRoute(requireContext()) }.onFailure { message.text = it.message } }
+        page.note(getString(R.string.location_route_note))
         val auth = page.section(getString(R.string.location_authorization))
         page.paragraph(auth, getString(R.string.location_developer_instructions))
         page.button(auth, getString(R.string.location_developer_options)) { runCatching { startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)) }.onFailure { startActivity(Intent(Settings.ACTION_SETTINGS)) } }
@@ -109,7 +129,7 @@ class VirtualLocationFragment : Fragment() {
         }
         page.button(diagnostics, getString(R.string.location_share)) { share() }
         page.note(getString(R.string.location_android_diagnostics_note))
-        ui = Controls(page, toggle, status, lat, lon, accuracy, message, observed)
+        ui = Controls(page, toggle, status, lat, lon, accuracy, message, observed, routePoints, duration, interval, routeStatus, routeStart, routePause, routeHold)
         toggle.setOnCheckedChangeListener { _, enabled ->
             if (rendering) return@setOnCheckedChangeListener
             if (enabled) {
@@ -135,12 +155,26 @@ class VirtualLocationFragment : Fragment() {
             MockLocationService.start(requireContext(), proposed())
         } catch (error: Exception) { ui?.message?.text = error.message }
     }
+    private fun startRoute() {
+        try {
+            val controls = ui ?: return
+            check(MockLocationRuntime.authorized(requireContext())) { getString(R.string.location_developer_instructions) }
+            val meters = controls.accuracy.text.toString().trim().toIntOrNull() ?: error("Enter a whole-number accuracy")
+            MockLocationService.startRoute(requireContext(), MockLocationRoute.parse(controls.routePoints.text.toString(), controls.duration.text.toString(), controls.interval.text.toString(), meters))
+        } catch (error: Exception) { ui?.message?.text = error.message }
+    }
     private fun render() {
         val controls = ui ?: return; val snapshot = MockLocationRuntime.snapshot.value
         rendering = true; controls.toggle.isChecked = snapshot.phase == "Active" || snapshot.phase == "Starting"
         controls.toggle.isEnabled = snapshot.phase != "Starting" && snapshot.phase != "Stopping"; rendering = false
         val time = if (snapshot.lastFix > 0) DateFormat.getDateTimeInstance().format(Date(snapshot.lastFix)) else getString(R.string.location_no_fix)
         controls.status.text = getString(R.string.location_android_status, snapshot.phase, snapshot.fixes, time, if (snapshot.fused) "Google fused + GPS/network" else "GPS/network", if (MockLocationRuntime.authorized(requireContext())) "Granted" else "Choose Sakamoto")
+        controls.routeStatus.text = if (snapshot.routeState.isEmpty()) getString(R.string.location_route_none)
+            else "${snapshot.routeState} · ${snapshot.routeElapsed.toInt()} / ${snapshot.routeDuration} s\nCurrent WGS84: ${snapshot.point?.latitude}, ${snapshot.point?.longitude}"
+        controls.routeStart.isEnabled = snapshot.phase !in listOf("Starting", "Stopping")
+        controls.routePause.text = getString(if (snapshot.routeState == "Paused") R.string.location_route_resume else R.string.location_route_pause)
+        controls.routePause.isEnabled = snapshot.phase == "Active" && snapshot.routeState in listOf("Moving", "Paused")
+        controls.routeHold.isEnabled = snapshot.phase == "Active" && snapshot.routeState.isNotEmpty()
         if (snapshot.error.isNotEmpty()) controls.message.text = snapshot.error
         else if (snapshot.phase != "Active" && snapshot.phase != "Starting" && MockLocationStore(requireContext()).needsRecovery()) controls.message.text = "A previous simulation needs cleanup. Tap Stop simulation before starting again."
     }
@@ -176,7 +210,7 @@ class VirtualLocationFragment : Fragment() {
     }
     private fun observedFix(fix: Location) {
         cancelObservation()
-        val point = MockLocationStore(requireContext()).load()
+        val point = MockLocationRuntime.snapshot.value.point ?: MockLocationStore(requireContext()).load()
         val target = Location("selected").apply { latitude = point.latitude; longitude = point.longitude }
         ui?.observed?.text = String.format(Locale.US, "%.6f, %.6f · ±%.0f m\nMock flag: %s · distance from selected: %.0f m\nFix time: %s", fix.latitude, fix.longitude, fix.accuracy, LocationCompat.isMock(fix), fix.distanceTo(target), DateFormat.getDateTimeInstance().format(Date(fix.time)))
     }
@@ -185,9 +219,9 @@ class VirtualLocationFragment : Fragment() {
         listener?.let { runCatching { context?.getSystemService(LocationManager::class.java)?.removeUpdates(it) } }; listener = null
     }
     private fun share() {
-        val snapshot = MockLocationRuntime.snapshot.value; val point = MockLocationStore(requireContext()).load()
+        val snapshot = MockLocationRuntime.snapshot.value; val point = snapshot.point ?: MockLocationStore(requireContext()).load()
         val version = runCatching { requireContext().packageManager.getPackageInfo(requireContext().packageName, 0).versionName }.getOrDefault("unknown")
-        val report = "Sakamoto $version · Android ${Build.VERSION.RELEASE}\nVirtual location · ${Date()}\nWGS84: ${point.latitude}, ${point.longitude}; accuracy: ${point.accuracy} m\nStatus: ${snapshot.phase}; injected fixes: ${snapshot.fixes}; fused mock: ${snapshot.fused}; last fix: ${snapshot.lastFix}\nDetail: ${snapshot.error}\nObserved: ${ui?.observed?.text}"
+        val report = "Sakamoto $version · Android ${Build.VERSION.RELEASE}\nVirtual location · ${Date()}\nWGS84: ${point.latitude}, ${point.longitude}; accuracy: ${point.accuracy} m\nStatus: ${snapshot.phase}; injected fixes: ${snapshot.fixes}; fused mock: ${snapshot.fused}; last fix: ${snapshot.lastFix}\nRoute: ${snapshot.routeState}; elapsed: ${snapshot.routeElapsed} / ${snapshot.routeDuration} s\nDetail: ${snapshot.error}\nObserved: ${ui?.observed?.text}"
         startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, report), getString(R.string.location_share)))
     }
     override fun onDestroyView() { cancelObservation(); ui = null; super.onDestroyView() }

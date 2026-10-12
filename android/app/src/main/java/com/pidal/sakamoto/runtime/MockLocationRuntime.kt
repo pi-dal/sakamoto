@@ -28,7 +28,8 @@ data class MockCoordinates(val latitude: Double = 0.0, val longitude: Double = 0
 }
 
 data class FavoriteLocation(val name: String, val point: MockCoordinates)
-data class MockLocationSnapshot(val phase: String = "Off", val fixes: Long = 0, val lastFix: Long = 0, val fused: Boolean = false, val error: String = "", val recoveryRequired: Boolean = false)
+data class MockLocationSnapshot(val phase: String = "Off", val fixes: Long = 0, val lastFix: Long = 0, val fused: Boolean = false, val error: String = "", val recoveryRequired: Boolean = false,
+    val point: MockCoordinates? = null, val routeState: String = "", val routeElapsed: Double = 0.0, val routeDuration: Int = 0)
 
 object MockLocationRuntime {
     private val mutable = MutableStateFlow(MockLocationSnapshot())
@@ -48,6 +49,8 @@ class MockLocationStore(context: Context) {
     fun markRecovery(pending: Boolean) { prefs.edit().putBoolean("cleanupPending", pending).apply() }
     fun load(): MockCoordinates = runCatching { MockCoordinates.fromJSON(JSONObject(prefs.getString("point", "")!!)) }.getOrDefault(MockCoordinates())
     fun save(point: MockCoordinates) { prefs.edit().putString("point", point.validate().json().toString()).apply() }
+    fun loadRoute(): MockLocationRoute? = runCatching { MockLocationRoute.fromJSON(JSONObject(prefs.getString("route", "")!!)) }.getOrNull()
+    fun saveRoute(route: MockLocationRoute) { prefs.edit().putString("route", route.validate().json().toString()).apply() }
     fun favorites(): List<FavoriteLocation> = runCatching {
         val values = JSONArray(prefs.getString("favorites", "[]"))
         (0 until minOf(values.length(), 20)).mapNotNull { index -> runCatching {

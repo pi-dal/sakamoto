@@ -463,6 +463,16 @@ func (p *Proxy) process(resp *http.Response, ctx *goproxy.ProxyCtx) *http.Respon
 		return resp
 	}
 	_ = original.Close()
+	// Route ticks can change the target while the upstream body is arriving.
+	// Choose the latest point after reading it; disable must still win.
+	p.mu.Lock()
+	settings = p.settings
+	closed := p.closed
+	p.mu.Unlock()
+	if !settings.Enabled || closed {
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		return resp
+	}
 	replacement, count, err := patchBody(body, settings)
 	if err != nil || count == 0 {
 		resp.Body = io.NopCloser(bytes.NewReader(body))

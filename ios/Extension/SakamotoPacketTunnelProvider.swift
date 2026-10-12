@@ -272,7 +272,10 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
             do {
                 try locationRuntime.configure(settings, server: server)
                 if oldPort != locationProxyPort { try await platformInterface.updateLocationProxy() }
-                try VirtualLocationStore.save(settings)
+                var saved = settings
+                let position = locationRuntime.snapshot()
+                if let latitude = position.latitude, let longitude = position.longitude { saved.latitude = latitude; saved.longitude = longitude }
+                try VirtualLocationStore.save(saved)
             } catch {
                 try? locationRuntime.configure(previous, server: server)
                 try? await platformInterface.updateLocationProxy()

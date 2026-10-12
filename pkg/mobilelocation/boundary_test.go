@@ -9,10 +9,58 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/elazarl/goproxy"
 )
+
+type routeUpdatingBody struct {
+	io.Reader
+	onRead func()
+	once   sync.Once
+}
+
+func (b *routeUpdatingBody) Read(p []byte) (int, error) { b.once.Do(b.onRead); return b.Reader.Read(p) }
+func (b *routeUpdatingBody) Close() error               { return nil }
+
+func TestRouteUsesLatestPointAfterBodyArrivesAndDisableWins(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		p := &Proxy{settings: testSettings()}
+		latest := testSettings()
+		latest.Latitude = 12.5
+		latest.Longitude = -70
+		latest.Enabled = enabled
+		request, err := http.NewRequest(http.MethodPost, "https://gs-loc.apple.com/clls/wloc", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := &routeUpdatingBody{Reader: bytes.NewReader(fixture()), onRead: func() {
+			if err := p.Apply(settingsJSON(latest)); err != nil {
+				t.Error(err)
+			}
+		}}
+		response := &http.Response{Request: request, StatusCode: http.StatusOK, Header: make(http.Header), Body: body}
+		response = p.process(response, &goproxy.ProxyCtx{Req: request})
+		got, err := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := fixture()
+		if enabled {
+			want, _, err = patchBody(want, latest)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("late point/disable lost: enabled=%v", enabled)
+		}
+	}
+}
 
 func TestOrdinaryHTTPUsesOriginalLocalProxy(t *testing.T) {
 	var requests atomic.Int32

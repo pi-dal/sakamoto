@@ -31,6 +31,47 @@ final class VirtualLocationControlTests: XCTestCase {
         XCTAssertFalse(model.settings.enabled)
         XCTAssertEqual(tunnel.reloads, 0)
     }
+    func testRouteHoldUsesRuntimePointDespiteInvalidEdits() async {
+        let tunnel = LocationControlTunnel()
+        tunnel.evidence.enabled = true; tunnel.evidence.latitude = 22.55; tunnel.evidence.longitude = 114.05
+        let route = VirtualLocationRoute(points: [.init(latitude: 22.5, longitude: 114), .init(latitude: 22.6, longitude: 114.1)], durationSeconds: 60)
+        tunnel.evidence.route = route; tunnel.evidence.routeState = "Moving"
+        let model = VirtualLocationModel(tunnel: tunnel, supportsSimulation: true)
+        model.trustChecked = true; model.settings = VirtualLocationSettings(enabled: true, latitude: 22.5, longitude: 114, accuracy: 15, route: route)
+        model.latitude = "invalid"; model.longitude = "999"; model.accuracy = "invalid"
+        await model.holdRoute()
+        XCTAssertNil(tunnel.settings?.route)
+        XCTAssertEqual(tunnel.settings?.latitude, 22.55)
+        XCTAssertEqual(tunnel.settings?.longitude, 114.05)
+        XCTAssertEqual(tunnel.settings?.accuracy, 15)
+        XCTAssertTrue(model.settings.enabled); XCTAssertEqual(tunnel.reloads, 0)
+    }
+    func testPauseAndResumePreserveRouteIdentity() async {
+        let tunnel = LocationControlTunnel()
+        let route = VirtualLocationRoute(points: [.init(latitude: 0, longitude: 0), .init(latitude: 0, longitude: 1)], durationSeconds: 60)
+        tunnel.evidence.route = route; tunnel.evidence.routeState = "Moving"
+        let model = VirtualLocationModel(tunnel: tunnel, supportsSimulation: true)
+        model.trustChecked = true; model.snapshot = tunnel.evidence
+        model.settings = VirtualLocationSettings(enabled: true, route: route); model.accuracy = "invalid edit"
+        await model.pauseRoute(true)
+        XCTAssertEqual(tunnel.settings?.route?.id, route.id); XCTAssertEqual(tunnel.settings?.route?.paused, true)
+        await model.pauseRoute(false)
+        XCTAssertEqual(tunnel.settings?.route?.id, route.id); XCTAssertEqual(tunnel.settings?.route?.paused, false)
+        XCTAssertEqual(tunnel.reloads, 0)
+    }
+    func testReopenedPageRecoversLiveRouteFromProvider() async {
+        let tunnel = LocationControlTunnel()
+        tunnel.evidence.route = VirtualLocationRoute(points: [.init(latitude: 0, longitude: 0), .init(latitude: 0, longitude: 1)], durationSeconds: 60)
+        let model = VirtualLocationModel(tunnel: tunnel)
+        await model.refresh(); XCTAssertEqual(model.settings.route, tunnel.evidence.route)
+    }
+    func testFailedRouteStartDoesNotReportMovement() async {
+        let tunnel = LocationControlTunnel(); tunnel.fail = true
+        let model = VirtualLocationModel(tunnel: tunnel, supportsSimulation: true)
+        model.trustChecked = true; model.routeText = "0, 0\n0, 1"; model.accuracy = "25"
+        await model.startRoute(); XCTAssertNil(model.settings.route); XCTAssertNil(model.snapshot.route); XCTAssertNotNil(model.message)
+    }
+
     func testFailedControlDoesNotReportSuccess() async {
         let tunnel = LocationControlTunnel(); tunnel.fail = true
         let model = VirtualLocationModel(tunnel: tunnel)
@@ -46,6 +87,7 @@ private final class LocationControlTunnel: TunnelControlling, @unchecked Sendabl
     var settings: VirtualLocationSettings?
     var reloads = 0
     var fail = false
+    var evidence = VirtualLocationSnapshot()
     func connect(options: TunnelStartOptions) async throws {}
     func disconnect() async throws {}
     func ping() async throws -> TunnelStateSnapshot { TunnelStateSnapshot(serviceState: .running) }
@@ -54,6 +96,11 @@ private final class LocationControlTunnel: TunnelControlling, @unchecked Sendabl
     func observations() -> AsyncStream<TunnelObservation> { AsyncStream { $0.finish() } }
     func location(settings: VirtualLocationSettings?) async throws -> VirtualLocationSnapshot {
         if fail { throw TunnelProfile.InvalidProfile("provider unavailable") }
-        self.settings = settings; return VirtualLocationSnapshot()
+        if let settings {
+            self.settings = settings; evidence.enabled = settings.enabled; evidence.route = settings.route
+            evidence.latitude = settings.latitude; evidence.longitude = settings.longitude
+            evidence.routeState = settings.route == nil ? nil : settings.route!.paused ? "Paused" : "Moving"
+        }
+        return evidence
     }
 }

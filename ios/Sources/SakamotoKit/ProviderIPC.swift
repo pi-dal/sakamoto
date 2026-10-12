@@ -29,7 +29,7 @@ public enum TunnelRequest: Equatable, Sendable {
 
     enum Action: String {
         case ping
-        case reloadConfig, reloadProfile, recoverExperiment, removeLearnedDomain, location
+        case reloadConfig, reloadProfile, recoverExperiment, removeLearnedDomain, location, locationRoute
     }
 
     enum CodingKeys: String, CodingKey {
@@ -46,7 +46,7 @@ public enum TunnelRequest: Equatable, Sendable {
         encoder.outputFormatting = [.sortedKeys]
         switch self {
         case .location(let settings):
-            var raw = ["action": Action.location.rawValue]
+            var raw = ["action": settings?.route == nil ? Action.location.rawValue : Action.locationRoute.rawValue]
             if let settings { raw["settingsJSON"] = try settings.json() }
             return try encoder.encode(raw)
         case .ping:
@@ -75,12 +75,17 @@ public enum TunnelRequest: Equatable, Sendable {
         let decoder = JSONDecoder()
         let raw = try decoder.decode([String: String].self, from: data)
         switch raw[CodingKeys.action.rawValue] {
-        case Action.location.rawValue:
+        case Action.location.rawValue, Action.locationRoute.rawValue:
             if let settings = raw["settingsJSON"] {
                 guard settings.utf8.count <= 4096 else { throw TunnelProfile.InvalidProfile("Location settings too large") }
                 let value = try decoder.decode(VirtualLocationSettings.self, from: Data(settings.utf8))
-                try value.validate(); self = .location(settings: value)
-            } else { self = .location(settings: nil) }
+                try value.validate()
+                if raw["action"] == Action.locationRoute.rawValue, value.route == nil || !value.enabled { throw TunnelProfile.InvalidProfile("Moving-route command requires an enabled route") }
+                self = .location(settings: value)
+            } else {
+                guard raw["action"] != Action.locationRoute.rawValue else { throw TunnelProfile.InvalidProfile("Moving-route settings missing") }
+                self = .location(settings: nil)
+            }
         case Action.ping.rawValue:
             self = .ping
         case Action.recoverExperiment.rawValue:

@@ -496,4 +496,14 @@
     <string name="location_no_fix">None</string>
     <string name="location_notification_title">Location simulation active</string>
     <string name="location_notification_detail">Sakamoto is providing mock coordinates. Tap Stop to restore normal providers.</string>
+    <string name="location_route">Moving route</string>
+    <string name="location_route_points">Route points · WGS84</string>
+    <string name="location_route_duration">Duration (seconds)</string>
+    <string name="location_route_interval">Update interval (seconds)</string>
+    <string name="location_route_none">No route running</string>
+    <string name="location_route_start">Start route</string>
+    <string name="location_route_pause">Pause route</string>
+    <string name="location_route_resume">Resume route</string>
+    <string name="location_route_hold">Stop route and hold position</string>
+    <string name="location_route_note">Enter 2 to 32 WGS84 points in travel order, one latitude, longitude pair per line. Moves between points at constant speed for the total duration and holds the last point. No automatic road planning. Pause holds the current point; turn simulation off to restore real positioning. Routes never resume at boot or after the service ends.</string>
 </resources>
