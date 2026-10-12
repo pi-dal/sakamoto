@@ -10,7 +10,6 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -180,12 +179,17 @@ class LocationMapFragment : Fragment() {
         owner.setStyle(Style.Builder().fromUri("https://tiles.openfreemap.org/styles/liberty")) { loaded ->
             if (mapView !== view) return@setStyle
             style = loaded
-            val primary = ContextCompat.getColor(requireContext(), R.color.primary)
+            // Liberty is a light basemap even when the app chrome is dark.
+            val mapConfiguration = android.content.res.Configuration(resources.configuration).apply {
+                uiMode = (uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK.inv()) or android.content.res.Configuration.UI_MODE_NIGHT_NO
+            }
+            val mapContext = requireContext().createConfigurationContext(mapConfiguration)
+            val primary = mapContext.getColor(R.color.primary)
             loaded.addSource(GeoJsonSource("sakamoto-stops")); loaded.addSource(GeoJsonSource("sakamoto-path")); loaded.addSource(GeoJsonSource("sakamoto-live"))
             loaded.addLayer(LineLayer("sakamoto-path-line", "sakamoto-path").withProperties(lineColor(primary), lineWidth(4f)))
-            loaded.addLayer(CircleLayer("sakamoto-stop-dot", "sakamoto-stops").withProperties(circleColor(primary), circleRadius(12f), circleStrokeWidth(2f), circleStrokeColor(requireContext().getColor(R.color.surface))))
-            loaded.addLayer(SymbolLayer("sakamoto-stop-label", "sakamoto-stops").withProperties(textField(get("label")), textFont(arrayOf("Noto Sans Bold")), textSize(13f), textColor(requireContext().getColor(R.color.on_primary)), textAllowOverlap(true), textIgnorePlacement(true)))
-            loaded.addLayer(CircleLayer("sakamoto-live-dot", "sakamoto-live").withProperties(circleColor(requireContext().getColor(R.color.on_surface)), circleRadius(7f), circleStrokeWidth(3f), circleStrokeColor(requireContext().getColor(R.color.surface))))
+            loaded.addLayer(CircleLayer("sakamoto-stop-dot", "sakamoto-stops").withProperties(circleColor(primary), circleRadius(12f), circleStrokeWidth(2f), circleStrokeColor(mapContext.getColor(R.color.surface))))
+            loaded.addLayer(SymbolLayer("sakamoto-stop-label", "sakamoto-stops").withProperties(textField(get("label")), textFont(arrayOf("Noto Sans Bold")), textSize(13f), textColor(mapContext.getColor(R.color.on_primary)), textAllowOverlap(true), textIgnorePlacement(true)))
+            loaded.addLayer(CircleLayer("sakamoto-live-dot", "sakamoto-live").withProperties(circleColor(mapContext.getColor(R.color.on_surface)), circleRadius(7f), circleStrokeWidth(3f), circleStrokeColor(mapContext.getColor(R.color.surface))))
             redraw(); if (fitPending) { fit(); fitPending = false }
             message?.text = getString(if (draft.isRoute) R.string.location_map_route_hint else R.string.location_map_position_hint)
         }
