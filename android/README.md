@@ -67,6 +67,31 @@ removes status/control visibility from the notification shade. Diagnostics
 separate authorization, system TUN, physical internet, command channel and a
 real DNS/TLS/HTTPS 204 check. Node latency is not an end-to-end VPN health claim.
 
+## Virtual location
+
+Settings → Virtual location supports fixed WGS84 coordinates, accuracy, favorites, start/stop and diagnostic export. A separate location foreground service installs GPS/network mock providers and optionally Google fused mock mode. Select Sakamoto as the mock-location app in Developer options and grant location permission. The service does not resume automatically at boot; unconfirmed cleanup requires Stop simulation recovery. See [setup and restoration](../docs/virtual-location-setup.md).
+
+## Peer connectivity diagnostics
+
+The current source adds Settings → Tailscale → Peer diagnostics. Choose a
+peer's IPv4/IPv6 address and a TCP port (default 22). The TCP socket explicitly
+binds to Sakamoto's VPN network. The optional SSH greeting check waits for an
+actual service response without sending credentials; turn it off for other
+protocols. A TCP handshake alone is not SSH service confirmation because a
+user-space VPN stack can acknowledge it before the remote service responds.
+Endpoint pings are separate measurements with a target and timestamp.
+
+Each check has an eight-second total deadline and closes its socket. Leaving
+the page, changing options/target, VPN/channel shutdown or explicit Cancel
+cancels the check and prevents obsolete results from replacing current state.
+A VPN network replacement during the check asks for a retry. Ping sessions
+also close after five seconds or cancellation. Share diagnostic report
+includes app/OS version, endpoint/peer, target IP, timestamp, duration and
+native error; it contains no configuration or auth keys. Peer addresses and
+names are included, so review the report before sharing. A socket bound from
+Sakamoto does not prove another app is included in the VPN app allowlist.
+These source changes require a new official release to reach installed clients.
+
 ## Automatic connection
 
 Settings → Automatic connection provides Connect after restart, a link to the

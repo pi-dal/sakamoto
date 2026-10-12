@@ -37,6 +37,8 @@ chmod +x "${SAKAMOTO_MOBILE_GO_BIN}/go"
 cp -R "${SOURCE}" "${WORK}/sing-box"
 chmod -R u+w "${WORK}/sing-box"
 python3 "${REPO_ROOT}/scripts/patch-libbox-network.py" "${WORK}/sing-box"
+python3 "${REPO_ROOT}/scripts/patch-libbox-location.py" "${WORK}/sing-box"
+gofmt -w "${WORK}/sing-box/experimental/libbox/sakamoto_location.go" "${WORK}/sing-box/daemon/sakamoto_location.go"
 gofmt -w "${WORK}/sing-box/experimental/libbox/command_server.go" "${WORK}/sing-box/experimental/libbox/monitor.go" \
     "${WORK}/sing-box/protocol/tailscale/endpoint.go" "${WORK}/sing-box/protocol/tailscale/sakamoto_transport.go" \
     "${WORK}/sing-box/daemon/sakamoto_service.go" "${WORK}/sing-box/route/rule/sakamoto_domains.go"
@@ -48,12 +50,12 @@ p = Path(sys.argv[1])
 s = p.read_text()
 anchor = '_ "github.com/sagernet/gomobile"'
 assert s.count(anchor) == 1, "Upstream builder import drift"
-s = s.replace(anchor, anchor + '\n\t_ "github.com/pi-dal/sakamoto/pkg/mobilecore"\n\t_ "github.com/pi-dal/sakamoto/pkg/mobileexperiment"\n\t_ "github.com/pi-dal/sakamoto/pkg/mobilegen"')
+s = s.replace(anchor, anchor + '\n\t_ "github.com/pi-dal/sakamoto/pkg/mobilecore"\n\t_ "github.com/pi-dal/sakamoto/pkg/mobileexperiment"\n\t_ "github.com/pi-dal/sakamoto/pkg/mobilegen"\n\t_ "github.com/pi-dal/sakamoto/pkg/mobilelocation"')
 anchor = 'args = append(args, "./experimental/libbox")'
 assert s.count(anchor) == 2, "Upstream bind target drift"
 # Only change the Apple occurrence, never the Android builder.
 pos = s.index('func buildApple()')
-s = s[:pos] + s[pos:].replace(anchor, 'args = append(args, "./experimental/libbox", "github.com/pi-dal/sakamoto/pkg/mobilecore", "github.com/pi-dal/sakamoto/pkg/mobileexperiment", "github.com/pi-dal/sakamoto/pkg/mobilegen")', 1)
+s = s[:pos] + s[pos:].replace(anchor, 'args = append(args, "./experimental/libbox", "github.com/pi-dal/sakamoto/pkg/mobilecore", "github.com/pi-dal/sakamoto/pkg/mobileexperiment", "github.com/pi-dal/sakamoto/pkg/mobilegen", "github.com/pi-dal/sakamoto/pkg/mobilelocation")', 1)
 anchor = 'func buildApple() {'
 assert s.count(anchor) == 1, "Upstream Apple builder drift"
 s = s.replace(anchor, anchor + '\n\tif wrapper := os.Getenv("SAKAMOTO_MOBILE_GO_BIN"); wrapper != "" {\n\t\tif err := os.Setenv("PATH", wrapper+string(os.PathListSeparator)+os.Getenv("PATH")); err != nil { panic(err) }\n\t}')

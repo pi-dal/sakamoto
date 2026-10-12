@@ -22,7 +22,7 @@ def convert(root):
         symbols = set()
         for line in run('xcrun', 'nm', '-gU', str(binary)).splitlines():
             parts = line.split()
-            if parts and parts[-1].startswith(('_Libbox', '_Mobilecore', '_Mobilegen', '_Mobileexperiment', '_Universe', '_Go', '_go_seq_', '_OBJC_CLASS_$_', '_OBJC_METACLASS_$_')):
+            if parts and parts[-1].startswith(('_Libbox', '_Mobilecore', '_Mobilegen', '_Mobileexperiment', '_Mobilelocation', '_Universe', '_Go', '_go_seq_', '_OBJC_CLASS_$_', '_OBJC_METACLASS_$_')):
                 symbols.add(parts[-1])
         if len(symbols) < 100:
             raise RuntimeError('Missing combined public binding symbols')

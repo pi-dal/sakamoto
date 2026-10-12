@@ -27,8 +27,8 @@ settings:
   base:
     DEVELOPMENT_TEAM: ""
     CODE_SIGN_STYLE: Automatic
-    CURRENT_PROJECT_VERSION: 20
-    MARKETING_VERSION: 0.1.11
+    CURRENT_PROJECT_VERSION: 21
+    MARKETING_VERSION: 0.1.12
     SWIFT_VERSION: "5.10"
   configs:
     Release:
@@ -45,6 +45,8 @@ targets:
       - path: Extension/ProviderExperimentRunner.swift
       - path: Shared
       - path: App/Assets.xcassets
+      - path: App/ThirdPartyLocationNotice.txt
+        buildPhase: resources
     dependencies:
       - package: SakamotoiOS
         product: SakamotoKit
@@ -76,6 +78,9 @@ targets:
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         NSCameraUsageDescription: Scan QR codes to import nodes, subscriptions or configurations.
+        NSLocationWhenInUseUsageDescription: Check the location currently reported by iOS after you choose to simulate a position.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
         CFBundleURLTypes:
           - CFBundleURLName: com.pidal.sakamoto
             CFBundleURLSchemes: [sakamoto]

@@ -42,6 +42,41 @@ import UserNotifications
 final class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtocol, LibboxCommandServerHandlerProtocol {
     private let tunnel: SakamotoPacketTunnelProvider
     private let networkSettingsLock = NSLock()
+    private let locationSettingsLock = NSLock()
+    private var originalProxySettings: NEProxySettings?
+    private func baseProxySettings() -> NEProxySettings? {
+        locationSettingsLock.lock(); defer { locationSettingsLock.unlock() }
+        return originalProxySettings?.copy() as? NEProxySettings
+    }
+    private func captureBaseProxy(_ value: NEProxySettings?) {
+        locationSettingsLock.lock(); originalProxySettings = value?.copy() as? NEProxySettings; locationSettingsLock.unlock()
+    }
+    private func locationProxySettings(base: NEProxySettings?) -> NEProxySettings? {
+        guard let port = tunnel.locationProxyPort else { return base }
+        let value = NEProxySettings()
+        value.httpEnabled = true; value.httpsEnabled = true
+        value.httpServer = NEProxyServer(address: "127.0.0.1", port: port)
+        value.httpsServer = NEProxyServer(address: "127.0.0.1", port: port)
+        let hosts = (try? JSONDecoder().decode([String].self, from: Data(MobilelocationHostsJSON().utf8))) ?? []
+        if base?.httpEnabled == true { value.matchDomains = base?.matchDomains }
+        else { value.matchDomains = hosts }
+        value.exceptionList = (base?.exceptionList?.filter { excluded in
+            let suffix = excluded.lowercased().replacingOccurrences(of: "*.", with: "")
+            return !hosts.contains { $0 == suffix || $0.hasSuffix("." + suffix) }
+        } ?? []) + ["127.0.0.1", "localhost", "::1"]
+        return value
+    }
+    func updateLocationProxy() async throws {
+        guard let settings = networkSettings else { throw SakamotoPacketTunnelProvider.ProviderStartupError("VPN network settings unavailable") }
+        let old = settings.proxySettings
+        settings.proxySettings = locationProxySettings(base: baseProxySettings())
+        do {
+            try await configureNetwork {
+                guard self.networkSettings === settings, self.tunnel.canConfigureNetwork() else { throw CancellationError() }
+                try await self.tunnel.setTunnelNetworkSettings(settings)
+            }
+        } catch { settings.proxySettings = old; throw error }
+    }
     private let networkSettingsQueue = DispatchQueue(label: "com.pidal.sakamoto.network-settings")
     private var storedNetworkSettings: NEPacketTunnelNetworkSettings?
     private var networkSettings: NEPacketTunnelNetworkSettings? {
@@ -247,6 +282,12 @@ final class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoco
             settings.proxySettings = proxySettings
         }
 
+        captureBaseProxy(settings.proxySettings)
+        if options.isHTTPProxyEnabled() {
+            let host = options.getHTTPProxyServer()
+            tunnel.setLocationFallback("\(host.contains(":") ? "[\(host)]" : host):\(options.getHTTPProxyServerPort())")
+        } else { tunnel.setLocationFallback("") }
+        settings.proxySettings = locationProxySettings(base: settings.proxySettings)
         networkSettings = settings
         try await configureNetwork {
             guard self.networkSettings === settings, self.tunnel.canConfigureNetwork() else { throw CancellationError() }
@@ -581,7 +622,7 @@ final class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoco
 
     func getSystemProxyStatus() throws -> LibboxSystemProxyStatus {
         let status = LibboxSystemProxyStatus()
-        guard let networkSettings, let proxySettings = networkSettings.proxySettings,
+        guard let proxySettings = baseProxySettings(),
               proxySettings.httpServer != nil
         else {
             return status
@@ -592,14 +633,15 @@ final class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoco
     }
 
     func setSystemProxyEnabled(_ enabled: Bool) throws {
-        guard let networkSettings, let proxySettings = networkSettings.proxySettings,
+        guard let networkSettings, let proxySettings = baseProxySettings(),
               proxySettings.httpServer != nil, proxySettings.httpEnabled != enabled
         else {
             return
         }
         proxySettings.httpEnabled = enabled
         proxySettings.httpsEnabled = enabled
-        networkSettings.proxySettings = proxySettings
+        captureBaseProxy(proxySettings)
+        networkSettings.proxySettings = locationProxySettings(base: proxySettings)
         try runBlocking {
             try await self.configureNetwork {
                 guard self.networkSettings === networkSettings, self.tunnel.canConfigureNetwork() else { throw CancellationError() }
@@ -656,6 +698,7 @@ final class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoco
     // MARK: Reset
 
     func reset() {
+        captureBaseProxy(nil)
         networkSettings = nil
         nwMonitor?.cancel()
         nwMonitor = nil

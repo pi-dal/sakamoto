@@ -135,6 +135,12 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
         }
     }
 
+    public func location(settings: VirtualLocationSettings?) async throws -> VirtualLocationSnapshot {
+        let response = try await send(.location(settings: settings))
+        guard response.ok, let snapshot = response.location else { throw TunnelControllerError.providerReported(response.error ?? "Location response unavailable") }
+        return snapshot
+    }
+
     public func recoverExperiment() async throws {
         let response = try await send(.recoverExperiment)
         guard response.ok else { throw TunnelControllerError.providerReported(response.error ?? "Recovery failed") }

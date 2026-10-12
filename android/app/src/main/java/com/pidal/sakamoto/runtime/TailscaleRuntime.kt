@@ -58,10 +58,12 @@ object TailscaleRuntime {
     }
 
     /** Newest ping line first, bounded so the page cannot grow unbounded. */
-    fun appendPing(outcome: TailscalePingOutcome) {
+    fun appendPing(outcome: TailscalePingOutcome, target: String = "") {
         synchronized(lock) {
             val current = _state.value
-            _state.value = current.copy(pingLines = (listOf(outcome.render()) + current.pingLines).take(20))
+            val time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())
+            val line = "$time ${if (target.isEmpty()) "" else "$target · "}${outcome.render()}"
+            _state.value = current.copy(pingLines = (listOf(line) + current.pingLines).take(20))
         }
     }
 

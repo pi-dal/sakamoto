@@ -25,10 +25,11 @@ public enum TunnelRequest: Equatable, Sendable {
     case reloadProfile(options: TunnelStartOptions)
     case recoverExperiment
     case removeLearnedDomain(String)
+    case location(settings: VirtualLocationSettings?)
 
     enum Action: String {
         case ping
-        case reloadConfig, reloadProfile, recoverExperiment, removeLearnedDomain
+        case reloadConfig, reloadProfile, recoverExperiment, removeLearnedDomain, location
     }
 
     enum CodingKeys: String, CodingKey {
@@ -44,6 +45,10 @@ public enum TunnelRequest: Equatable, Sendable {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         switch self {
+        case .location(let settings):
+            var raw = ["action": Action.location.rawValue]
+            if let settings { raw["settingsJSON"] = try settings.json() }
+            return try encoder.encode(raw)
         case .ping:
             return try encoder.encode(["action": Action.ping.rawValue])
         case .recoverExperiment:
@@ -70,6 +75,12 @@ public enum TunnelRequest: Equatable, Sendable {
         let decoder = JSONDecoder()
         let raw = try decoder.decode([String: String].self, from: data)
         switch raw[CodingKeys.action.rawValue] {
+        case Action.location.rawValue:
+            if let settings = raw["settingsJSON"] {
+                guard settings.utf8.count <= 4096 else { throw TunnelProfile.InvalidProfile("Location settings too large") }
+                let value = try decoder.decode(VirtualLocationSettings.self, from: Data(settings.utf8))
+                try value.validate(); self = .location(settings: value)
+            } else { self = .location(settings: nil) }
         case Action.ping.rawValue:
             self = .ping
         case Action.recoverExperiment.rawValue:
@@ -131,14 +142,16 @@ public struct TunnelResponse: Codable, Equatable, Sendable {
     public var error: String?
     /// Present for queries (ping); absent for mutations that only ack.
     public var state: TunnelStateSnapshot?
+    public var location: VirtualLocationSnapshot?
 
     enum CodingKeys: String, CodingKey {
         case ok
         case error
-        case state
+        case state, location
     }
 
-    public init(ok: Bool, error: String? = nil, state: TunnelStateSnapshot? = nil) {
+    public init(ok: Bool, error: String? = nil, state: TunnelStateSnapshot? = nil, location: VirtualLocationSnapshot? = nil) {
+        self.location = location
         self.ok = ok
         self.error = error
         self.state = state

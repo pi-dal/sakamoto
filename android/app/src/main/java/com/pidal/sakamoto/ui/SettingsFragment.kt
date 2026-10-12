@@ -19,6 +19,9 @@ class SettingsFragment : Fragment() {
         page.setting(connection, getString(R.string.tunnel_settings), icon = R.drawable.ic_route) {
             (requireActivity() as MainActivity).openChild(TunnelSettingsFragment(), getString(R.string.tunnel_settings))
         }
+        page.setting(connection, getString(R.string.virtual_location), icon = R.drawable.ic_node) {
+            (requireActivity() as MainActivity).openChild(VirtualLocationFragment(), getString(R.string.virtual_location))
+        }
         page.setting(connection, getString(R.string.settings_tailscale_entry), icon = R.drawable.ic_node) {
             (requireActivity() as MainActivity).openChild(TailscaleFragment(), getString(R.string.settings_tailscale_entry))
         }

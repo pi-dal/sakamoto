@@ -42,6 +42,25 @@ recovery, but sustained SSH sessions across switching networks and background
 intervals still require physical-device verification. An explicit configuration
 reload or tunnel process termination still rebuilds the shared Tailscale core.
 
+## Peer connectivity diagnostics
+
+The current source adds Settings → Tailscale → a peer's Check menu → Peer
+diagnostics. Select the peer's IPv4/IPv6 address and a TCP port (default 22).
+Tailnet Ping measures the endpoint's direct/relay path separately from the
+app's OS-routed TCP socket. The optional SSH greeting check waits for an actual
+service response without sending credentials; a TCP handshake alone can be
+acknowledged by a user-space VPN stack and is not SSH service confirmation.
+
+Each check has an eight-second total deadline and closes its socket. Cancel,
+leaving the diagnostics page, changing the target/options or replacing the
+command-channel attachment cancels the probe and discards obsolete results.
+Share diagnostic report includes app/OS version, endpoint/peer identity,
+target address, timestamp, elapsed time, observed interface types, native
+error and the independently measured recent ping when available. It includes
+peer addresses/names, but no configuration or auth keys. Interface types are
+OS observations, not proof of which core outbound or another app's route was
+used. These source changes require a new release to appear in TestFlight.
+
 ## SimAgentationPlus simulator debugging
 
 With a simulator already booted, run from the repository root:
@@ -249,6 +268,10 @@ a rejected reload restores the old runtime. Only committed learned domains are
 restored on a cold start. Runtime domains/status remain private App Group files
 per profile, outside source sync. Real-device VPN and background behavior require
 hardware verification; simulator integration tests do not establish connectivity.
+
+## Virtual location
+
+Settings → Virtual location supports fixed WGS84 coordinates, accuracy, favorites, explicit enable/disable, certificate installation/trust checking and separate proxy/Core Location diagnostics. On iOS through version 26, recognized network-location responses are processed inside the existing PacketTunnel and shared Go runtime; GPS or caches can take precedence. The device CA stays in the App Group's device-only Keychain. See [setup and restoration](../docs/virtual-location-setup.md) and [source-backed feasibility](../docs/virtual-location-feasibility.md).
 
 ## Built-in Tailscale: real capabilities
 

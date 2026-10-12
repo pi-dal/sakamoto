@@ -32,6 +32,10 @@ final class TailscaleController: ObservableObject {
     /// Recent probe samples, scoped by endpoint and peer.
     @Published private(set) var pingResults: [String: TailscalePingOutcome] = [:]
     private var pingRequests: [String: UUID] = [:]
+    @Published private(set) var tcpResults: [String: TCPConnectivityProbe.Outcome] = [:]
+    @Published private(set) var tcpChecking: Set<String> = []
+    private var tcpTasks: [String: Task<Void, Never>] = [:]
+    private var tcpRequests: [String: UUID] = [:]
     /// Mirrors the command channel: false means "no tunnel / no status".
     @Published private(set) var channelActive = false
 
@@ -65,6 +69,7 @@ final class TailscaleController: ObservableObject {
         var viaRelay: String?
         var derpRegion: String?
         var error: String?
+        var targetIP: String?
         var measuredAt = Date()
 
         var pathDescription: String {
@@ -154,6 +159,11 @@ final class TailscaleController: ObservableObject {
         retryDelay = NSEC_PER_SEC
         pingResults = [:]
         pingRequests = [:]
+        for task in tcpTasks.values { task.cancel() }
+        tcpTasks = [:]
+        tcpRequests = [:]
+        tcpResults = [:]
+        tcpChecking = []
     }
 
     // MARK: Actions
@@ -167,13 +177,39 @@ final class TailscaleController: ObservableObject {
         await run { try $0.tailscaleLogout(endpointTag) }
     }
 
-    func ping(endpointTag: String, peer: TailscalePeerSummary) async {
-        guard let address = peer.tailscaleIPs.first else { return }
+    func checkTCP(endpointTag: String, peer: TailscalePeerSummary, address: String, port: UInt16, verifySSH: Bool = true) {
+        let key = endpointTag + "/" + peer.stableID
+        guard channelActive, peer.tailscaleIPs.contains(address), port > 0 else { return }
+        cancelTCP(endpointTag: endpointTag, peerID: peer.stableID)
+        let requestID = UUID()
+        let id = attachmentID
+        tcpRequests[key] = requestID
+        tcpChecking.insert(key)
+        tcpTasks[key] = Task { [weak self] in
+            let outcome = await TCPConnectivityProbe.check(address: address, port: port, verifySSH: verifySSH)
+            guard let self, !Task.isCancelled, self.channelActive,
+                  self.attachmentID == id, self.tcpRequests[key] == requestID else { return }
+            self.tcpResults[key] = outcome
+            self.tcpChecking.remove(key)
+            self.tcpTasks.removeValue(forKey: key)
+        }
+    }
+
+    func cancelTCP(endpointTag: String, peerID: String) {
+        let key = endpointTag + "/" + peerID
+        tcpTasks.removeValue(forKey: key)?.cancel()
+        tcpRequests.removeValue(forKey: key)
+        tcpChecking.remove(key)
+        tcpResults.removeValue(forKey: key)
+    }
+
+    func ping(endpointTag: String, peer: TailscalePeerSummary, address selectedAddress: String? = nil) async {
+        guard let address = selectedAddress ?? peer.tailscaleIPs.first, peer.tailscaleIPs.contains(address) else { return }
         let key = endpointTag + "/" + peer.stableID
         let requestID = UUID()
         pingRequests[key] = requestID
         pingResults.removeValue(forKey: key)
-        let handler = PingHandler(controller: self, key: key, requestID: requestID, attachmentID: attachmentID)
+        let handler = PingHandler(controller: self, key: key, requestID: requestID, attachmentID: attachmentID, targetIP: address)
         await run { (client: LibboxCommandClient) in
             // The session reports once through the handler and is closed
             // below after a bounded wait (a one-shot probe, not a stream).
@@ -315,10 +351,11 @@ private final class PingHandler: NSObject, LibboxTailscalePingHandlerProtocol {
     private let key: String
     private let requestID: UUID
     private let attachmentID: UUID
+    private let targetIP: String
 
-    init(controller: TailscaleController, key: String, requestID: UUID, attachmentID: UUID) {
+    init(controller: TailscaleController, key: String, requestID: UUID, attachmentID: UUID, targetIP: String) {
         self.controller = controller
-        self.key = key; self.requestID = requestID; self.attachmentID = attachmentID
+        self.key = key; self.requestID = requestID; self.attachmentID = attachmentID; self.targetIP = targetIP
     }
 
     func onPingResult(_ result: LibboxTailscalePingResult?) {
@@ -330,7 +367,7 @@ private final class PingHandler: NSObject, LibboxTailscalePingHandlerProtocol {
             derpRegion: result.derpRegionCode.isEmpty
                 ? (result.derpRegionID > 0 ? "#\(result.derpRegionID)" : nil)
                 : result.derpRegionCode,
-            error: result.error.isEmpty ? nil : result.error
+            error: result.error.isEmpty ? nil : result.error, targetIP: targetIP
         )
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -340,7 +377,7 @@ private final class PingHandler: NSObject, LibboxTailscalePingHandlerProtocol {
 
     func onError(_ message: String?) {
         let outcome = TailscaleController.TailscalePingOutcome(
-            latencyMS: nil, isDirect: nil, viaRelay: nil, derpRegion: nil, error: message
+            latencyMS: nil, isDirect: nil, viaRelay: nil, derpRegion: nil, error: message, targetIP: targetIP
         )
         Task { @MainActor [weak self] in
             guard let self else { return }

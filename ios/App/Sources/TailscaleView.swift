@@ -35,6 +35,13 @@ struct TailscaleView: View {
     @State private var confirmDisable = false
     @State private var showAuthKey = false
     @State private var confirmDeleteKey = false
+    @State private var diagnosticTarget: DiagnosticTarget?
+
+    private struct DiagnosticTarget: Identifiable {
+        let endpoint: TailscaleEndpointSummary
+        let peer: TailscalePeerSummary
+        var id: String { endpoint.endpointTag + "/" + peer.stableID }
+    }
 
     init(store: ConfigStore, tunnel: TunnelControlling, commanding: LibboxCoreCommanding?) {
         self.store = store
@@ -87,6 +94,9 @@ struct TailscaleView: View {
                 catch { provisionNotice = Notice(kind: .error, text: "Keychain deletion failed") }
             }
             Button("Cancel", role: .cancel) {}
+        }
+        .sheet(item: $diagnosticTarget) { target in
+            PeerDiagnosticsView(controller: controller, endpoint: target.endpoint, peer: target.peer)
         }
         .sheet(isPresented: $showAuthKey, onDismiss: { authKeyDraft = "" }) {
             NavigationStack {
@@ -329,9 +339,15 @@ struct TailscaleView: View {
                     .padding(.horizontal, 6)
                     .background(Color.accentColor.opacity(0.2), in: Capsule())
             }
-            Button("Ping") {
-                Task { await controller.ping(endpointTag: endpoint.endpointTag, peer: peer) }
+            Menu("Check") {
+                Button("Ping peer") {
+                    Task { await controller.ping(endpointTag: endpoint.endpointTag, peer: peer) }
+                }
+                Button("Peer diagnostics") {
+                    diagnosticTarget = DiagnosticTarget(endpoint: endpoint, peer: peer)
+                }
             }
+            .accessibilityLabel("Check \(peer.displayName)")
             .font(.footnote)
             .sakamotoGlassButton()
             .disabled(!controller.channelActive)

@@ -71,12 +71,14 @@ public protocol TunnelControlling: AnyObject, Sendable {
     func reload(options: TunnelStartOptions) async throws
     func recoverExperiment() async throws
     func removeLearnedDomain(_ domain: String) async throws
+    func location(settings: VirtualLocationSettings?) async throws -> VirtualLocationSnapshot
 }
 
 public extension TunnelControlling {
     func status() async throws -> ServiceState { try await ping().serviceState }
     func reload(options: TunnelStartOptions) async throws { try await reload(configContent: options.configContent) }
     func recoverExperiment() async throws { throw TunnelProfile.InvalidProfile("Experiment recovery is unavailable on this transport") }
+    func location(settings: VirtualLocationSettings?) async throws -> VirtualLocationSnapshot { throw TunnelProfile.InvalidProfile("Location simulation is unavailable on this transport") }
     func removeLearnedDomain(_ domain: String) async throws { throw TunnelProfile.InvalidProfile("Learned routes are unavailable on this transport") }
 }
 

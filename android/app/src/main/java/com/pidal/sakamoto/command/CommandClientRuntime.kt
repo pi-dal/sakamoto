@@ -1,5 +1,6 @@
 package com.pidal.sakamoto.command
 
+import kotlinx.coroutines.launch
 import com.pidal.sakamoto.runtime.MobilecoreRuntime
 import com.pidal.sakamoto.runtime.TailscaleBinding
 import com.pidal.sakamoto.runtime.TailscaleRuntime
@@ -133,6 +134,15 @@ object CommandClientRuntime : CommandClientHandler {
     // serve — see TailscaleCapabilities.unsupported.
 
     private var tailscaleSubscription: TailscaleStatusSubscription? = null
+    private val pingGeneration = java.util.concurrent.atomic.AtomicLong()
+    private var pingJob: kotlinx.coroutines.Job? = null
+    private val pingScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
+
+    fun cancelTailscalePing() {
+        pingGeneration.incrementAndGet()
+        pingJob?.cancel()
+        pingJob = null
+    }
 
     /** Subscribe to the tailnet status stream (one live subscription). */
     fun subscribeTailscaleStatus() {
@@ -152,6 +162,7 @@ object CommandClientRuntime : CommandClientHandler {
     }
 
     fun stopTailscaleSubscription() {
+        cancelTailscalePing()
         tailscaleSubscription?.let { runCatching { it.close() } }
         tailscaleSubscription = null
         TailscaleRuntime.setSubscribed(false)
@@ -180,15 +191,30 @@ object CommandClientRuntime : CommandClientHandler {
             TailscaleRuntime.setNotice("command channel not connected")
             return
         }
-        try {
-            current.startTailscalePing(endpointTag, peerIP, tailscalePingHandler)
-        } catch (e: Exception) {
-            TailscaleRuntime.appendPing(
-                com.pidal.sakamoto.runtime.TailscalePingOutcome(
-                    latencyMs = 0.0, direct = false, endpoint = "", peerRelay = "",
-                    derpRegionCode = "", error = e.message ?: "start failed",
-                ),
-            )
+        cancelTailscalePing()
+        val generation = pingGeneration.get()
+        pingJob = pingScope.launch {
+            val handler = object : TailscalePingHandler {
+                private fun record(outcome: com.pidal.sakamoto.runtime.TailscalePingOutcome) {
+                    if (pingGeneration.get() == generation && channelConnected.value) {
+                        TailscaleRuntime.appendPing(outcome, "$endpointTag / $peerIP")
+                    }
+                }
+                override fun onPingResult(result: TailscalePingResult?) {
+                    if (result != null) record(TailscaleBinding.mapPing(result))
+                }
+                override fun onError(message: String?) {
+                    record(com.pidal.sakamoto.runtime.TailscalePingOutcome(0.0, false, "", "", "", message ?: "ping error"))
+                }
+            }
+            try {
+                val session = current.startTailscalePing(endpointTag, peerIP, handler)
+                try { kotlinx.coroutines.delay(5000) } finally { runCatching { session.close() } }
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                handler.onError(error.message ?: "start failed")
+            }
         }
     }
 
@@ -200,22 +226,6 @@ object CommandClientRuntime : CommandClientHandler {
 
         override fun onError(message: String?) {
             TailscaleRuntime.setNotice(message ?: "tailscale status error")
-        }
-    }
-
-    private val tailscalePingHandler = object : TailscalePingHandler {
-        override fun onPingResult(result: TailscalePingResult?) {
-            if (result == null) return
-            TailscaleRuntime.appendPing(TailscaleBinding.mapPing(result))
-        }
-
-        override fun onError(message: String?) {
-            TailscaleRuntime.appendPing(
-                com.pidal.sakamoto.runtime.TailscalePingOutcome(
-                    latencyMs = 0.0, direct = false, endpoint = "", peerRelay = "",
-                    derpRegionCode = "", error = message ?: "ping error",
-                ),
-            )
         }
     }
 

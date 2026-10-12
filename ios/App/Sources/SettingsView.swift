@@ -188,6 +188,7 @@ struct SettingsView: View {
                             Text("Reloading the tunnel can interrupt active connections. Sources are generated and validated on this device before applying.")
                         }
                 }
+                NavigationLink("Virtual location") { VirtualLocationView(tunnel: model.tunnel) }
                 NavigationLink("Tailscale") {
                     TailscaleView(store: model.store, tunnel: model.tunnel, commanding: commanding)
                 }

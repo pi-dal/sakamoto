@@ -32,6 +32,9 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
     private lazy var platformInterface = ExtensionPlatformInterface(self)
 
     private var commandServer: LibboxCommandServer?
+    private let locationRuntime = ProviderLocationRuntime()
+    var locationProxyPort: Int? { locationRuntime.snapshot().enabled ? locationRuntime.port : nil }
+    func setLocationFallback(_ address: String) { locationRuntime.setFallback(address) }
     private var tunnelStartOptions: TunnelStartOptions?
     @MainActor private var experimentRunner: ProviderExperimentRunner?
     private let operationGate = TunnelOperationGate()
@@ -90,6 +93,7 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
         } catch {
             TunnelDiagnostics.record(stage: "VPN startup", error: error)
             await stopExperiments()
+            locationRuntime.close()
             commandServer?.close(); commandServer = nil
             platformInterface.reset()
             SystemSurfaceStore.write(SystemSurfaceSnapshot(serviceState: .unavailable, phase: .unavailable))
@@ -142,6 +146,7 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
             )
         }
         try commandServer!.start()
+        locationRuntime.restore(server: commandServer!)
 
         try await applyProfile(options)
         SystemSurfaceStore.write(SystemSurfaceSnapshot(serviceState: .running, phase: .tunRunning))
@@ -164,6 +169,7 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
             reloadSystemSurfaces()
         }
         await stopExperiments()
+        locationRuntime.close()
         writeTunnelMessage("(packet-tunnel) stopping, reason: \(reason.rawValue)")
         do {
             try commandServer?.closeService()
@@ -188,6 +194,11 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
         }
 
         switch request {
+        case .location(let settings):
+            do {
+                let snapshot = try await configureLocation(settings)
+                return try? TunnelResponse(ok: true, location: snapshot).encode()
+            } catch { return try? TunnelResponse.failure(TunnelDiagnostics.sanitized(error.localizedDescription)).encode() }
         case .ping:
             let snapshot = TunnelStateSnapshot(
                 serviceState: operationGate.state ?? (commandServer?.isServiceRunning() == true ? .running : .unavailable),
@@ -253,6 +264,24 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
         guard let runner = experimentRunner else { throw ProviderStartupError("No running Experiment profile") }
         try await runner.remove(domain)
     }
+    @MainActor private func configureLocation(_ settings: VirtualLocationSettings?) async throws -> VirtualLocationSnapshot {
+        guard operationGate.state == nil, let server = commandServer, server.isServiceRunning() else { throw ProviderStartupError("Wait for the VPN to finish starting or applying") }
+        if let settings {
+            let previous = VirtualLocationStore.load()
+            let oldPort = locationProxyPort
+            do {
+                try locationRuntime.configure(settings, server: server)
+                if oldPort != locationProxyPort { try await platformInterface.updateLocationProxy() }
+                try VirtualLocationStore.save(settings)
+            } catch {
+                try? locationRuntime.configure(previous, server: server)
+                try? await platformInterface.updateLocationProxy()
+                throw error
+            }
+        }
+        return locationRuntime.snapshot()
+    }
+
     @MainActor private func applyProfile(_ options: TunnelStartOptions) async throws {
         guard let ticket = operationGate.beginApply() else {
             throw ProviderStartupError("Configuration application is already running or the VPN is stopping")
@@ -348,6 +377,7 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
     /// CommandServerHandler.serviceStop entry point (ExtensionPlatformInterface).
     func stopTunnelService() {
         operationGate.stop()
+        locationRuntime.close()
         do {
             try commandServer?.closeService()
         } catch {

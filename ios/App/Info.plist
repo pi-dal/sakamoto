@@ -31,8 +31,15 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>NSCameraUsageDescription</key>
 	<string>Scan QR codes to import nodes, subscriptions or configurations.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Check the location currently reported by iOS after you choose to simulate a position.</string>
 	<key>NSUbiquitousContainers</key>
 	<dict>
 		<key>iCloud.com.pidal.sakamoto</key>
