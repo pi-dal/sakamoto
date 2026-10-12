@@ -30,7 +30,7 @@ struct LocationMapPicker: View {
             GeometryReader { geometry in
             VStack(spacing: 0) {
                 HStack {
-                    TextField("Search a place or address", text: $query, prompt: Text("Search a place or address").foregroundStyle(.secondary))
+                    TextField("Search a place or address", text: $query, prompt: Text("Search a place or address").foregroundColor(.secondary))
                         .submitLabel(.search).onSubmit { searchPlaces() }
                         .autocorrectionDisabled().disabled(searching)
                     if !query.isEmpty && !searching {
