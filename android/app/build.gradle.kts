@@ -21,8 +21,8 @@ android {
         // flavor split — see android/README.md "API levels".
         minSdk = 24
         targetSdk = 35
-        versionCode = 10
-        versionName = "0.1.8"
+        versionCode = 11
+        versionName = "0.1.9"
         testInstrumentationRunner = if (providers.gradleProperty("sakamotoTestBuildType").orNull == "release") {
             "com.pidal.sakamoto.ReleaseBindingSmokeTest"
         } else {
@@ -85,6 +85,8 @@ dependencies {
     // gomobile JNI runtime and one go.Seq class in the process.
     implementation(files("libs/libbox.aar"))
 
+    implementation("org.maplibre.gl:android-sdk:12.3.1")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.android.gms:play-services-location:21.3.0")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")

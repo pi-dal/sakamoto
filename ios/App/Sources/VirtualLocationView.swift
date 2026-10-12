@@ -186,6 +186,20 @@ final class VirtualLocationModel: NSObject, ObservableObject, @preconcurrency CL
         try? certificateServer?.close(); certificateServer = nil
         if backgroundTask != .invalid { UIApplication.shared.endBackgroundTask(backgroundTask); backgroundTask = .invalid }
     }
+    var mapPoint: LocationWaypoint {
+        if let lat = Double(latitude.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: ".")), let lon = Double(longitude.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: ".")), lat.isFinite, lon.isFinite, (-90...90).contains(lat), (-180...180).contains(lon) { return LocationWaypoint(latitude: lat, longitude: lon) }
+        return LocationWaypoint(latitude: settings.latitude, longitude: settings.longitude)
+    }
+    var mapRoutePoints: [LocationWaypoint] { (try? VirtualLocationRoute.parse(routeText, duration: "300", interval: "1").points) ?? [] }
+    func selectMapPosition(_ point: LocationWaypoint) {
+        latitude = String(point.latitude); longitude = String(point.longitude)
+        message = "Location selected. Apply location to use this point."
+    }
+    func selectMapRoute(_ points: [LocationWaypoint]) {
+        routeText = points.map { "\($0.latitude), \($0.longitude)" }.joined(separator: "\n")
+        if let route = try? VirtualLocationRoute.parse(routeText, duration: routeDuration, interval: routeInterval) { try? VirtualLocationStore.saveRouteDraft(route) }
+        message = "Route selected. Start route when you are ready to move."
+    }
     func select(_ point: SavedLocation) {
         latitude = String(point.latitude); longitude = String(point.longitude)
         message = "Selected \(point.name). Apply coordinates to use this position."
@@ -241,6 +255,8 @@ struct VirtualLocationView: View {
     @StateObject private var model: VirtualLocationModel
     @State private var namingFavorite = false
     @State private var favoriteName = ""
+    @State private var mapMode: MapMode?
+    private enum MapMode: String, Identifiable { case position, route; var id: String { rawValue } }
     init(tunnel: TunnelControlling) { _model = StateObject(wrappedValue: VirtualLocationModel(tunnel: tunnel)) }
     var body: some View {
         List {
@@ -254,17 +270,28 @@ struct VirtualLocationView: View {
             } footer: {
                 Text("Requires Sakamoto VPN and a trusted device certificate. Changes Wi-Fi and cellular network-positioning responses; GPS and cached fixes can still take precedence. Turning off restores normal responses.")
             }
-            Section("Position · WGS84") {
-                coordinateField("Latitude", text: $model.latitude)
-                coordinateField("Longitude", text: $model.longitude)
+            Section("Position") {
+                LocationNativeMap(points: model.snapshot.route?.points ?? [model.mapPoint], current: model.snapshot.route == nil ? nil : livePoint, initialCenter: model.mapPoint)
+                    .frame(height: 220).listRowInsets(EdgeInsets())
+                    .allowsHitTesting(false).accessibilityLabel("Selected location and active route preview")
+                Button { mapMode = .position } label: { Label("Choose on map", systemImage: "map") }
+                Text(String(format: "Selected: %.6f, %.6f", model.mapPoint.latitude, model.mapPoint.longitude)).font(.caption).foregroundStyle(.secondary)
                 coordinateField("Accuracy (meters)", text: $model.accuracy)
-                Button(model.settings.enabled ? "Apply coordinates" : "Save coordinates") { Task { await model.apply(enabled: model.settings.enabled) } }.disabled(model.busy)
+                DisclosureGroup("Advanced coordinates · WGS84") {
+                    coordinateField("Latitude", text: $model.latitude)
+                    coordinateField("Longitude", text: $model.longitude)
+                }
+                Button(model.settings.enabled ? "Apply location" : "Save location") { Task { await model.apply(enabled: model.settings.enabled) } }.disabled(model.busy)
                 Button("Save favorite") { favoriteName = ""; namingFavorite = true }
             }
             Section {
-                TextField("Route points", text: $model.routeText, axis: .vertical)
-                    .lineLimit(3...8).autocorrectionDisabled().textInputAutocapitalization(.never)
-                    .accessibilityLabel("Route points, one latitude and longitude pair per line")
+                Button { openRouteMap() } label: { Label(model.routeText.isEmpty ? "Create route on map" : "Edit route on map", systemImage: "point.topleft.down.to.point.bottomright.curvepath") }
+                if !model.mapRoutePoints.isEmpty { Text("\(model.mapRoutePoints.count) stops · \(String(format: "%.2f", zip(model.mapRoutePoints, model.mapRoutePoints.dropFirst()).reduce(0) { $0 + $1.0.distance(to: $1.1) } / 1000)) km").font(.footnote).foregroundStyle(.secondary) }
+                DisclosureGroup("Advanced route coordinates · WGS84") {
+                    TextField("Route points", text: $model.routeText, axis: .vertical)
+                        .lineLimit(3...8).autocorrectionDisabled().textInputAutocapitalization(.never)
+                        .accessibilityLabel("Route points, one latitude and longitude pair per line")
+                }
                 coordinateField("Duration (seconds)", text: $model.routeDuration)
                 coordinateField("Update interval (seconds)", text: $model.routeInterval)
                 Text(model.routeSummary).font(.footnote).foregroundStyle(.secondary)
@@ -278,7 +305,7 @@ struct VirtualLocationView: View {
                 Button(model.snapshot.route == nil ? "Start route" : "Restart with edited route") { Task { await model.startRoute() } }
                     .disabled(model.busy || !model.vpnRunning || !model.trustChecked || !VirtualLocationStore.supportsNetworkSimulation)
             } header: { Text("Moving route") } footer: {
-                Text("Enter 2 to 32 WGS84 points in travel order, one latitude, longitude pair per line. Moves between points at constant speed for the total duration. Follows the entered path; no automatic road planning. Stops at the last point. Routes do not resume after VPN reconnect.")
+                Text("Choose 2 to 32 stops on the map in travel order. Moves between stops at constant speed for the total duration; add stops to follow road bends. Stops at the last point. Routes do not resume after VPN reconnect.")
             }
             if !model.favorites.isEmpty {
                 Section("Favorites") {
@@ -311,6 +338,12 @@ struct VirtualLocationView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("Virtual location")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(item: $mapMode) { mode in
+            LocationMapPicker(isRoute: mode == .route, points: mode == .route ? model.mapRoutePoints : [model.mapPoint], center: model.mapPoint, current: livePoint) { points in
+                if mode == .route { model.selectMapRoute(points) }
+                else if let point = points.first { model.selectMapPosition(point) }
+            }.presentationDetents([.large])
+        }
         .alert("Save favorite", isPresented: $namingFavorite) {
             TextField("Location name", text: $favoriteName)
             Button("Save") { model.saveFavorite(name: favoriteName) }
@@ -324,6 +357,17 @@ struct VirtualLocationView: View {
             } while !Task.isCancelled
         }
         .onDisappear { model.cancelObservation(); model.closeCertificateServer() }
+    }
+    private var livePoint: LocationWaypoint? {
+        guard model.snapshot.enabled, let lat = model.snapshot.latitude, let lon = model.snapshot.longitude else { return nil }
+        return LocationWaypoint(latitude: lat, longitude: lon)
+    }
+    private func openRouteMap() {
+        if !model.routeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, model.mapRoutePoints.isEmpty {
+            model.message = "The edited route contains invalid coordinates. Correct or clear Advanced route coordinates before opening the map."
+            return
+        }
+        mapMode = .route
     }
     private func coordinateField(_ label: String, text: Binding<String>) -> some View {
         HStack { Text(label); TextField(label, text: text).multilineTextAlignment(.trailing).keyboardType(.numbersAndPunctuation).autocorrectionDisabled().textInputAutocapitalization(.never).accessibilityLabel(label) }

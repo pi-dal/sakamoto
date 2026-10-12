@@ -37,6 +37,7 @@ __pycache__/
 # (never committed; built by android/scripts/*.sh)
 /android/app/libs/
 /android/.gradle/
+/android/.kotlin/
 /android/build/
 /android/app/build/
 /android/local.properties

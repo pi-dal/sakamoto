@@ -18,6 +18,11 @@ class AboutFragment : androidx.fragment.app.Fragment() {
         page.paragraph(legal, getString(R.string.about_license))
         page.paragraph(legal, getString(R.string.about_singbox))
         page.paragraph(legal, getString(R.string.about_tailscale))
+        page.button(legal, getString(R.string.location_map_licenses)) {
+            val notice = resources.openRawResource(R.raw.maplibre_notice).bufferedReader().use { it.readText() } + "\n\n" + resources.openRawResource(R.raw.okhttp_license).bufferedReader().use { it.readText() }
+            com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext()).setTitle(R.string.location_map_licenses)
+                .setMessage(notice).setPositiveButton(android.R.string.ok, null).show()
+        }
         val credits = page.section(getString(R.string.about_section_credits))
         page.paragraph(credits, getString(R.string.about_portrait))
         page.paragraph(credits, getString(R.string.about_state_semantics))

@@ -20,6 +20,7 @@ import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.core.location.LocationCompat
+import androidx.core.widget.doAfterTextChanged
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -45,7 +46,7 @@ import java.util.Date
 import java.util.Locale
 
 class VirtualLocationFragment : Fragment() {
-    private data class Controls(val page: GroupedPage, val toggle: MaterialSwitch, val status: TextView, val latitude: TextInputEditText, val longitude: TextInputEditText, val accuracy: TextInputEditText, val message: TextView, val observed: TextView, val routePoints: TextInputEditText, val duration: TextInputEditText, val interval: TextInputEditText, val routeStatus: TextView, val routeStart: MaterialButton, val routePause: MaterialButton, val routeHold: MaterialButton)
+    private data class Controls(val page: GroupedPage, val toggle: MaterialSwitch, val status: TextView, val latitude: TextInputEditText, val longitude: TextInputEditText, val accuracy: TextInputEditText, val message: TextView, val observed: TextView, val routePoints: TextInputEditText, val duration: TextInputEditText, val interval: TextInputEditText, val routeStatus: TextView, val routeStart: MaterialButton, val routePause: MaterialButton, val routeHold: MaterialButton, val selectedPosition: TextView, val routeDraft: TextView)
     private var ui: Controls? = null
     private var rendering = false
     private var pendingAction = ""
@@ -68,11 +69,20 @@ class VirtualLocationFragment : Fragment() {
         val message = page.note(getString(R.string.location_android_explanation))
         page.button(run, getString(R.string.location_stop)) { runCatching { MockLocationService.stop(requireContext()) }.onFailure { message.text = it.message } }
         val position = page.section(getString(R.string.location_position))
+        page.button(position, getString(R.string.location_map_choose)) { openMap(false) }
+        val selectedPosition = page.paragraph(position, "")
         val lat = page.field(position, getString(R.string.location_latitude), saved.latitude.toString())
         val lon = page.field(position, getString(R.string.location_longitude), saved.longitude.toString())
         val accuracy = page.field(position, getString(R.string.location_accuracy), saved.accuracy.toString())
         listOf(lat, lon).forEach { it.inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or InputType.TYPE_NUMBER_FLAG_SIGNED }
         accuracy.inputType = InputType.TYPE_CLASS_NUMBER
+        lat.parent.let { (it as View).visibility = View.GONE }; lon.parent.let { (it as View).visibility = View.GONE }
+        page.button(position, getString(R.string.location_map_advanced)) {
+            val show = (lat.parent as View).visibility != View.VISIBLE
+            (lat.parent as View).visibility = if (show) View.VISIBLE else View.GONE
+            (lon.parent as View).visibility = if (show) View.VISIBLE else View.GONE
+        }
+        listOf(lat, lon).forEach { field -> field.doAfterTextChanged { updateDraftLabels() } }
         page.button(position, getString(R.string.location_apply), primary = true) {
             try {
                 val point = proposed(); store.save(point)
@@ -101,12 +111,19 @@ class VirtualLocationFragment : Fragment() {
             MaterialAlertDialogBuilder(requireContext()).setTitle(R.string.location_delete_favorite).setItems(values.map { it.name }.toTypedArray()) { _, index -> store.removeFavorite(values[index].name) }.show()
         }
         val route = page.section(getString(R.string.location_route))
+        page.button(route, getString(R.string.location_map_edit_route)) { openMap(true) }
+        val routeDraft = page.paragraph(route, "")
         val draft = store.loadRoute()
         val routePoints = page.field(route, getString(R.string.location_route_points), draft?.points?.joinToString("\n") { "${it.latitude}, ${it.longitude}" } ?: "").apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
             isSingleLine = false; minLines = 3; maxLines = 8; gravity = android.view.Gravity.TOP
             filters = arrayOf(android.text.InputFilter.LengthFilter(4096))
         }
+        (routePoints.parent as View).visibility = View.GONE
+        page.button(route, getString(R.string.location_map_advanced_route)) {
+            val view = routePoints.parent as View; view.visibility = if (view.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+        }
+        routePoints.doAfterTextChanged { updateDraftLabels() }
         val duration = page.field(route, getString(R.string.location_route_duration), (draft?.durationSeconds ?: 300).toString()).apply { inputType = InputType.TYPE_CLASS_NUMBER }
         val interval = page.field(route, getString(R.string.location_route_interval), (draft?.intervalSeconds ?: 1).toString()).apply { inputType = InputType.TYPE_CLASS_NUMBER }
         val routeStatus = page.paragraph(route, getString(R.string.location_route_none))
@@ -129,7 +146,8 @@ class VirtualLocationFragment : Fragment() {
         }
         page.button(diagnostics, getString(R.string.location_share)) { share() }
         page.note(getString(R.string.location_android_diagnostics_note))
-        ui = Controls(page, toggle, status, lat, lon, accuracy, message, observed, routePoints, duration, interval, routeStatus, routeStart, routePause, routeHold)
+        ui = Controls(page, toggle, status, lat, lon, accuracy, message, observed, routePoints, duration, interval, routeStatus, routeStart, routePause, routeHold, selectedPosition, routeDraft)
+        updateDraftLabels()
         toggle.setOnCheckedChangeListener { _, enabled ->
             if (rendering) return@setOnCheckedChangeListener
             if (enabled) {
@@ -140,11 +158,43 @@ class VirtualLocationFragment : Fragment() {
         return page.root
     }
     override fun onViewCreated(view: View, state: Bundle?) {
+        parentFragmentManager.setFragmentResultListener(LocationMapFragment.RESULT, viewLifecycleOwner) { _, result ->
+            val controls = ui ?: return@setFragmentResultListener
+            val latitudes = result.getDoubleArray("latitudes") ?: return@setFragmentResultListener
+            val longitudes = result.getDoubleArray("longitudes") ?: return@setFragmentResultListener
+            if (result.getBoolean("route")) {
+                controls.routePoints.setText(latitudes.indices.joinToString("\n") { "${latitudes[it]}, ${longitudes[it]}" })
+                runCatching { MockLocationStore(requireContext()).saveRoute(MockLocationRoute.parse(controls.routePoints.text.toString(), controls.duration.text.toString(), controls.interval.text.toString(), 25)) }
+                controls.message.text = getString(R.string.location_map_route_selected)
+            } else if (latitudes.isNotEmpty() && longitudes.isNotEmpty()) {
+                controls.latitude.setText(latitudes[0].toString()); controls.longitude.setText(longitudes[0].toString())
+                controls.message.text = getString(R.string.location_map_position_selected)
+            }
+            updateDraftLabels()
+        }
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) { MockLocationRuntime.snapshot.collect { render() } }
         }
     }
     override fun onResume() { super.onResume(); render() }
+    private fun openMap(route: Boolean) {
+        val controls = ui ?: return
+        try {
+            val center = runCatching { MockCoordinates.parse(controls.latitude.text.toString(), controls.longitude.text.toString(), "25") }.getOrElse { MockLocationStore(requireContext()).load() }
+            val points = if (route) {
+                if (controls.routePoints.text.toString().isBlank()) emptyList()
+                else MockLocationRoute.parse(controls.routePoints.text.toString(), "300", "1", 25).points
+            } else listOf(center)
+            (requireActivity() as com.pidal.sakamoto.MainActivity).openChild(LocationMapFragment.create(route, points, center), getString(if (route) R.string.location_map_edit_route else R.string.location_map_choose))
+        } catch (_: Exception) { controls.message.text = getString(R.string.location_map_invalid_draft) }
+    }
+    private fun updateDraftLabels() {
+        val controls = ui ?: return
+        val point = runCatching { MockCoordinates.parse(controls.latitude.text.toString(), controls.longitude.text.toString(), "25") }.getOrNull()
+        controls.selectedPosition.text = point?.let { getString(R.string.location_map_selected_coordinates, it.latitude, it.longitude) } ?: getString(R.string.location_map_invalid_coordinates)
+        val route = runCatching { MockLocationRoute.parse(controls.routePoints.text.toString(), "300", "1", 25) }.getOrNull()
+        controls.routeDraft.text = route?.let { getString(R.string.location_map_route_count, it.points.size, it.distance / 1000) } ?: getString(R.string.location_map_route_empty)
+    }
     private fun proposed(): MockCoordinates {
         val controls = ui ?: error("Location page unavailable")
         return MockCoordinates.parse(controls.latitude.text.toString(), controls.longitude.text.toString(), controls.accuracy.text.toString())

@@ -21,6 +21,54 @@ final class VirtualLocationControlTests: XCTestCase {
         window.isHidden = true
     }
 
+    func testRenderLocationMapForNativeReview() async throws {
+        guard let directory = ProcessInfo.processInfo.environment["SAKAMOTO_LOCATION_REVIEW_DIR"] else { throw XCTSkip("Only run when native screenshot output is requested") }
+        guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else { throw XCTSkip("No scene for rendering") }
+        let points = [LocationWaypoint(latitude: 37.3349, longitude: -122.009), .init(latitude: 37.333, longitude: -122.007), .init(latitude: 37.331, longitude: -122.006)]
+        let window = UIWindow(windowScene: scene)
+        let variant = ProcessInfo.processInfo.environment["SAKAMOTO_LOCATION_REVIEW_VARIANT"] ?? ""
+        let content = LocationMapPicker(isRoute: true, points: points, center: points[0], current: points[1]) { _ in }
+            .environment(\.dynamicTypeSize, variant == "dark-large" ? .xxxLarge : .large)
+            .preferredColorScheme(variant == "dark-large" ? .dark : nil)
+        let host = UIHostingController(rootView: content)
+        window.rootViewController = host; window.makeKeyAndVisible()
+        try await Task.sleep(nanoseconds: 5_000_000_000)
+        let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
+        let data = try XCTUnwrap(image.pngData()); XCTAssertGreaterThan(data.count, 20_000)
+        let folder = URL(fileURLWithPath: directory); try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let device = UIDevice.current.userInterfaceIdiom == .pad ? "tablet" : "phone"
+        let name = "\(device)-ios-map\(variant.isEmpty ? "" : "-" + variant).png"
+        try data.write(to: folder.appendingPathComponent(name)); window.isHidden = true
+    }
+    func testMapPositionDoesNotChangeLiveSimulationUntilApplied() async {
+        let tunnel = LocationControlTunnel()
+        let model = VirtualLocationModel(tunnel: tunnel, supportsSimulation: true)
+        model.trustChecked = true
+        model.settings = VirtualLocationSettings(enabled: true, latitude: 0, longitude: 0)
+        model.selectMapPosition(LocationWaypoint(latitude: 37.3349, longitude: -122.009))
+        XCTAssertNil(tunnel.settings); XCTAssertEqual(model.settings.latitude, 0)
+        XCTAssertEqual(model.mapPoint.latitude, 37.3349)
+        await model.apply(enabled: true)
+        XCTAssertEqual(tunnel.settings?.latitude, 37.3349)
+        XCTAssertEqual(tunnel.settings?.longitude, -122.009)
+        XCTAssertEqual(tunnel.reloads, 0)
+    }
+    func testMapRouteEditingPreservesLiveRouteAndRejectsInvalidTimingAtStart() async {
+        let tunnel = LocationControlTunnel()
+        let live = VirtualLocationRoute(points: [.init(latitude: 0, longitude: 0), .init(latitude: 0, longitude: 1)], durationSeconds: 60)
+        tunnel.evidence.route = live; tunnel.evidence.routeState = "Paused"
+        let model = VirtualLocationModel(tunnel: tunnel, supportsSimulation: true)
+        model.settings.route = live; model.snapshot = tunnel.evidence; model.trustChecked = true
+        model.routeDuration = "invalid"
+        let edited = [LocationWaypoint(latitude: 37.3349, longitude: -122.009), .init(latitude: 37.333, longitude: -122.007)]
+        model.selectMapRoute(edited)
+        XCTAssertEqual(model.mapRoutePoints, edited)
+        XCTAssertEqual(model.settings.route, live); XCTAssertEqual(model.snapshot.routeState, "Paused")
+        XCTAssertNil(tunnel.settings)
+        await model.startRoute()
+        XCTAssertNil(tunnel.settings); XCTAssertNotNil(model.message)
+    }
+
     func testStopIgnoresInvalidUnappliedCoordinateEditsAndDoesNotReloadVPN() async {
         let tunnel = LocationControlTunnel()
         let model = VirtualLocationModel(tunnel: tunnel)

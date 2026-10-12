@@ -37,6 +37,14 @@ The optional iOS location HTTPS adapter uses [elazarl/goproxy](https://github.co
 >
 > THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+## Mobile maps
+
+- iOS uses Apple's system MapKit framework and MKLocalSearch.
+- Android uses [MapLibre Native](https://github.com/maplibre/maplibre-native), version 12.3.1, under BSD-2-Clause. The complete notice is distributed in `android/app/src/main/res/raw/maplibre_notice.txt`, accessible from About → Map licenses.
+- MapLibre's existing OkHttp 4.12.0 runtime is also declared as a direct application dependency for bounded, cancellable Photon search requests. Copyright Square, Inc.; Apache-2.0. The complete license is distributed in `android/app/src/main/res/raw/okhttp_license.txt`.
+- Android tiles/styles: [OpenFreeMap](https://openfreemap.org/), using [OpenMapTiles](https://openmaptiles.org/) and © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright) data under ODbL. The SDK's attribution control is retained and the map editor also names the providers.
+- Android place search: the public [Photon](https://github.com/komoot/photon) service by komoot; © OpenStreetMap contributors. Its implementation is not vendored. Explicit searches are throttled and cached.
+
 ## About-page portrait
 
 - Source photograph: [RyuichiSakamoto2007.jpg](https://commons.wikimedia.org/wiki/File:RyuichiSakamoto2007.jpg) by **Joi Ito**; the Wikimedia Commons portrait was cropped by **Solid State Survivor**.

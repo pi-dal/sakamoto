@@ -69,7 +69,7 @@ real DNS/TLS/HTTPS 204 check. Node latency is not an end-to-end VPN health claim
 
 ## Virtual location
 
-Settings → Virtual location supports fixed WGS84 coordinates and multi-point moving routes, accuracy, favorites, pause/resume, endpoint hold, start/stop and diagnostic export. A separate location foreground service installs GPS/network mock providers and optionally Google fused mock mode. Select Sakamoto as the mock-location app in Developer options and grant location permission. The service does not resume automatically at boot; unconfirmed cleanup requires Stop simulation recovery. See [setup and restoration](../docs/virtual-location-setup.md).
+Settings → Virtual location uses **MapLibre Native** with OpenFreeMap maps and Photon place search for map selection and numbered route editing, without a map API key or Google Play dependency. Coordinates remain available under Advanced editing. It supports fixed WGS84 coordinates and multi-point moving routes, accuracy, favorites, pause/resume, endpoint hold, start/stop and diagnostic export. A separate location foreground service installs GPS/network mock providers and optionally Google fused mock mode. Select Sakamoto as the mock-location app in Developer options and grant location permission. The service does not resume automatically at boot; unconfirmed cleanup requires Stop simulation recovery. See [setup and restoration](../docs/virtual-location-setup.md).
 
 ## Peer connectivity diagnostics
 
