@@ -118,6 +118,23 @@ class EditingRulesTest {
         }
     }
 
+    @Test fun suffixChoiceAcceptsDomainWildcardAndPrefixWithoutChangingOtherPredicates() {
+        for (value in listOf("aihubmix.com", "*.AIHUBMIX.com", "suffix:aihubmix.com", "https://aihubmix.com/chat")) {
+            val next = EditingRules.buildRule(JSONObject(saved), "domain", "domain_suffix", value, "route", "proxy")
+            assertEquals(listOf("aihubmix.com"), strings(next.getJSONArray("domain_suffix")))
+            assertFalse(next.has("domain"))
+            assertEquals(443, next.getJSONArray("port").getInt(1))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            EditingRules.buildRule(JSONObject(), null, "domain", "*.aihubmix.com", "route", "proxy")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            EditingRules.buildRule(JSONObject(), null, "domain_suffix", "aihubmix.com/extra", "route", "proxy")
+        }
+        val old = JSONObject("""{"domain_suffix":"aihubmix.com","outbound":"proxy"}""")
+        assertEquals(old.toString(), EditingRules.buildRule(old, "domain_suffix", "domain_suffix", "aihubmix.com", "route", "proxy").toString())
+    }
+
     @Test fun entriesIgnoreBlankFragments() {
         assertEquals(listOf("a.com", "b.com"), EditingRules.entries(" a.com , , b.com "))
         assertEquals(emptyList<String>(), EditingRules.entries(" , "))

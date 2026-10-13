@@ -199,6 +199,7 @@ class EditorFragment : androidx.fragment.app.Fragment(), UnsavedConfigEditor {
                         choices["predicate"] = next
                         predicateRow.detail(predicateLabels[next] ?: next)
                         inputs["match"]?.hint = predicateLabels[next] ?: next
+                        inputs["match"]?.helperText = matchHelp(next)
                         dirty = true
                     }
                 }
@@ -208,7 +209,7 @@ class EditorFragment : androidx.fragment.app.Fragment(), UnsavedConfigEditor {
                 field(group, matchSpec, value)
                 val matchLayout = inputs["match"]
                 matchLayout?.hint = predicateLabels[choices["predicate"]] ?: predicate
-                matchLayout?.helperText = getString(R.string.rule_match_value)
+                matchLayout?.helperText = matchHelp(choices["predicate"] ?: predicate)
                 val actionLabels = LinkedHashMap<String, String>()
                 for (action in EditingRules.actions) actionLabels[action] = action
                 choices["action"] = state?.getString("choice:action") ?: rule.optString("action", "route").ifEmpty { "route" }
@@ -234,6 +235,14 @@ class EditorFragment : androidx.fragment.app.Fragment(), UnsavedConfigEditor {
         page.note(getString(R.string.editor_save_hint))
         return page.root
     }
+
+    private fun matchHelp(predicate: String): String = getString(when (predicate) {
+        "domain" -> R.string.policy_match_exact_help
+        "domain_suffix" -> R.string.policy_match_suffix_help
+        "domain_keyword" -> R.string.policy_match_keyword_help
+        "ip_cidr" -> R.string.policy_match_cidr_help
+        else -> R.string.rule_match_value
+    })
 
     private fun findOutbound(root: JSONObject, tag: String): JSONObject? {
         val items = root.optJSONArray("outbounds") ?: return null

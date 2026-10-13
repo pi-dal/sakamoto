@@ -80,14 +80,35 @@ class AddPolicySheet : ConfigSheet() {
         val original = arguments?.getString("match")?.let { ConfigRepository.PolicyRule(it, arguments?.getString("action") ?: "proxy") }
         val root = content()
         sheetTitle(root, if (original == null) R.string.add_policy_action else R.string.edit_rule)
-        val match = root.sheetField(getString(R.string.policy_match_hint))
+        var matchType = PolicyMatchType.AUTOMATIC
+        val match = root.sheetField(getString(R.string.rule_match_value))
         match.setText(original?.match.orEmpty())
+        if (original != null) runCatching { Mobilecore.normalizePolicyRule(original.match, original.action) }.getOrNull()?.let { info ->
+            matchType = when (info.kind) { "domain" -> PolicyMatchType.DOMAIN; "domain_suffix" -> PolicyMatchType.SUFFIX; "domain_keyword" -> PolicyMatchType.KEYWORD; "ip_cidr" -> PolicyMatchType.CIDR; else -> PolicyMatchType.AUTOMATIC }
+            if (matchType != PolicyMatchType.AUTOMATIC) match.setText(info.value)
+        }
+        val matchLayout = match.parent.parent as TextInputLayout
+        matchLayout.helperText = getString(matchType.help)
+        val type = com.google.android.material.button.MaterialButton(requireContext(), null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
+            text = getString(R.string.rule_match_type) + ": " + getString(matchType.label)
+            setOnClickListener {
+                val types = PolicyMatchType.values()
+                MaterialAlertDialogBuilder(requireContext()).setTitle(R.string.rule_match_type)
+                    .setSingleChoiceItems(types.map { getString(it.label) }.toTypedArray(), types.indexOf(matchType)) { dialog, index ->
+                        matchType = types[index]; text = getString(R.string.rule_match_type) + ": " + getString(matchType.label)
+                        matchLayout.helperText = getString(matchType.help); dialog.dismiss()
+                    }.show()
+            }
+        }
+        root.addView(type, 1)
         val action = AutoCompleteTextView(requireContext()).apply { setText("proxy"); setAdapter(ArrayAdapter(requireContext(), android.R.layout.simple_dropdown_item_1line, listOf("proxy", "direct", "reject"))); inputType = InputType.TYPE_NULL; setOnClickListener { showDropDown() } }
         action.setText(original?.action ?: "proxy", false)
         root.addView(TextInputLayout(requireContext()).apply { hint = getString(R.string.policy_action_hint); addView(action) }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 12 })
         finishButton(root, if (original == null) R.string.add else R.string.save) {
             try {
-                val info = Mobilecore.normalizePolicyRule(match.text.toString(), action.text.toString())
+                val input = matchType.inputForValidation(match.text.toString())
+                val parsed = Mobilecore.normalizePolicyRule(input, action.text.toString())
+                val info = Mobilecore.normalizePolicyRule(matchType.match(input, parsed.kind, parsed.value), action.text.toString())
                 ConfigRepository.savePolicy(requireContext(), original, ConfigRepository.PolicyRule(info.match, info.action))
                 parentFragmentManager.setFragmentResult("config-updated", Bundle())
                 dismiss()

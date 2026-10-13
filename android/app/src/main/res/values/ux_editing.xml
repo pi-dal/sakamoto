@@ -31,8 +31,8 @@
     <string name="ux_editing_field_service_name">Service name</string>
     <string name="ux_editing_transport_type">Transport type</string>
 
-    <string name="ux_editing_pred_domain">Domain</string>
-    <string name="ux_editing_pred_domain_suffix">Domain suffix</string>
+    <string name="ux_editing_pred_domain">Exact domain</string>
+    <string name="ux_editing_pred_domain_suffix">Domain &amp; all subdomains</string>
     <string name="ux_editing_pred_domain_keyword">Domain keyword</string>
     <string name="ux_editing_pred_ip_cidr">IP CIDR</string>
     <string name="ux_editing_pred_rule_set">Rule set</string>

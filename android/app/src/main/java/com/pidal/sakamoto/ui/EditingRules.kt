@@ -28,6 +28,21 @@ object EditingRules {
         else value.toString()
     }
 
+    private fun domainValues(values: List<String>, suffix: Boolean): List<String> = values.map { raw ->
+        var text = raw.trim()
+        for (prefix in listOf("suffix:", "domain:")) if (text.startsWith(prefix, true)) text = text.substring(prefix.length).trim()
+        if (text.contains("://")) {
+            val url = runCatching { java.net.URI(text) }.getOrNull()
+            require(url?.scheme?.lowercase(java.util.Locale.ROOT) in setOf("http", "https") && !url?.host.isNullOrEmpty()) { "Enter a domain or HTTP(S) URL" }
+            text = url!!.host
+        }
+        if (suffix) text = text.removePrefix("*.").removePrefix(".")
+        require(text.isNotEmpty() && text.none { it.isWhitespace() || it in "/*:@?#" }) {
+            if (suffix) "Enter a domain such as aihubmix.com" else "Choose Domain & all subdomains to use *.aihubmix.com"
+        }
+        text.lowercase(java.util.Locale.ROOT)
+    }.distinct()
+
     fun buildRule(original: JSONObject, oldPredicate: String?, predicate: String, rawValues: String, action: String, outbound: String): JSONObject {
         require(predicate in predicates) { "Unknown match type" }
         require(action in actions) { "Unknown action" }
@@ -51,6 +66,7 @@ object EditingRules {
         }
         if (!unchangedMatch && entries.isNotEmpty()) {
             when (predicate) {
+                "domain", "domain_suffix" -> next.put(predicate, JSONArray(domainValues(entries, predicate == "domain_suffix")))
                 "ip_is_private" -> {
                     require(entries.size == 1 && entries[0] in setOf("true", "false")) { "Use true or false" }
                     next.put(predicate, entries[0].toBoolean())

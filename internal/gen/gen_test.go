@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/pi-dal/sakamoto/internal/config"
+	"github.com/sagernet/sing/common/domain"
 )
 
 func TestSingleNonRealityNodeStillHasFallbackGroup(t *testing.T) {
@@ -56,6 +57,30 @@ func TestUserPolicyRulesNormalizeAndApply(t *testing.T) {
 		!p.bk["reject"]["domain_keyword"]["tracker"] ||
 		!p.bk["direct"]["ip_cidr"]["192.0.2.0/24"] {
 		t.Fatalf("policy rules were not normalized: %#v", p.bk)
+	}
+}
+
+func TestPolicyDomainSuffixMatchesRootAndSubdomainsAtLabelBoundary(t *testing.T) {
+	for _, match := range []string{"suffix:aihubmix.com", "*.aihubmix.com"} {
+		cfg := config.Default()
+		cfg.PolicyRules = []config.PolicyRule{{Match: match, Action: "proxy"}}
+		p := &parsedConf{bk: buckets{}, general: map[string]string{}}
+		if err := applyPolicyRules(p, cfg); err != nil {
+			t.Fatal(err)
+		}
+		var suffixes []string
+		for value := range p.bk["proxy"]["domain_suffix"] {
+			suffixes = append(suffixes, value)
+		}
+		matcher := domain.NewMatcher(nil, suffixes, false)
+		for host, want := range map[string]bool{
+			"aihubmix.com": true, "api.aihubmix.com": true, "chat.api.aihubmix.com": true,
+			"notaihubmix.com": false, "aihubmix.com.example": false, "aihubmix.net": false,
+		} {
+			if got := matcher.Match(host); got != want {
+				t.Errorf("%s matching %s = %v, want %v", match, host, got, want)
+			}
+		}
 	}
 }
 

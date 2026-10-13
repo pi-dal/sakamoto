@@ -54,6 +54,28 @@ final class NodeGroupUITests: XCTestCase {
         XCTAssertEqual(app.textFields["NodeField-tag"].value as? String, "Renamed node")
         attachment("node-native-editor")
     }
+    func testPolicyDomainAndSubdomainsSaveAndReopen() {
+        let routing = app.buttons["Routing rules"]
+        XCTAssertTrue(routing.waitForExistence(timeout: 5))
+        if !routing.isHittable { app.swipeUp() }
+        routing.tap()
+        app.buttons["Edit custom overrides"].tap()
+        app.buttons["Add rule…"].tap()
+        app.buttons["PolicyMatchType"].tap()
+        app.buttons["Domain & all subdomains"].tap()
+        let value = app.textFields["PolicyMatchValue"]
+        XCTAssertTrue(value.waitForExistence(timeout: 3))
+        value.tap(); value.typeText("aihubmix.com")
+        app.buttons["PolicySave"].tap()
+        let rule = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "PolicyRule-")).firstMatch
+        XCTAssertTrue(rule.waitForExistence(timeout: 4))
+        XCTAssertTrue(rule.label.contains("suffix:aihubmix.com"))
+        rule.tap()
+        XCTAssertEqual(app.textFields["PolicyMatchValue"].value as? String, "aihubmix.com")
+        XCTAssertTrue(app.buttons["PolicyMatchType"].label.contains("Domain & all subdomains"))
+        attachment("policy-domain-and-subdomains")
+    }
+
     func testGroupMemberSelectionSavesAndReopens() {
         app.buttons["Proxy groups"].tap()
         XCTAssertTrue(app.buttons["Group-MainProxy"].waitForExistence(timeout: 3))

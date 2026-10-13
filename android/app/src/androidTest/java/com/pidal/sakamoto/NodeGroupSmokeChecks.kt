@@ -94,7 +94,41 @@ class NodeGroupSmokeChecks(private val instrumentation: Instrumentation) {
                 activity.supportFragmentManager.executePendingTransactions()
             }
             settle(); capture("groups-saved.png")
-            instrumentation.runOnMainSync { activity.finish() }
+            lateinit var policy: EditorFragment
+            instrumentation.runOnMainSync {
+                policy = EditorFragment().apply { arguments = Bundle().apply { putString("kind", "rule"); putInt("index", -1) } }
+                activity.openChild(policy, context.getString(R.string.add_policy_action))
+                activity.supportFragmentManager.executePendingTransactions()
+                var matchType: View = descendants(policy.requireView()).filterIsInstance<TextView>().first { it.text.toString() == context.getString(R.string.rule_match_type) }
+                while (!matchType.isClickable && matchType.parent is View) matchType = matchType.parent as View
+                check(matchType.performClick())
+            }
+            settle()
+            instrumentation.uiAutomation.let { automation ->
+                val root = checkNotNull(automation.rootInActiveWindow)
+                val option = root.findAccessibilityNodeInfosByText(context.getString(R.string.ux_editing_pred_domain_suffix)).first()
+                check(option.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK))
+            }
+            settle()
+            instrumentation.runOnMainSync {
+                descendants(policy.requireView()).filterIsInstance<EditText>().single().setText("*.aihubmix.com")
+            }
+            capture("policy-domain-and-subdomains.png")
+            instrumentation.runOnMainSync { activity.findViewById<MaterialToolbar>(R.id.top_app_bar).menu.performIdentifierAction(R.id.editor_save, 0) }
+            settle()
+            val rule = org.json.JSONObject(ConfigRepository.load(context).generatedContent).getJSONObject("route").getJSONArray("rules").getJSONObject(0)
+            check(rule.getJSONArray("domain_suffix").getString(0) == "aihubmix.com")
+            check(!rule.has("domain"))
+            instrumentation.runOnMainSync {
+                policy = EditorFragment().apply { arguments = Bundle().apply { putString("kind", "rule"); putInt("index", 0) } }
+                activity.openChild(policy, context.getString(R.string.edit_rule)); activity.supportFragmentManager.executePendingTransactions()
+            }
+            settle()
+            instrumentation.runOnMainSync {
+                check(descendants(policy.requireView()).filterIsInstance<EditText>().single().text.toString() == "aihubmix.com")
+                check(descendants(policy.requireView()).filterIsInstance<TextView>().any { it.text.toString() == context.getString(R.string.ux_editing_pred_domain_suffix) })
+                activity.finish()
+            }
         } finally { ConfigRepository.save(context, original) }
     }
 }

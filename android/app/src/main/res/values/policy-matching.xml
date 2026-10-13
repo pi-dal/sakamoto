@@ -1,0 +1,8 @@
+<resources>
+    <string name="policy_match_automatic">From input / prefixes</string>
+    <string name="policy_match_automatic_help">A hostname matches exactly. Use *.aihubmix.com or suffix:aihubmix.com to include all subdomains. keyword: and cidr: are also supported.</string>
+    <string name="policy_match_exact_help">aihubmix.com matches only that domain. Subdomains such as api.aihubmix.com are excluded.</string>
+    <string name="policy_match_suffix_help">aihubmix.com matches the domain itself and every subdomain, including api.aihubmix.com and chat.api.aihubmix.com. You can also enter *.aihubmix.com or suffix:aihubmix.com.</string>
+    <string name="policy_match_keyword_help">aihubmix matches any domain containing that text.</string>
+    <string name="policy_match_cidr_help">Enter an IP address or a range such as 192.0.2.0/24.</string>
+</resources>

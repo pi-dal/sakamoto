@@ -47,7 +47,11 @@ final class ConfigModel: ObservableObject {
     @Published var showAddPolicy = false
     @Published var newPolicyMatch = ""
     @Published var newPolicyAction = "proxy"
+    @Published var newPolicyType = PolicyMatchType.automatic
+    @Published var editingPolicyRule: StagedPolicyRule?
     @Published var policyFormError: String?
+    private var policyFormBook: PolicyBook?
+    private var policyFormProfile: String?
 
     // Nodes & sources forms + reveal state
     @Published var showAddNode = false
@@ -265,18 +269,52 @@ final class ConfigModel: ObservableObject {
 
     // MARK: Policy
 
+    func beginPolicyRule(_ rule: StagedPolicyRule? = nil) {
+        editingPolicyRule = rule
+        policyFormBook = store.policy
+        policyFormProfile = store.selectedProfileID
+        newPolicyAction = rule?.action ?? "proxy"
+        newPolicyMatch = rule?.match ?? ""
+        newPolicyType = .automatic
+        if let rule {
+            var error: NSError?
+            if let info = MobilecoreNormalizePolicyRule(rule.match, rule.action, &error),
+               let type = ["domain": PolicyMatchType.domain, "domain_suffix": .suffix, "domain_keyword": .keyword, "ip_cidr": .cidr][info.kind] {
+                newPolicyType = type; newPolicyMatch = info.value
+            }
+        }
+        policyFormError = nil
+        showAddPolicy = true
+    }
+
     func addPolicyRule() {
         policyFormError = nil
-        let match = newPolicyMatch.trimmingCharacters(in: .whitespacesAndNewlines)
-        var bridgeError: NSError?
-        guard let info = MobilecoreNormalizePolicyRule(match, newPolicyAction, &bridgeError) else {
-            policyFormError = bridgeError?.localizedDescription ?? "invalid rule"
+        guard !store.generating, !store.applying,
+              policyFormBook == nil || (store.policy == policyFormBook && store.selectedProfileID == policyFormProfile) else {
+            policyFormError = "Configuration changed. Reopen the policy editor and try again."
             return
         }
-        store.commitPolicy(store.policy.adding(StagedPolicyRule(match: info.match, action: info.action)))
-        newPolicyMatch = ""
-        newPolicyAction = "proxy"
-        showAddPolicy = false
+        do {
+            let input = newPolicyType.inputForValidation(newPolicyMatch)
+            var bridgeError: NSError?
+            guard let info = MobilecoreNormalizePolicyRule(input, newPolicyAction, &bridgeError) else {
+                if let bridgeError { throw bridgeError }
+                throw ImportError(reason: "Enter a valid policy match.")
+            }
+            let match = try newPolicyType.match(raw: input, normalizedKind: info.kind, value: info.value)
+            bridgeError = nil
+            guard let checked = MobilecoreNormalizePolicyRule(match, newPolicyAction, &bridgeError) else {
+                if let bridgeError { throw bridgeError }
+                throw ImportError(reason: "Enter a valid policy match.")
+            }
+            let rule = StagedPolicyRule(id: editingPolicyRule?.id ?? UUID().uuidString, match: checked.match, action: checked.action)
+            if let original = editingPolicyRule {
+                store.commitPolicy(store.policy.updating(id: original.id, to: rule))
+            } else { store.commitPolicy(store.policy.adding(rule)) }
+            newPolicyMatch = ""; newPolicyAction = "proxy"; newPolicyType = .automatic
+            editingPolicyRule = nil; policyFormBook = nil
+            showAddPolicy = false
+        } catch { policyFormError = error.localizedDescription }
     }
 
     func removePolicyRule(_ rule: StagedPolicyRule) {
@@ -739,22 +777,20 @@ struct ConfigView: View {
     private var policySection: some View {
         Section {
             ForEach(model.store.policy.rules) { rule in
-                Button {
-                    model.pendingPolicyDeletion = rule
-                } label: {
-                    HStack {
-                        Text(rule.match)
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Spacer()
-                        Text(rule.action)
-                            .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(actionColor(rule.action).opacity(0.15), in: Capsule())
-                            .foregroundStyle(actionColor(rule.action))
-                    }
+                HStack {
+                    Button { model.beginPolicyRule(rule) } label: {
+                        HStack {
+                            Text(rule.match).foregroundStyle(.primary).lineLimit(1).truncationMode(.middle)
+                            Spacer()
+                            Text(rule.action).font(.caption.weight(.semibold))
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(actionColor(rule.action).opacity(0.15), in: Capsule())
+                                .foregroundStyle(actionColor(rule.action))
+                        }
+                    }.buttonStyle(.borderless).accessibilityIdentifier("PolicyRule-" + rule.id)
+                    Button(role: .destructive) { model.pendingPolicyDeletion = rule } label: {
+                        Image(systemName: "trash").frame(minWidth: 44, minHeight: 44)
+                    }.buttonStyle(.borderless).accessibilityLabel("Delete policy rule")
                 }
             }
             .onDelete { offsets in
@@ -762,20 +798,27 @@ struct ConfigView: View {
                     model.pendingPolicyDeletion = model.store.policy.rules[index]
                 }
             }
-            Button("Add rule…") { model.showAddPolicy = true }
+            Button("Add rule…") { model.beginPolicyRule() }
         } header: {
             Text("Policy")
         } footer: {
-            Text("Hostname (exact), *.suffix, keyword:, cidr: and http(s) URLs (host only) with proxy / direct / reject — validated with the host's rules. Generate includes these rules; Apply activates them.")
+            Text("Choose an exact domain or include all subdomains. URLs use the host only. Generate includes these rules; Apply activates them.")
         }
     }
 
     private var addPolicySheet: some View {
         NavigationStack {
             Form {
-                TextField("Match (host, *.suffix, keyword:, cidr:, URL)", text: $model.newPolicyMatch, axis: .vertical)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
+                Section {
+                    Picker("Match type", selection: $model.newPolicyType) {
+                        ForEach(PolicyMatchType.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }.pickerStyle(.menu).accessibilityIdentifier("PolicyMatchType")
+                    LabeledContent("Match value") {
+                        TextField("aihubmix.com", text: $model.newPolicyMatch, axis: .vertical)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                            .accessibilityIdentifier("PolicyMatchValue")
+                    }
+                } footer: { Text(model.newPolicyType.help) }
                 Picker("Action", selection: $model.newPolicyAction) {
                     ForEach(["proxy", "direct", "reject"], id: \.self) { Text($0).tag($0) }
                 }
@@ -784,17 +827,19 @@ struct ConfigView: View {
                     Text(error).font(.footnote).foregroundStyle(.primary)
                 }
             }
-            .navigationTitle("Add policy rule")
+            .navigationTitle(model.editingPolicyRule == nil ? "Add policy rule" : "Edit policy rule")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { model.showAddPolicy = false }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Add") { model.addPolicyRule() }
+                    Button(model.editingPolicyRule == nil ? "Add" : "Save") { model.addPolicyRule() }
+                        .disabled(model.newPolicyMatch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.store.generating || model.store.applying)
+                        .accessibilityIdentifier("PolicySave")
                 }
             }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
     }
 
     // MARK: Nodes & sources
