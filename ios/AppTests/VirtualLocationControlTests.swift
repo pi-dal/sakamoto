@@ -9,14 +9,26 @@ final class VirtualLocationControlTests: XCTestCase {
         guard let directory = ProcessInfo.processInfo.environment["SAKAMOTO_LOCATION_REVIEW_DIR"] else { throw XCTSkip("Only run when native screenshot output is requested") }
         guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else { throw XCTSkip("No scene for rendering") }
         let window = UIWindow(windowScene: scene)
-        let host = UIHostingController(rootView: NavigationStack { VirtualLocationView(tunnel: LocationControlTunnel()) })
+        let preferences = UserDefaults.standard
+        let previousExpansion = preferences.object(forKey: "sakamoto.location.setupGuideExpanded")
+        preferences.set(true, forKey: "sakamoto.location.setupGuideExpanded")
+        defer {
+            if let previousExpansion { preferences.set(previousExpansion, forKey: "sakamoto.location.setupGuideExpanded") }
+            else { preferences.removeObject(forKey: "sakamoto.location.setupGuideExpanded") }
+        }
+        let variant = ProcessInfo.processInfo.environment["SAKAMOTO_LOCATION_REVIEW_VARIANT"] ?? ""
+        let content = NavigationStack { VirtualLocationView(tunnel: LocationControlTunnel(), supportsSimulation: true) }
+            .environment(\.dynamicTypeSize, variant == "dark-large" ? .xxxLarge : .large)
+            .preferredColorScheme(variant == "dark-large" ? .dark : nil)
+        let host = UIHostingController(rootView: content)
         window.rootViewController = host; window.makeKeyAndVisible()
         try await Task.sleep(nanoseconds: 500_000_000)
         let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
         let data = try XCTUnwrap(image.pngData())
         XCTAssertGreaterThan(data.count, 20_000)
         let folder = URL(fileURLWithPath: directory); try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let name = UIDevice.current.userInterfaceIdiom == .pad ? "tablet-ios.png" : "phone-ios.png"
+        let device = UIDevice.current.userInterfaceIdiom == .pad ? "tablet" : "phone"
+        let name = "\(device)-ios-setup\(variant.isEmpty ? "" : "-" + variant).png"
         try data.write(to: folder.appendingPathComponent(name))
         window.isHidden = true
     }

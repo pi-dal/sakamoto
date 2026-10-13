@@ -4,6 +4,15 @@ Available from **Settings → Virtual location**. Choose places and route stops 
 
 **Choose on map** opens an isolated draft. Pan/zoom and tap a location, or submit a place/address search and choose a result; **Choose map center** (Android: **Choose center**) also selects the crosshair. **Done** (Android: **Use selection**) returns the chosen point to settings. Then tap **Save/Apply location**, or enable simulation. Cancel/back discards map edits and never changes an active simulation. Map browsing and place search do not request location permission.
 
+## In-app setup guide
+
+Open **Settings → Virtual location → Setup guide**. The guide is expanded initially and can be collapsed or reopened at any time; its expanded state is remembered. Numbered steps use the real certificate, permission, map and simulation controls. A “Next” hint reflects checked prerequisites and runtime status, rather than marking a step complete just because a button was tapped. Browsing the guide or granting location access does not start simulation.
+
+- **iOS:** download the device certificate → install the profile and enable full trust → check trust → choose a place → connect VPN and enable simulation → check the reported position. The Home link switches to the existing Home tab; return to Settings → Virtual location after connecting. Moving route and diagnostic links scroll to those controls. iOS exposes only an app-settings link, so the guide shows the exact manual paths for profile installation and Certificate Trust Settings. Downloading a profile alone does not install or trust it. Returning from Settings refreshes the VPN/runtime status; run **Check certificate trust** after changing trust.
+- **Android:** enable Developer options → choose Sakamoto as the mock location app → turn on device Location and allow app access → choose a place → explicitly start → check the reported position. Buttons open About phone, Developer options, device Location, and Sakamoto app settings. If a device lacks a settings destination, the app tries the main Settings screen and displays manual recovery instructions. Authorization, location-service and permission states are checked again on return. Android needs neither the iOS certificate nor a VPN connection for this feature.
+
+The guide also explains how to create a moving route and stop simulation. Map selection edits only the draft; active simulation changes only on an explicit Apply/Start action.
+
 ## iOS 26
 
 1. Tap **Install location certificate**. Safari downloads the public configuration profile. Install it in Settings. If the download cannot reach localhost through your current proxy, use **Export certificate profile**, save it to Files and open the file to install.

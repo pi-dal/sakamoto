@@ -140,6 +140,11 @@ final class VirtualLocationModel: NSObject, ObservableObject, @preconcurrency CL
         if let error { throw error }
         certificateServer = server; return server
     }
+    func openAppSettings() {
+        UIApplication.shared.open(URL(string: UIApplication.openSettingsURLString)!) { [weak self] opened in
+            if !opened { Task { @MainActor in self?.message = "Open Settings manually, then follow the setup guide’s paths." } }
+        }
+    }
     func installCertificate() {
         do {
             let server = try server(create: true)
@@ -256,15 +261,24 @@ struct VirtualLocationView: View {
     @State private var namingFavorite = false
     @State private var favoriteName = ""
     @State private var mapMode: MapMode?
+    @AppStorage("sakamoto.location.setupGuideExpanded") private var guideExpanded = true
+    @Environment(\.scenePhase) private var scenePhase
     private enum MapMode: String, Identifiable { case position, route; var id: String { rawValue } }
-    init(tunnel: TunnelControlling) { _model = StateObject(wrappedValue: VirtualLocationModel(tunnel: tunnel)) }
+    init(tunnel: TunnelControlling, supportsSimulation: Bool = VirtualLocationStore.supportsNetworkSimulation) {
+        _model = StateObject(wrappedValue: VirtualLocationModel(tunnel: tunnel, supportsSimulation: supportsSimulation))
+    }
     var body: some View {
+        ScrollViewReader { proxy in
         List {
+            LocationSetupGuide(model: model, expanded: $guideExpanded,
+                choosePosition: { mapMode = .position },
+                showRoute: { jump(to: "route", using: proxy) },
+                showDiagnostics: { jump(to: "diagnostics", using: proxy) })
             Section {
                 Toggle("Simulate network location", isOn: Binding(get: { model.settings.enabled }, set: { enabled in Task { await model.apply(enabled: enabled, useEditedCoordinates: enabled) } }))
-                    .disabled(model.busy || !VirtualLocationStore.supportsNetworkSimulation)
+                    .disabled(model.busy || !model.supportsSimulation)
                 LabeledContent("Status", value: model.vpnRunning && !model.snapshotAvailable ? "Unknown" : model.snapshot.enabled ? "Active" : model.settings.enabled ? (model.vpnRunning ? "Not active" : "Waiting for VPN") : "Off")
-                if !VirtualLocationStore.supportsNetworkSimulation { Text("Network-location simulation is unavailable on iOS 27 and later.").font(.footnote).foregroundStyle(.secondary) }
+                if !model.supportsSimulation { Text("Network-location simulation is unavailable on iOS 27 and later.").font(.footnote).foregroundStyle(.secondary) }
                 if model.busy { ProgressView("Updating…") }
                 if let message = model.message { Text(message).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled) }
             } footer: {
@@ -283,7 +297,7 @@ struct VirtualLocationView: View {
                 }
                 Button(model.settings.enabled ? "Apply location" : "Save location") { Task { await model.apply(enabled: model.settings.enabled) } }.disabled(model.busy)
                 Button("Save favorite") { favoriteName = ""; namingFavorite = true }
-            }
+            }.id("position")
             Section {
                 Button { openRouteMap() } label: { Label(model.routeText.isEmpty ? "Create route on map" : "Edit route on map", systemImage: "point.topleft.down.to.point.bottomright.curvepath") }
                 if !model.mapRoutePoints.isEmpty { Text("\(model.mapRoutePoints.count) stops · \(String(format: "%.2f", zip(model.mapRoutePoints, model.mapRoutePoints.dropFirst()).reduce(0) { $0 + $1.0.distance(to: $1.1) } / 1000)) km").font(.footnote).foregroundStyle(.secondary) }
@@ -303,10 +317,10 @@ struct VirtualLocationView: View {
                     Button("Stop route and hold position") { Task { await model.holdRoute() } }.disabled(model.busy)
                 }
                 Button(model.snapshot.route == nil ? "Start route" : "Restart with edited route") { Task { await model.startRoute() } }
-                    .disabled(model.busy || !model.vpnRunning || !model.trustChecked || !VirtualLocationStore.supportsNetworkSimulation)
+                    .disabled(model.busy || !model.vpnRunning || !model.trustChecked || !model.supportsSimulation)
             } header: { Text("Moving route") } footer: {
                 Text("Choose 2 to 32 stops on the map in travel order. Moves between stops at constant speed for the total duration; add stops to follow road bends. Stops at the last point. Routes do not resume after VPN reconnect.")
-            }
+            }.id("route")
             if !model.favorites.isEmpty {
                 Section("Favorites") {
                     ForEach(model.favorites) { point in Button { model.select(point) } label: { VStack(alignment: .leading) { Text(point.name); Text(String(format: "%.6f, %.6f", point.latitude, point.longitude)).font(.caption).foregroundStyle(.secondary) } } }
@@ -330,10 +344,12 @@ struct VirtualLocationView: View {
                 if !model.snapshot.error.isEmpty { Text(model.snapshot.error).font(.footnote).foregroundStyle(.secondary) }
                 Button("Refresh proxy diagnostics") { Task { await model.refresh() } }
                 Button("Check reported location") { model.observeLocation() }.disabled(model.observing)
+                Button("Open Sakamoto location permissions") { model.openAppSettings() }
                 if model.observing { ProgressView("Waiting for a fresh location…") }
                 if let observed = model.observed { Text(observed).font(.footnote).textSelection(.enabled) }
                 ShareLink("Share diagnostic report", item: model.report)
             } header: { Text("Diagnostics") } footer: { Text("A rewritten response proves interception. Check the reported position separately. Shared reports include your selected coordinates.") }
+                .id("diagnostics")
         }
         .listStyle(.insetGrouped)
         .navigationTitle("Virtual location")
@@ -356,7 +372,18 @@ struct VirtualLocationView: View {
                 do { try await Task.sleep(nanoseconds: 2_000_000_000) } catch { return }
             } while !Task.isCancelled
         }
+        .onChange(of: scenePhase) { phase in
+            if phase == .active { Task { await model.refresh() } }
+        }
         .onDisappear { model.cancelObservation(); model.closeCertificateServer() }
+        }
+    }
+    private func jump(to section: String, using proxy: ScrollViewProxy) {
+        guideExpanded = false
+        Task { @MainActor in
+            await Task.yield()
+            withAnimation { proxy.scrollTo(section, anchor: .top) }
+        }
     }
     private var livePoint: LocationWaypoint? {
         guard model.snapshot.enabled, let lat = model.snapshot.latitude, let lon = model.snapshot.longitude else { return nil }

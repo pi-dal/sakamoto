@@ -20,6 +20,7 @@ import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.core.location.LocationCompat
+import androidx.core.view.doOnNextLayout
 import androidx.core.widget.doAfterTextChanged
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
@@ -48,6 +49,7 @@ import java.util.Locale
 class VirtualLocationFragment : Fragment() {
     private data class Controls(val page: GroupedPage, val toggle: MaterialSwitch, val status: TextView, val latitude: TextInputEditText, val longitude: TextInputEditText, val accuracy: TextInputEditText, val message: TextView, val observed: TextView, val routePoints: TextInputEditText, val duration: TextInputEditText, val interval: TextInputEditText, val routeStatus: TextView, val routeStart: MaterialButton, val routePause: MaterialButton, val routeHold: MaterialButton, val selectedPosition: TextView, val routeDraft: TextView)
     private var ui: Controls? = null
+    private var setupGuide: LocationSetupGuide? = null
     private var rendering = false
     private var pendingAction = ""
     private val handler = Handler(Looper.getMainLooper())
@@ -57,12 +59,16 @@ class VirtualLocationFragment : Fragment() {
     private var observationActive = false
     private var observationEpoch = 0L
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-        if (hasLocationPermission()) { when (pendingAction) { "observe" -> observe(); "route" -> startRoute(); else -> start() } }
-        else ui?.message?.text = getString(R.string.location_permission_denied)
+        if (hasLocationPermission()) {
+            when (pendingAction) { "observe" -> observe(); "route" -> startRoute(); "start" -> start() }
+        } else ui?.message?.text = getString(R.string.location_permission_denied)
         pendingAction = ""
+        render()
     }
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, state: Bundle?): View {
         val page = GroupedPage(requireContext()); val store = MockLocationStore(requireContext()); val saved = store.load()
+        // Reserve the guide's place before the normal controls; wire it after their views exist.
+        val guideContainer = page.section(getString(R.string.location_setup_title))
         val run = page.section(getString(R.string.virtual_location))
         val toggle = page.toggle(run, getString(R.string.location_enable), false)
         val status = page.paragraph(run, "")
@@ -137,16 +143,30 @@ class VirtualLocationFragment : Fragment() {
         page.note(getString(R.string.location_route_note))
         val auth = page.section(getString(R.string.location_authorization))
         page.paragraph(auth, getString(R.string.location_developer_instructions))
-        page.button(auth, getString(R.string.location_developer_options)) { runCatching { startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)) }.onFailure { startActivity(Intent(Settings.ACTION_SETTINGS)) } }
-        page.button(auth, getString(R.string.location_system_settings)) { startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }
+        page.button(auth, getString(R.string.location_developer_options)) { openSystemSettings(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS) }
+        page.button(auth, getString(R.string.location_system_settings)) { openSystemSettings(Settings.ACTION_LOCATION_SOURCE_SETTINGS) }
         val diagnostics = page.section(getString(R.string.location_diagnostics))
         val observed = page.paragraph(diagnostics, getString(R.string.location_not_measured))
         page.button(diagnostics, getString(R.string.location_observe)) {
             if (!hasLocationPermission()) { pendingAction = "observe"; requestPermission() } else observe()
         }
+        page.button(diagnostics, getString(R.string.location_setup_app_settings)) { openSystemSettings(Settings.ACTION_APPLICATION_DETAILS_SETTINGS) }
         page.button(diagnostics, getString(R.string.location_share)) { share() }
         page.note(getString(R.string.location_android_diagnostics_note))
         ui = Controls(page, toggle, status, lat, lon, accuracy, message, observed, routePoints, duration, interval, routeStatus, routeStart, routePause, routeHold, selectedPosition, routeDraft)
+        setupGuide = LocationSetupGuide(page, guideContainer,
+            openDeviceInfo = { openSystemSettings(Settings.ACTION_DEVICE_INFO_SETTINGS) },
+            openDeveloperOptions = { openSystemSettings(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS) },
+            openLocationSettings = { openSystemSettings(Settings.ACTION_LOCATION_SOURCE_SETTINGS) },
+            allowLocation = { pendingAction = "permission"; requestPermission() },
+            openAppSettings = { openSystemSettings(Settings.ACTION_APPLICATION_DETAILS_SETTINGS) },
+            choosePosition = { openMap(false) },
+            startSimulation = { start(); jumpTo(run) },
+            showRoute = { jumpTo(route) },
+            checkLocation = {
+                if (!hasLocationPermission()) { pendingAction = "observe"; requestPermission() } else observe()
+                jumpTo(diagnostics)
+            })
         updateDraftLabels()
         toggle.setOnCheckedChangeListener { _, enabled ->
             if (rendering) return@setOnCheckedChangeListener
@@ -177,6 +197,28 @@ class VirtualLocationFragment : Fragment() {
         }
     }
     override fun onResume() { super.onResume(); render() }
+    private fun openSystemSettings(action: String) {
+        val intent = Intent(action)
+        if (action == Settings.ACTION_APPLICATION_DETAILS_SETTINGS) {
+            intent.data = android.net.Uri.fromParts("package", requireContext().packageName, null)
+        }
+        runCatching { startActivity(intent) }.onFailure {
+            ui?.message?.text = getString(R.string.location_settings_unavailable)
+            runCatching { startActivity(Intent(Settings.ACTION_SETTINGS)) }
+        }
+    }
+    private fun jumpTo(view: View) {
+        val page = ui?.page ?: return
+        val content = page.root.getChildAt(0)
+        content.doOnNextLayout {
+            if (ui?.page !== page) return@doOnNextLayout
+            val rect = android.graphics.Rect(0, 0, view.width, view.height)
+            page.root.offsetDescendantRectToMyCoords(view, rect)
+            page.root.smoothScrollTo(0, rect.top)
+        }
+        setupGuide?.setExpanded(false)
+        content.requestLayout()
+    }
     private fun openMap(route: Boolean) {
         val controls = ui ?: return
         try {
@@ -215,6 +257,10 @@ class VirtualLocationFragment : Fragment() {
     }
     private fun render() {
         val controls = ui ?: return; val snapshot = MockLocationRuntime.snapshot.value
+        val locationEnabled = androidx.core.location.LocationManagerCompat.isLocationEnabled(requireContext().getSystemService(LocationManager::class.java))
+        setupGuide?.render(
+            Settings.Global.getInt(requireContext().contentResolver, Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 0) != 0,
+            MockLocationRuntime.authorized(requireContext()), locationEnabled, hasLocationPermission(), snapshot.phase)
         rendering = true; controls.toggle.isChecked = snapshot.phase == "Active" || snapshot.phase == "Starting"
         controls.toggle.isEnabled = snapshot.phase != "Starting" && snapshot.phase != "Stopping"; rendering = false
         val time = if (snapshot.lastFix > 0) DateFormat.getDateTimeInstance().format(Date(snapshot.lastFix)) else getString(R.string.location_no_fix)
@@ -274,5 +320,5 @@ class VirtualLocationFragment : Fragment() {
         val report = "Sakamoto $version · Android ${Build.VERSION.RELEASE}\nVirtual location · ${Date()}\nWGS84: ${point.latitude}, ${point.longitude}; accuracy: ${point.accuracy} m\nStatus: ${snapshot.phase}; injected fixes: ${snapshot.fixes}; fused mock: ${snapshot.fused}; last fix: ${snapshot.lastFix}\nRoute: ${snapshot.routeState}; elapsed: ${snapshot.routeElapsed} / ${snapshot.routeDuration} s\nDetail: ${snapshot.error}\nObserved: ${ui?.observed?.text}"
         startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, report), getString(R.string.location_share)))
     }
-    override fun onDestroyView() { cancelObservation(); ui = null; super.onDestroyView() }
+    override fun onDestroyView() { cancelObservation(); setupGuide = null; ui = null; super.onDestroyView() }
 }
