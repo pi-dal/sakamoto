@@ -25,6 +25,7 @@ class NativeBindingSmokeTest : Instrumentation() {
     private var maps = false
     private var locationSetup = false
     private var widgetToggle = false
+    private var updates = false
 
     override fun onCreate(arguments: Bundle?) {
         super.onCreate(arguments)
@@ -38,6 +39,7 @@ class NativeBindingSmokeTest : Instrumentation() {
         navigation = arguments?.getString("navigation") == "true"
         maps = arguments?.getString("maps") == "true"
         locationSetup = arguments?.getString("locationSetup") == "true"
+        updates = arguments?.getString("updates") == "true"
         widgetToggle = arguments?.getString("toggle") == "true"
         if (widgetToggle) checkVpn = true
         holdMillis = arguments?.getString("holdMillis")?.toLongOrNull()?.coerceIn(0L, 30_000L) ?: 0L
@@ -380,6 +382,7 @@ class NativeBindingSmokeTest : Instrumentation() {
             }
             if (navigation) checkNavigation()
             if (maps) LocationMapSmokeChecks(this).run()
+            if (updates) AppUpdateSmokeChecks(this).run()
             if (locationSetup) LocationSetupSmokeChecks(this).run()
             if (checkVpn) {
                 check(VpnService.prepare(targetContext) == null) { "VPN consent is required" }
@@ -456,7 +459,7 @@ class NativeBindingSmokeTest : Instrumentation() {
                 sendStatus(0, Bundle().apply { putString("stream", "VPN running: system inspection window\n") })
                 Thread.sleep(holdMillis)
             }
-            results.putString("stream", "PASS: JNI + network permission + VPN service registration${if (checkUi) " + trailing row actions/48dp/large font/RTL/click isolation" else ""}${if (navigation) " + Telegram tabs/Config/Data/Settings/back/font1.3/RTL/light-dark" else ""}${if (locationSetup) " + location setup settings round-trip/permission-only grant/map/route jump/reopen" else ""}${if (maps) " + native map style/GL capture/route append/undo/commit/cancel without location permission" else ""}${if (checkVpn) " + real VPN startup + mode stream" else ""}${if (probe) " + application Check DNS/TLS/HTTPS204 + Reachable state" else ""}${if (checkSnapshot) " + host policy/exit snapshot" else ""}${if (controls) " + native reload + notification check/stop + widget provider" else ""}${if (widgetSizes) " + three widget providers/resizing/48dp at font1.3" else ""}${if (homeLayout) " + Home connection states/font1.3/status-switch click isolation" else ""}${if (widgetToggle) " + widget direct connect/disconnect/reconnect" else ""}\n")
+            results.putString("stream", "PASS: JNI + network permission + VPN service registration${if (updates) " + updater published APK/signature/cache/tamper protection/native states" else ""}${if (checkUi) " + trailing row actions/48dp/large font/RTL/click isolation" else ""}${if (navigation) " + Telegram tabs/Config/Data/Settings/back/font1.3/RTL/light-dark" else ""}${if (locationSetup) " + location setup settings round-trip/permission-only grant/map/route jump/reopen" else ""}${if (maps) " + native map style/GL capture/route append/undo/commit/cancel without location permission" else ""}${if (checkVpn) " + real VPN startup + mode stream" else ""}${if (probe) " + application Check DNS/TLS/HTTPS204 + Reachable state" else ""}${if (checkSnapshot) " + host policy/exit snapshot" else ""}${if (controls) " + native reload + notification check/stop + widget provider" else ""}${if (widgetSizes) " + three widget providers/resizing/48dp at font1.3" else ""}${if (homeLayout) " + Home connection states/font1.3/status-switch click isolation" else ""}${if (widgetToggle) " + widget direct connect/disconnect/reconnect" else ""}\n")
             finish(Activity.RESULT_OK, results)
         } catch (error: Throwable) {
             val safe = error.message.orEmpty().replace(Regex("https?://\\S+"), "[URL]").take(200)

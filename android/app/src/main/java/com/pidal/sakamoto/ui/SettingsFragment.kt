@@ -36,6 +36,9 @@ class SettingsFragment : Fragment() {
             (requireActivity() as MainActivity).openChild(ExperimentsFragment(), getString(R.string.experiments_title))
         }
         val app = page.section(getString(R.string.settings_section_app))
+        page.setting(app, getString(R.string.app_updates), icon = R.drawable.ic_sync) {
+            (requireActivity() as MainActivity).openChild(AppUpdateFragment(), getString(R.string.app_updates))
+        }
         page.setting(app, getString(R.string.system_surfaces_title), icon = R.drawable.ic_info) {
             (requireActivity() as MainActivity).openChild(SystemSurfacesFragment(), getString(R.string.system_surfaces_title))
         }

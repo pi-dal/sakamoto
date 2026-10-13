@@ -441,6 +441,7 @@ struct SettingsView: View {
 
     private var aboutSection: some View {
         Section {
+            NavigationLink("App updates") { AppUpdateView() }
             NavigationLink("Widgets & Shortcuts") { SystemSurfacesView() }
             NavigationLink("About sakamoto") { AboutView() }
         } header: {

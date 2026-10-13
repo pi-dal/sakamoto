@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_updates">App updates</string>
+    <string name="update_installed">Installed version</string>
+    <string name="update_source">Update source</string>
+    <string name="update_github">Open GitHub releases</string>
+    <string name="update_release_notes">Release notes</string>
+    <string name="update_idle">Check for a newer official Android release.</string>
+    <string name="update_check">Check for updates</string>
+    <string name="update_check_again">Check again</string>
+    <string name="update_checking">Checking GitHub…</string>
+    <string name="update_available">An update is available</string>
+    <string name="update_latest">You have the latest Android release.</string>
+    <string name="update_downloading">Downloading update…</string>
+    <string name="update_verifying">Verifying installer…</string>
+    <string name="update_ready">Verified update ready to install</string>
+    <string name="update_failed">Update could not be completed</string>
+    <string name="update_cancelling">Cancelling…</string>
+    <string name="update_download">Download update</string>
+    <string name="update_install">Install update</string>
+    <string name="update_cancel">Cancel</string>
+    <string name="update_retry_download">Download again</string>
+    <string name="update_retry_check">Try checking again</string>
+    <string name="update_progress">%1$s of %2$s</string>
+    <string name="update_download_note">Downloads use your current connection. Keep this page open until the download finishes. Android will ask you to confirm installation. Your saved settings are kept.</string>
+    <string name="update_allow_install">Enable “Allow from this source” for Sakamoto, return here, then tap Install update again.</string>
+    <string name="update_installer_opened">Confirm the update in the Android installer. If you cancel, you can tap Install update again.</string>
+    <string name="update_installer_error">Android could not open the installer or its settings. Try again, or download the APK from GitHub releases.</string>
+    <string name="update_browser_error">No browser could open GitHub. Install a browser and try again.</string>
+    <string name="update_network_error">Could not finish the download or reach GitHub. Check your connection and available storage, then retry.</string>
+    <string name="update_invalid_response">GitHub returned an invalid update response. Try again later or open GitHub releases.</string>
+</resources>
