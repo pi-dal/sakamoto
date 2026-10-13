@@ -63,8 +63,6 @@ final class ConfigModel: ObservableObject {
 
     // Pending deletion (second-click confirmation, like the TUI).
     @Published var pendingPolicyDeletion: StagedPolicyRule?
-    @Published var pendingNodeDeletion: StagedNode?
-    @Published var pendingSubscriptionDeletion: StagedSubscription?
 
     /// What the import report shows, decoded from the Go bridge's JSON
     /// (mobilecore.ParseConfContentJSON — the shape is asserted Go-side).
@@ -310,8 +308,38 @@ final class ConfigModel: ObservableObject {
         showAddNode = false
     }
 
-    func removeNode(_ node: StagedNode) {
-        store.commitNodesSources(store.nodesSources.removingNode(id: node.id))
+    func saveSourceNode(_ rawLink: String, original: StagedNode?, profileID: String?) throws {
+        guard store.selectedProfileID == profileID, !store.applying, !store.generating else { throw ImportError(reason: "Configuration changed. Reopen the node editor.") }
+        if let original, !store.nodesSources.nodes.contains(original) { throw ImportError(reason: "This node changed or was removed. Reopen the editor.") }
+        let raw = rawLink.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !MobilecoreIsSubLink(raw) else { throw ImportError(reason: "Add subscription links under Sources instead.") }
+        var node = try Self.validateNode(raw)
+        guard !store.nodesSources.nodes.contains(where: { $0.rawLink == raw && $0.id != original?.id }) else { throw ImportError(reason: "This share link already exists.") }
+        if let original {
+            if node.tag != original.tag, store.selectedProfile?.proxyGroups?.contains(where: { $0.members.contains(original.tag) }) == true {
+                throw ImportError(reason: "Saved groups use this node name. Choose another member in Proxy groups before renaming it.")
+            }
+            node.id = original.id; node.addedAt = original.addedAt
+            if node.rawLink != original.rawLink { store.clearNodeOverride(original.tag) }
+            store.commitNodesSources(store.nodesSources.updating(node: node))
+        } else { store.commitNodesSources(store.nodesSources.adding(node: node)) }
+    }
+
+    func saveSourceSubscription(name: String, url: String, format: String, original: StagedSubscription?, profileID: String?) throws {
+        guard store.selectedProfileID == profileID, !store.applying, !store.generating else { throw ImportError(reason: "Configuration changed. Reopen the source editor.") }
+        if let original, !store.nodesSources.subscriptions.contains(original) { throw ImportError(reason: "This source changed or was removed. Reopen the editor.") }
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines), url = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, let parsed = URL(string: url), ["http", "https"].contains(parsed.scheme ?? ""), StagedSubscription.formats.contains(format) else { throw ImportError(reason: "Enter a source name, an HTTP(S) URL and a supported format.") }
+        var error: NSError?
+        _ = MobilecoreValidateSourceURL(url, &error)
+        if let error { throw error }
+        guard !store.nodesSources.subscriptions.contains(where: { $0.name == name && $0.id != original?.id }) else { throw ImportError(reason: "A source with this name already exists.") }
+        let source = StagedSubscription(id: original?.id ?? UUID().uuidString, name: name, url: url, format: format)
+        store.commitNodesSources(original == nil ? store.nodesSources.adding(subscription: source) : store.nodesSources.updating(subscription: source))
+    }
+
+    func removeNode(_ node: StagedNode) throws {
+        try store.removeSourceNode(node)
         revealedNodeIDs.remove(node.id)
     }
 
@@ -348,6 +376,7 @@ final class ConfigModel: ObservableObject {
     }
 
     func removeSubscription(_ subscription: StagedSubscription) {
+        guard store.nodesSources.subscriptions.contains(subscription), !store.applying, !store.generating else { return }
         store.commitNodesSources(store.nodesSources.removingSubscription(id: subscription.id))
         revealedSubscriptionIDs.remove(subscription.id)
     }
@@ -419,12 +448,10 @@ struct ConfigView: View {
                             .navigationTitle("Custom overrides")
                     }
                 } label: { Label("Routing rules", systemImage: "arrow.triangle.branch") }
+                NavigationLink { ProxyGroupsView(store: model.store) } label: { Label("Proxy groups", systemImage: "square.stack.3d.up") }
                 NavigationLink { ProxyChainView(store: model.store) } label: { Label("Proxy chain", systemImage: "point.3.connected.trianglepath.dotted") }
                 NavigationLink {
-                    List { nodesSourcesSection }
-                        .listStyle(.insetGrouped)
-                        .navigationTitle("Nodes & sources")
-                        .navigationBarTitleDisplayMode(.inline)
+                    NodesSourcesView(model: model)
                 } label: {
                     HStack {
                         Label("Nodes & sources", systemImage: "network")
@@ -594,32 +621,6 @@ struct ConfigView: View {
             }
         } message: {
             Text(model.pendingPolicyDeletion.map { "\($0.match) → \($0.action)" } ?? "")
-        }
-        .confirmationDialog(
-            "Remove staged node?", isPresented: Binding(
-                get: { model.pendingNodeDeletion != nil },
-                set: { if !$0 { model.pendingNodeDeletion = nil } }
-            ), titleVisibility: .visible
-        ) {
-            Button("Remove", role: .destructive) {
-                if let node = model.pendingNodeDeletion { model.removeNode(node) }
-                model.pendingNodeDeletion = nil
-            }
-        } message: {
-            Text(model.pendingNodeDeletion.map { "\($0.tag) (\($0.type))" } ?? "")
-        }
-        .confirmationDialog(
-            "Remove subscription source?", isPresented: Binding(
-                get: { model.pendingSubscriptionDeletion != nil },
-                set: { if !$0 { model.pendingSubscriptionDeletion = nil } }
-            ), titleVisibility: .visible
-        ) {
-            Button("Remove", role: .destructive) {
-                if let sub = model.pendingSubscriptionDeletion { model.removeSubscription(sub) }
-                model.pendingSubscriptionDeletion = nil
-            }
-        } message: {
-            Text(model.pendingSubscriptionDeletion.map { SecretMasking.maskSecret($0.url) } ?? "")
         }
     }
 
@@ -797,94 +798,6 @@ struct ConfigView: View {
     }
 
     // MARK: Nodes & sources
-
-    private var nodesSourcesSection: some View {
-        Section {
-            if model.store.nodesSources.nodes.isEmpty && model.store.nodesSources.subscriptions.isEmpty {
-                Text("No manual nodes or sources staged.").font(.footnote).foregroundStyle(.secondary)
-            }
-            ForEach(model.store.nodesSources.nodes) { node in
-                Button {
-                    model.pendingNodeDeletion = node
-                } label: {
-                    nodeRow(node)
-                }
-            }
-            .onDelete { offsets in
-                for index in offsets where index < model.store.nodesSources.nodes.count {
-                    model.pendingNodeDeletion = model.store.nodesSources.nodes[index]
-                }
-            }
-            ForEach(model.store.nodesSources.subscriptions) { subscription in
-                Button {
-                    model.pendingSubscriptionDeletion = subscription
-                } label: {
-                    subscriptionRow(subscription)
-                }
-            }
-            .onDelete { offsets in
-                for index in offsets where index < model.store.nodesSources.subscriptions.count {
-                    model.pendingSubscriptionDeletion = model.store.nodesSources.subscriptions[index]
-                }
-            }
-            Button("Import nodes.txt from Files…") { model.importNodesFile = true; model.showFileImporter = true }
-            if let notice = model.nodeImportNotice { Text(notice).font(.footnote).foregroundStyle(.secondary) }
-            if let error = model.importError { Text(error).font(.footnote).foregroundStyle(.primary) }
-            Button("Add node (share link)…") { model.showAddNode = true }
-            Button("Add subscription source…") { model.showAddSubscription = true }
-        } header: {
-            Text("Nodes & sources")
-        } footer: {
-            Text("Links and subscription URLs are masked until revealed and never appear in logs. Generate fetches and decodes subscriptions on this device; Apply activates the generated nodes.")
-        }
-    }
-
-    private func nodeRow(_ node: StagedNode) -> some View {
-        let revealed = model.revealedNodeIDs.contains(node.id)
-        return HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(node.tag).foregroundStyle(.primary).lineLimit(1)
-                Text(revealed ? node.rawLink : SecretMasking.maskSecret(node.rawLink))
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            Spacer()
-            Text(node.type).font(.caption).foregroundStyle(.secondary)
-            Button {
-                if revealed { model.revealedNodeIDs.remove(node.id) } else { model.revealedNodeIDs.insert(node.id) }
-            } label: {
-                Image(systemName: revealed ? "eye.slash" : "eye")
-            }
-            .buttonStyle(.borderless)
-        }
-    }
-
-    private func subscriptionRow(_ subscription: StagedSubscription) -> some View {
-        let revealed = model.revealedSubscriptionIDs.contains(subscription.id)
-        return HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(subscription.name).foregroundStyle(.primary).lineLimit(1)
-                Text(revealed ? subscription.url : SecretMasking.maskSecret(subscription.url))
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Text("Fetched when generating")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            Text(subscription.format).font(.caption).foregroundStyle(.secondary)
-            Button {
-                if revealed { model.revealedSubscriptionIDs.remove(subscription.id) } else { model.revealedSubscriptionIDs.insert(subscription.id) }
-            } label: {
-                Image(systemName: revealed ? "eye.slash" : "eye")
-            }
-            .buttonStyle(.borderless)
-        }
-    }
 
     private var addNodeSheet: some View {
         NavigationStack {

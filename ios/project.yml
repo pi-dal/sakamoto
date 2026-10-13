@@ -166,6 +166,18 @@ targets:
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
 
+  SakamotoEditorUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: AppUITests
+    dependencies:
+      - target: Sakamoto
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.pidal.sakamoto.EditorUITests
+
   SakamotoAppTests:
     type: bundle.unit-test
     platform: iOS
@@ -192,3 +204,4 @@ schemes:
     test:
       targets:
         - SakamotoAppTests
+        - SakamotoEditorUITests

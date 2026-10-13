@@ -25,7 +25,7 @@ import org.json.JSONObject
  * security / transport / chain). Secrets are never restored into persistent
  * view state and every save rewrites only the leaves it owns.
  */
-class EditorFragment : androidx.fragment.app.Fragment() {
+class EditorFragment : androidx.fragment.app.Fragment(), UnsavedConfigEditor {
 
     private var page: GroupedPage? = null
     private var specs: List<EditingProtocols.FieldSpec> = emptyList()
@@ -283,8 +283,8 @@ class EditorFragment : androidx.fragment.app.Fragment() {
         }, viewLifecycleOwner)
     }
 
-    fun hasUnsavedChanges(): Boolean = dirty && !finished
-    fun confirmLeaving(action: () -> Unit) {
+    override fun hasUnsavedChanges(): Boolean = dirty && !finished
+    override fun confirmLeaving(action: () -> Unit) {
         if (hasUnsavedChanges()) MaterialAlertDialogBuilder(requireContext()).setTitle(R.string.editor_discard_title)
             .setMessage(R.string.editor_discard_message).setNegativeButton(R.string.editor_keep, null)
             .setPositiveButton(R.string.editor_discard) { _, _ -> finished = true; action() }.show()

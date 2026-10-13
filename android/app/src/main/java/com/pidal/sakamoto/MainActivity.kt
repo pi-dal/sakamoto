@@ -52,14 +52,14 @@ class MainActivity : AppCompatActivity() {
         selectedTab = savedInstanceState?.getInt("selectedTab", R.id.nav_home) ?: R.id.nav_home
         binding.topAppBar.setNavigationOnClickListener { onBackPressedDispatcher.onBackPressed() }
         binding.bottomNav.setOnItemSelectedListener { id ->
-            val editor = supportFragmentManager.primaryNavigationFragment as? com.pidal.sakamoto.ui.EditorFragment
+            val editor = supportFragmentManager.primaryNavigationFragment as? com.pidal.sakamoto.ui.UnsavedConfigEditor
             if (editor != null && editor.hasUnsavedChanges()) {
                 editor.confirmLeaving { selectTab(id) }
                 false
             } else { selectTab(id); true }
         }
         binding.bottomNav.setOnItemReselectedListener {
-            val editor = supportFragmentManager.primaryNavigationFragment as? com.pidal.sakamoto.ui.EditorFragment
+            val editor = supportFragmentManager.primaryNavigationFragment as? com.pidal.sakamoto.ui.UnsavedConfigEditor
             if (editor != null && editor.hasUnsavedChanges()) editor.confirmLeaving {
                 supportFragmentManager.popBackStackImmediate(null, androidx.fragment.app.FragmentManager.POP_BACK_STACK_INCLUSIVE)
             } else supportFragmentManager.popBackStackImmediate(null, androidx.fragment.app.FragmentManager.POP_BACK_STACK_INCLUSIVE)

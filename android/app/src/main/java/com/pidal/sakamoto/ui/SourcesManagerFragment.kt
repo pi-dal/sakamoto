@@ -21,7 +21,13 @@ class SourcesManagerFragment : androidx.fragment.app.Fragment() {
         super.onViewCreated(view, state)
         parentFragmentManager.setFragmentResultListener("config-updated", viewLifecycleOwner) { _, _ -> refresh() }
     }
-    private fun refresh() { (view as? android.widget.FrameLayout)?.let { it.removeAllViews(); it.addView(build().root) } }
+    override fun onResume() { super.onResume(); refresh() }
+    private fun refresh() { (view as? android.widget.FrameLayout)?.let { frame ->
+        val offset = (frame.getChildAt(0) as? androidx.core.widget.NestedScrollView)?.scrollY ?: 0
+        val next = build().root
+        frame.removeAllViews(); frame.addView(next)
+        next.post { next.scrollTo(0, offset) }
+    } }
     private fun build(): GroupedPage {
         val page = GroupedPage(requireContext())
         val saved = ConfigRepository.load(requireContext())
@@ -61,7 +67,11 @@ class SourcesManagerFragment : androidx.fragment.app.Fragment() {
     }
     private fun removeWithUndo(before: ConfigRepository.StagedConfig, edit: (ConfigRepository.StagedConfig) -> ConfigRepository.StagedConfig) {
         val current = ConfigRepository.load(requireContext())
-        if (current != before) { refresh(); return }
+        if (current != before) {
+            refresh()
+            view?.let { Snackbar.make(it, R.string.editor_conflict, Snackbar.LENGTH_LONG).show() }
+            return
+        }
         val after = edit(current)
         ConfigRepository.save(requireContext(), after); MobilecoreRuntime.configEvent("modified"); refresh()
         view?.let { anchor -> Snackbar.make(anchor, R.string.source_removed, Snackbar.LENGTH_LONG).setAction(R.string.undo) {

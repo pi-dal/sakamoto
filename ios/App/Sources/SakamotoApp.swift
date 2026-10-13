@@ -39,7 +39,15 @@ struct SakamotoApp: App {
             ) as? String ?? "com.pidal.sakamoto.PacketTunnel"
         )
         let commanding = LibboxCoreCommanding()
-        let store = ConfigStore(keyStore: TailscaleKeychainStore())
+        let store: ConfigStore
+        #if DEBUG && targetEnvironment(simulator)
+        if ProcessInfo.processInfo.arguments.contains("--editor-ui-test") {
+            store = EditorUITestFixture.makeStore()
+            _selectedTab = State(initialValue: 1)
+        } else { store = ConfigStore(keyStore: TailscaleKeychainStore()) }
+        #else
+        store = ConfigStore(keyStore: TailscaleKeychainStore())
+        #endif
         SystemSurfaceConfiguration.store = store
         self.tunnel = tunnel
         self.commanding = commanding

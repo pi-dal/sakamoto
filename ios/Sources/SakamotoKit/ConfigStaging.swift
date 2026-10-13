@@ -156,6 +156,18 @@ public struct NodesSourcesBook: Codable, Equatable, Sendable {
         return next
     }
 
+    public func updating(node: StagedNode) -> NodesSourcesBook {
+        var next = self
+        if let index = next.nodes.firstIndex(where: { $0.id == node.id }) { next.nodes[index] = node }
+        return next
+    }
+
+    public func updating(subscription: StagedSubscription) -> NodesSourcesBook {
+        var next = self
+        if let index = next.subscriptions.firstIndex(where: { $0.id == subscription.id }) { next.subscriptions[index] = subscription }
+        return next
+    }
+
     public func removingNode(id: String) -> NodesSourcesBook {
         var next = self
         next.nodes.removeAll { $0.id == id }

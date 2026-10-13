@@ -309,6 +309,62 @@ final class ConfigStore: ObservableObject {
         lastAction = "Tailscale transport saved. Apply & reconnect to use it."
     }
 
+    func saveProxyGroup(_ edit: ProxyGroupEdit, expectedProfile: String?, expectedContent: String) throws {
+        guard !generating && !applying, selectedProfileID == expectedProfile, content == expectedContent,
+              let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) else { throw TunnelProfile.InvalidProfile("Configuration changed while editing. Reopen the group and try again.") }
+        var candidate = profiles[index]
+        candidate.config = try ProxyGroupEditing.applying([edit], to: content)
+        candidate.proxyGroups = (candidate.proxyGroups ?? []).filter { $0.tag != edit.tag } + [edit]
+        _ = try prepare(candidate)
+        profiles[index] = candidate
+        profiles[index].pendingApply = true
+        content = candidate.config
+        persistence.set(content, forKey: Self.storageKey); persistProfiles(); transition(.modified)
+        lastAction = "Group saved. Apply changes to use it."
+    }
+
+    func saveNodeSettings(tag: String, nodeJSON: String, expectedProfile: String?, expectedContent: String) throws {
+        guard !generating && !applying, selectedProfileID == expectedProfile, content == expectedContent,
+              let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) else { throw TunnelProfile.InvalidProfile("Configuration changed while editing. Reopen the node and try again.") }
+        var candidate = profiles[index]
+        candidate.config = try ProxyGroupEditing.replacingNode(tag: tag, with: nodeJSON, in: content)
+        var overrides = candidate.nodeOverrides ?? [:]; overrides[tag] = nodeJSON; candidate.nodeOverrides = overrides
+        _ = try prepare(candidate)
+        profiles[index] = candidate; profiles[index].pendingApply = true
+        content = candidate.config
+        persistence.set(content, forKey: Self.storageKey); persistProfiles(); transition(.modified)
+        lastAction = "Node settings saved. Apply changes to use them."
+    }
+
+    func removeSourceNode(_ node: StagedNode) throws {
+        guard !generating && !applying, nodesSources.nodes.contains(node) else { throw TunnelProfile.InvalidProfile("This node changed or was removed. Reopen the list.") }
+        if let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) {
+            var candidate = profiles[index]
+            var groups = candidate.proxyGroups ?? []
+            var changed = false
+            for offset in groups.indices where groups[offset].members.contains(node.tag) {
+                groups[offset].members.removeAll { $0 == node.tag }
+                guard !groups[offset].members.isEmpty else { throw TunnelProfile.InvalidProfile("\(node.tag) is the last member of \(groups[offset].tag). Choose another member in Proxy groups before deleting it.") }
+                if groups[offset].defaultMember == node.tag { groups[offset].defaultMember = "" }
+                changed = true
+            }
+            if changed {
+                candidate.config = try ProxyGroupEditing.applying(groups, to: content)
+                candidate.proxyGroups = groups
+                _ = try prepare(candidate)
+            }
+            candidate.nodeOverrides?.removeValue(forKey: node.tag)
+            profiles[index] = candidate
+            if changed { content = candidate.config; persistence.set(content, forKey: Self.storageKey) }
+        }
+        commitNodesSources(nodesSources.removingNode(id: node.id))
+    }
+
+    func clearNodeOverride(_ tag: String) {
+        guard let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) else { return }
+        profiles[index].nodeOverrides?.removeValue(forKey: tag)
+    }
+
     func saveProxyChain(_ settings: ProxyChainSettings) throws {
         guard !generating && !applying else { throw TunnelProfile.InvalidProfile("Wait for generation or Apply to finish before saving the chain.") }
         guard let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) else {
@@ -389,6 +445,8 @@ final class ConfigStore: ObservableObject {
         candidate.experiment = settingsBefore
         candidate.forceTailscaleDERP = selectedProfile?.forceTailscaleDERP
         candidate.proxyChain = selectedProfile?.proxyChain ?? ProxyChainSettings.importedChain(in: contentBefore)
+        candidate.proxyGroups = selectedProfile?.proxyGroups
+        candidate.nodeOverrides = selectedProfile?.nodeOverrides
         // Preserve device-specific Tailscale endpoint and advanced settings;
         // generated sources own rules/nodes, not endpoint identity or auth.
         if let old = try? JSONSerialization.jsonObject(with: Data(contentBefore.utf8)) as? [String: Any],
@@ -408,6 +466,8 @@ final class ConfigStore: ObservableObject {
                 candidate.config = try SettingsOverrides.setBlockSTUN(semantics.blockSTUN, in: candidate.config)
             }
         }
+        candidate.config = try ProxyGroupEditing.applyingNodes(candidate.nodeOverrides ?? [:], to: candidate.config)
+        candidate.config = try ProxyGroupEditing.applying(candidate.proxyGroups ?? [], to: candidate.config)
         do {
             _ = try prepare(candidate)
             _ = try decodeSources(candidate)
