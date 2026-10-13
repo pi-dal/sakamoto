@@ -45,6 +45,33 @@ final class NodeGroupEditingTests: XCTestCase {
         try await restored.generateFromSources()
         XCTAssertFalse(ProxyGroupEditing.outbounds(restored.content).contains { $0["tag"] as? String == renamed })
     }
+    func testRealityAutoExclusionPreservesManualNodesAndSurvivesGeneration() async throws {
+        let (store, defaults, suite) = try await setup()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        func reality(_ name: String) throws -> StagedNode {
+            try ConfigModel.validateNode("vless://00000000-0000-4000-8000-000000000001@\(name.lowercased()).example:443?security=reality&sni=example.com&pbk=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA#\(name)")
+        }
+        store.commitNodesSources(store.nodesSources.adding(node: try reality("R1")).adding(node: try reality("R2")))
+        try await store.generateFromSources()
+        let initial = try XCTUnwrap(ProxyGroupEditing.groups(store.content).first { $0.tag == "RealityAuto" })
+        XCTAssertEqual(initial.members, ["R1", "R2"])
+        var selected = initial; selected.members = ["R1"]
+        try store.saveProxyGroup(selected, expectedProfile: store.selectedProfileID, expectedContent: store.content)
+        let restored = ConfigStore(persistence: defaults, keyStore: ConfigStoreTests.EmptyKeys())
+        XCTAssertEqual(ProxyGroupEditing.groups(restored.content).first { $0.tag == "RealityAuto" }?.members, ["R1"])
+        restored.commitNodesSources(restored.nodesSources.adding(node: try reality("R3")))
+        try await restored.generateFromSources()
+        let groups = ProxyGroupEditing.groups(restored.content)
+        XCTAssertEqual(groups.first { $0.tag == "RealityAuto" }?.members, ["R1"])
+        XCTAssertEqual(groups.first { $0.tag == "ManualPick" }?.members, ["A", "B", "R1", "R2", "R3"])
+        XCTAssertTrue(ProxyGroupEditing.outbounds(restored.content).contains { $0["tag"] as? String == "R2" })
+        XCTAssertNoThrow(try restored.connectionContent())
+        selected.members = []
+        let before = restored.content
+        XCTAssertThrowsError(try restored.saveProxyGroup(selected, expectedProfile: restored.selectedProfileID, expectedContent: before))
+        XCTAssertEqual(restored.content, before)
+    }
+
     func testRenameTouchesOnlyOutboundReferences() throws {
         let content = #"{"outbounds":[{"tag":"A","type":"socks","server":"A","server_port":1080,"username":"A"},{"tag":"group","type":"selector","outbounds":["A"],"default":"A"},{"tag":"next","type":"socks","server":"x","server_port":1080,"detour":"A"}],"route":{"final":"A","rules":[{"type":"logical","rules":[{"domain":["A"],"outbound":"A"}]}]},"dns":{"servers":[{"tag":"A","type":"https","server":"A","detour":"A"}]}}"#
         let saved = try ProxyGroupEditing.replacingNode(tag: "A", with: #"{"tag":"Japan","type":"socks","server":"192.0.2.8","server_port":1080,"username":"A"}"#, in: content)

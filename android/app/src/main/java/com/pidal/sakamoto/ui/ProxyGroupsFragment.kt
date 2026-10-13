@@ -47,6 +47,7 @@ class ProxyGroupEditorFragment : androidx.fragment.app.Fragment(), UnsavedConfig
     private var available: android.widget.LinearLayout? = null
     private var behavior: android.widget.LinearLayout? = null
     private var error: android.widget.TextView? = null
+    private var membershipNote: android.widget.TextView? = null
     private var page: GroupedPage? = null
     private var query = ""
     private var selectedLimit = 100
@@ -87,7 +88,7 @@ class ProxyGroupEditorFragment : androidx.fragment.app.Fragment(), UnsavedConfig
         behavior = android.widget.LinearLayout(requireContext()).apply { orientation = android.widget.LinearLayout.VERTICAL; settings.addView(this) }
         renderBehavior()
         selected = page.section(getString(R.string.group_selected_members))
-        page.note(getString(R.string.group_order_note))
+        membershipNote = page.note(getString(if (edit.type == "urltest") R.string.group_automatic_members_note else R.string.group_order_note))
         val find = page.section(getString(R.string.group_choose_members))
         page.field(find, getString(R.string.group_search)).apply {
             addTextChangedListener(object : android.text.TextWatcher {
@@ -104,6 +105,7 @@ class ProxyGroupEditorFragment : androidx.fragment.app.Fragment(), UnsavedConfig
     }
     private fun renderBehavior() {
         val page = page ?: return; val group = behavior ?: return
+        membershipNote?.text = getString(if (edit.type == "urltest") R.string.group_automatic_members_note else R.string.group_order_note)
         group.removeAllViews()
         if (edit.type == "selector") {
             page.row(group, getString(R.string.group_default), edit.defaultMember.ifEmpty { getString(R.string.group_first_member) }) {
@@ -186,6 +188,6 @@ class ProxyGroupEditorFragment : androidx.fragment.app.Fragment(), UnsavedConfig
     }
     override fun onDestroyView() {
         if (::edit.isInitialized) androidx.lifecycle.ViewModelProvider(this)[Draft::class.java].edit = edit
-        selected = null; available = null; behavior = null; error = null; page = null; super.onDestroyView()
+        selected = null; available = null; behavior = null; error = null; membershipNote = null; page = null; super.onDestroyView()
     }
 }

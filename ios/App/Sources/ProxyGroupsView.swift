@@ -16,7 +16,7 @@ struct ProxyGroupsView: View {
                 }
                 if store.content.isEmpty { Text("Generate or import a configuration first.").foregroundStyle(.secondary) }
                 else { NavigationLink { ProxyGroupEditor(store: store, group: ProxyGroupEdit(tag: "")) } label: { Label("Add group", systemImage: "plus") } }
-            } footer: { Text("Choose members and a default node without editing configuration text. Save, then Apply changes in Config. New groups can be included in an existing group.") }
+            } footer: { Text("Automatic groups, including RealityAuto, test only their selected members. Remove a member to exclude it from that group; the node stays available for manual selection. Save, then Apply changes in Config.") }
         }.navigationTitle("Proxy groups").navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -68,7 +68,13 @@ struct ProxyGroupEditor: View {
                     HStack { Text(member); Spacer(); Button { toggle(member) } label: { Image(systemName: "minus.circle").frame(minWidth: 44, minHeight: 44) }.buttonStyle(.borderless).accessibilityLabel("Remove \(member) from group") }
                 }
                 .onMove { offsets, destination in edit.members.move(fromOffsets: offsets, toOffset: destination) }
-            } header: { Text("Selected members (\(edit.members.count))") } footer: { Text("Use Edit to reorder members. The first member is the fallback default for manual selection.") }
+            } header: { Text("Selected members (\(edit.members.count))") } footer: {
+                if edit.type == "urltest" {
+                    Text("Only these members take part in automatic latency testing. Remove a node here to exclude it from this group without deleting it or changing other groups. Keep at least one member.")
+                } else {
+                    Text("Use Edit to reorder members. The first member is the fallback default for manual selection.")
+                }
+            }
             Section("Choose members") {
                 TextField("Search nodes & groups", text: $query).autocorrectionDisabled()
                 let visible = candidates.filter { query.isEmpty || $0.0.localizedCaseInsensitiveContains(query) }

@@ -94,6 +94,31 @@ class NodeGroupSmokeChecks(private val instrumentation: Instrumentation) {
                 activity.supportFragmentManager.executePendingTransactions()
             }
             settle(); capture("groups-saved.png")
+            var automaticConfig = ProxyGroupEditing.apply(ConfigRepository.load(context).generatedContent,
+                com.pidal.sakamoto.runtime.ProxyGroupEdit("RealityAuto", "urltest", listOf("Renamed node", "Review B")))
+            automaticConfig = ProxyGroupEditing.apply(automaticConfig,
+                com.pidal.sakamoto.runtime.ProxyGroupEdit("ManualPick", members = listOf("Renamed node", "Review B")))
+            ConfigRepository.saveGeneratedEdit(context, automaticConfig)
+            instrumentation.runOnMainSync {
+                groups = ProxyGroupEditorFragment().apply { arguments = Bundle().apply { putString("tag", "RealityAuto") } }
+                activity.openChild(groups, context.getString(R.string.group_edit)); activity.supportFragmentManager.executePendingTransactions()
+            }
+            settle()
+            instrumentation.runOnMainSync {
+                check(descendants(groups.requireView()).filterIsInstance<TextView>().any { it.text.toString() == context.getString(R.string.group_automatic_members_note) })
+                check(descendants(groups.requireView()).first { it.contentDescription == context.getString(R.string.group_remove_member, "Review B") }.performClick())
+                activity.findViewById<MaterialToolbar>(R.id.top_app_bar).menu.performIdentifierAction(R.id.editor_save, 0)
+            }
+            settle()
+            val automaticSaved = ConfigRepository.load(context).generatedContent
+            check(ProxyGroupEditing.groups(automaticSaved).first { it.tag == "RealityAuto" }.members == listOf("Renamed node"))
+            check(ProxyGroupEditing.groups(automaticSaved).first { it.tag == "ManualPick" }.members == listOf("Renamed node", "Review B"))
+            check(ProxyGroupEditing.rows(automaticSaved).any { it.optString("tag") == "Review B" })
+            instrumentation.runOnMainSync {
+                groups = ProxyGroupEditorFragment().apply { arguments = Bundle().apply { putString("tag", "RealityAuto") } }
+                activity.openChild(groups, context.getString(R.string.group_edit)); activity.supportFragmentManager.executePendingTransactions()
+            }
+            settle(); capture("reality-auto-excluded-member.png")
             lateinit var policy: EditorFragment
             instrumentation.runOnMainSync {
                 policy = EditorFragment().apply { arguments = Bundle().apply { putString("kind", "rule"); putInt("index", -1) } }

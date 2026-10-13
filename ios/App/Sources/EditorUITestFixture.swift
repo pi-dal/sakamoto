@@ -21,7 +21,14 @@ enum EditorUITestFixture {
         do {
             store.commitNodesSources(NodesSourcesBook(nodes: try links.map(ConfigModel.validateNode)))
             let config = #"{"log":{"level":"warn"},"dns":{"servers":[{"type":"udp","tag":"dns-direct","server":"1.1.1.1"}]},"inbounds":[{"type":"tun","tag":"tun-in","address":["172.19.0.1/30"],"auto_route":true,"stack":"mixed"}],"outbounds":[{"type":"selector","tag":"MainProxy","outbounds":["Review A","Review B"],"default":"Review A"},{"type":"trojan","tag":"Review A","server":"a.example","server_port":443,"password":"test","tls":{"enabled":true}},{"type":"trojan","tag":"Review B","server":"b.example","server_port":443,"password":"test","tls":{"enabled":true}},{"type":"direct","tag":"direct"}],"route":{"final":"MainProxy","auto_detect_interface":true}}"#
-            try store.installProfile(TunnelProfile(name: "Editor review", config: config, sourceBundleJSON: String(decoding: try JSONEncoder().encode(store.sourceBundle), as: UTF8.self)))
+            var fixtureConfig = config
+            if ProcessInfo.processInfo.arguments.contains("--reality-group-ui-test") {
+                fixtureConfig = try ProxyGroupEditing.applying([
+                    ProxyGroupEdit(tag: "RealityAuto", type: "urltest", members: ["Review A", "Review B"]),
+                    ProxyGroupEdit(tag: "ManualPick", members: ["Review A", "Review B"])
+                ], to: config)
+            }
+            try store.installProfile(TunnelProfile(name: "Editor review", config: fixtureConfig, sourceBundleJSON: String(decoding: try JSONEncoder().encode(store.sourceBundle), as: UTF8.self)))
         } catch { assertionFailure("Editor fixture could not be prepared: \(error.localizedDescription)") }
         return store
     }

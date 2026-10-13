@@ -76,6 +76,27 @@ final class NodeGroupUITests: XCTestCase {
         attachment("policy-domain-and-subdomains")
     }
 
+    func testRealityAutoMemberCanBeExcludedWithoutChangingManualPick() {
+        app.terminate()
+        app.launchArguments.append("--reality-group-ui-test")
+        app.launch()
+        app.buttons["Proxy groups"].tap()
+        app.buttons["Group-RealityAuto"].tap()
+        let remove = app.buttons["Remove Review A from group"]
+        XCTAssertTrue(remove.waitForExistence(timeout: 3))
+        for _ in 0..<3 where !remove.isHittable { app.swipeUp() }
+        remove.tap()
+        app.buttons["GroupSave"].tap()
+        XCTAssertTrue(app.buttons["Group-RealityAuto"].waitForExistence(timeout: 4))
+        app.buttons["Group-RealityAuto"].tap()
+        XCTAssertTrue(app.staticTexts["Selected members (1)"].exists)
+        attachment("reality-auto-excluded-member")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.buttons["Group-ManualPick"].tap()
+        XCTAssertTrue(app.staticTexts["Selected members (2)"].exists)
+        attachment("manual-pick-keeps-excluded-node")
+    }
+
     func testGroupMemberSelectionSavesAndReopens() {
         app.buttons["Proxy groups"].tap()
         XCTAssertTrue(app.buttons["Group-MainProxy"].waitForExistence(timeout: 3))

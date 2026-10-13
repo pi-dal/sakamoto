@@ -2,6 +2,16 @@
 
 Both apps expose **Config → Proxy groups**, available starting with iOS **0.1.17** and Android **0.1.13**. Select Manual or Automatic by latency, choose members, set a default, and reorder members. Automatic groups also expose the probe URL and interval. Empty membership, duplicate names, missing references, and cycles through groups or node detours are rejected. Saving validates the candidate with the native core and stages it; **Apply changes** (iOS) or **Apply saved config** (Android) activates it.
 
+## Exclude nodes from RealityAuto
+
+In iOS **0.1.17** and Android **0.1.13**, open **Config → Proxy groups → RealityAuto**. Under **Selected members**, remove the nodes you do not want tested. iOS offers a minus button and selection toggles; Android offers a remove action and an unselected-members list. Add a node again from **Choose members**. Keep at least one member, **Save**, then **Apply changes / Apply saved config**.
+
+“Automatic” describes how the group chooses among its members by latency; it does not require every Reality node to participate. Excluding a node from RealityAuto leaves the node and other memberships, including **ManualPick**, intact. This does not block selecting that node manually. The same controls work for **OthersAuto** and user-created automatic groups.
+
+The saved membership is an explicit list. iOS keeps that list through restart and source generation; newly imported nodes are not silently added to a locally edited group. Review the members after a source change, especially when a selected node disappears. Android keeps the saved list through app restart; importing a replacement tunnel package replaces its groups.
+
+## Node and source editing
+
 On iOS, **Config → Nodes & sources** opens a source manager. Tap an existing manual node to directly edit its **Remark / name**, **IP / hostname**, port, credentials and protocol settings in a native form. Nodes whose configuration has not yet been generated expose remark, address and port fields first; imported links remain an add-node input. Subscription sources open their own source form. The trash button or a left swipe opens confirmation on the current page. Cancel preserves the source; Delete removes that source row immediately. The saved configuration stays available until regeneration and Apply. **Saved config nodes** opens the generated nodes, including subscription and imported nodes, for server, port, credential, TLS and common transport editing. Manual nodes open these fields directly from their list row. Credentials are concealed in the settings editor until revealed. Duplicate manual names use the saved-config list to avoid ambiguous shortcuts.
 
 Generated node editing rewrites a changed remark through group memberships/defaults, node detours, nested route rules/final and DNS detours; hosts, credentials and DNS server tags keep their values. iOS settings aliases remain anchored to the original source node, so repeated renames and refreshes retain the edits. Local groups, chain choices and fallback priorities are updated together. Deleting a source uses its current remark to repair saved memberships.
