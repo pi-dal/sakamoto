@@ -1,7 +1,7 @@
 import UIKit
 
 /// Settings routes vary by iOS release. Keep a visible manual path and a supported
-/// app-settings fallback; opening a route never counts as completing setup.
+/// app-settings fallback; URL acceptance does not prove the destination was reached.
 enum LocationSetupSettingsDestination {
     case profiles, certificateTrust, locationServices
 
@@ -12,7 +12,7 @@ enum LocationSetupSettingsDestination {
         case .certificateTrust: path = "General&path=About/CERT_TRUST_SETTINGS"
         case .locationServices: path = "Privacy&path=LOCATION"
         }
-        return URL(string: "App-Prefs:\(path)")!
+        return URL(string: "App-Prefs:root=\(path)")!
     }
     var manualPath: String {
         switch self {

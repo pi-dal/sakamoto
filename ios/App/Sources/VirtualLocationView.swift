@@ -117,7 +117,7 @@ final class VirtualLocationModel: NSObject, ObservableObject, @preconcurrency CL
         locationServicesEnabled = await Task.detached { CLLocationManager.locationServicesEnabled() }.value
         if locationServicesEnabled == false, observing {
             cancelObservation()
-            observed = "Location Services is off. Turn it back on in Settings → Privacy & Security → Location Services, then retry."
+            observed = "Fresh measurement paused: Location Services is off. Enable it in Settings → Privacy & Security → Location Services when you want to measure a new system location."
         }
     }
     func refresh() async {
@@ -155,6 +155,7 @@ final class VirtualLocationModel: NSObject, ObservableObject, @preconcurrency CL
         }
     }
     func openSetupSettings(_ destination: LocationSetupSettingsDestination) {
+        message = "In Settings, follow: \(destination.manualPath). iOS may open a different page even when the shortcut is accepted."
         UIApplication.shared.open(destination.url) { [weak self] opened in
             if !opened {
                 Task { @MainActor in
@@ -241,7 +242,7 @@ final class VirtualLocationModel: NSObject, ObservableObject, @preconcurrency CL
     func deleteFavorites(_ offsets: IndexSet) { favorites.remove(atOffsets: offsets); try? VirtualLocationStore.saveFavorites(favorites) }
     func observeLocation() {
         guard locationServicesEnabled != false else {
-            observed = "Location Services is off. Turn it back on in Settings → Privacy & Security → Location Services, then retry."
+            observed = "Fresh measurement paused: Location Services is off. Enable it in Settings → Privacy & Security → Location Services when you want to measure a new system location."
             return
         }
         guard !observing else { return }; observing = true; observed = nil
@@ -300,8 +301,9 @@ struct VirtualLocationView: View {
                 Text("One step per page, with shortcuts to Settings, the map and moving routes. Your place in the guide is remembered.")
                     .font(.footnote).foregroundStyle(.secondary)
                 if model.locationServicesEnabled == false {
-                    Label("Device Location Services is off. Turn it back on before checking fresh locations.", systemImage: "location.slash")
-                    Button("Open Location Services") { model.openSetupSettings(.locationServices) }
+                    Label("Location Services is off. Fresh system-location measurements are paused.", systemImage: "location.slash")
+                    Button("Try opening Location Services") { model.openSetupSettings(.locationServices) }
+                    Text(LocationSetupSettingsDestination.locationServices.manualPath).font(.footnote).foregroundStyle(.secondary)
                 }
             }
             Section {

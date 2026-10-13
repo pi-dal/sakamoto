@@ -10,11 +10,14 @@ final class VirtualLocationControlTests: XCTestCase {
         guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else { throw XCTSkip("No scene for rendering") }
         let window = UIWindow(windowScene: scene)
         let preferences = UserDefaults.standard
-        let keys = ["sakamoto.location.setupWizardSeen", "sakamoto.location.setupWizardStep"]
+        let keys = ["sakamoto.location.setupWizardSeen", "sakamoto.location.setupWizardStep", "sakamoto.location.cacheRecoveryActive", "sakamoto.location.cacheRecoveryStep"]
         let previous = keys.reduce(into: [String: Any]()) { values, key in values[key] = preferences.object(forKey: key) }
         let step = Int(ProcessInfo.processInfo.environment["SAKAMOTO_LOCATION_REVIEW_STEP"] ?? "0") ?? 0
         preferences.set(false, forKey: keys[0])
         preferences.set(step, forKey: keys[1])
+        let recovery = ProcessInfo.processInfo.environment["SAKAMOTO_LOCATION_REVIEW_RECOVERY"] == "true"
+        preferences.set(recovery, forKey: keys[2])
+        preferences.set(step, forKey: keys[3])
         defer {
             for key in keys {
                 if let value = previous[key] { preferences.set(value, forKey: key) }
@@ -40,7 +43,7 @@ final class VirtualLocationControlTests: XCTestCase {
         XCTAssertGreaterThan(data.count, 20_000)
         let folder = URL(fileURLWithPath: directory); try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let device = UIDevice.current.userInterfaceIdiom == .pad ? "tablet" : "phone"
-        let name = "\(device)-ios-setup-step-\(step + 1)\(variant.isEmpty ? "" : "-" + variant).png"
+        let name = "\(device)-ios-\(recovery ? "recovery" : "setup")-step-\(step + 1)\(variant.isEmpty ? "" : "-" + variant).png"
         try data.write(to: folder.appendingPathComponent(name))
         window.isHidden = true
     }
@@ -70,13 +73,15 @@ final class VirtualLocationControlTests: XCTestCase {
         model.locationServicesEnabled = false
         model.observeLocation()
         XCTAssertFalse(model.observing)
-        XCTAssertTrue(model.observed?.contains("Turn it back on") == true)
+        XCTAssertTrue(model.observed?.contains("Fresh measurement paused") == true)
+        XCTAssertEqual(model.locationServicesEnabled, false)
         XCTAssertNil(tunnel.settings)
     }
     func testMapPositionDoesNotChangeLiveSimulationUntilApplied() async {
         let tunnel = LocationControlTunnel()
         let model = VirtualLocationModel(tunnel: tunnel, supportsSimulation: true)
         model.trustChecked = true
+        model.locationServicesEnabled = false
         model.settings = VirtualLocationSettings(enabled: true, latitude: 0, longitude: 0)
         model.selectMapPosition(LocationWaypoint(latitude: 37.3349, longitude: -122.009))
         XCTAssertNil(tunnel.settings); XCTAssertEqual(model.settings.latitude, 0)
@@ -85,6 +90,8 @@ final class VirtualLocationControlTests: XCTestCase {
         XCTAssertEqual(tunnel.settings?.latitude, 37.3349)
         XCTAssertEqual(tunnel.settings?.longitude, -122.009)
         XCTAssertEqual(tunnel.reloads, 0)
+        XCTAssertEqual(model.locationServicesEnabled, false)
+        XCTAssertFalse(model.observing)
     }
     func testMapRouteEditingPreservesLiveRouteAndRejectsInvalidTimingAtStart() async {
         let tunnel = LocationControlTunnel()
