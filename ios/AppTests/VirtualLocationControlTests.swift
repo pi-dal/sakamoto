@@ -10,25 +10,37 @@ final class VirtualLocationControlTests: XCTestCase {
         guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else { throw XCTSkip("No scene for rendering") }
         let window = UIWindow(windowScene: scene)
         let preferences = UserDefaults.standard
-        let previousExpansion = preferences.object(forKey: "sakamoto.location.setupGuideExpanded")
-        preferences.set(true, forKey: "sakamoto.location.setupGuideExpanded")
+        let keys = ["sakamoto.location.setupWizardSeen", "sakamoto.location.setupWizardStep"]
+        let previous = keys.reduce(into: [String: Any]()) { values, key in values[key] = preferences.object(forKey: key) }
+        let step = Int(ProcessInfo.processInfo.environment["SAKAMOTO_LOCATION_REVIEW_STEP"] ?? "0") ?? 0
+        preferences.set(false, forKey: keys[0])
+        preferences.set(step, forKey: keys[1])
         defer {
-            if let previousExpansion { preferences.set(previousExpansion, forKey: "sakamoto.location.setupGuideExpanded") }
-            else { preferences.removeObject(forKey: "sakamoto.location.setupGuideExpanded") }
+            for key in keys {
+                if let value = previous[key] { preferences.set(value, forKey: key) }
+                else { preferences.removeObject(forKey: key) }
+            }
         }
         let variant = ProcessInfo.processInfo.environment["SAKAMOTO_LOCATION_REVIEW_VARIANT"] ?? ""
         let content = NavigationStack { VirtualLocationView(tunnel: LocationControlTunnel(), supportsSimulation: true) }
+            .transaction { $0.disablesAnimations = true }
             .environment(\.dynamicTypeSize, variant == "dark-large" ? .xxxLarge : .large)
             .preferredColorScheme(variant == "dark-large" ? .dark : nil)
         let host = UIHostingController(rootView: content)
         window.rootViewController = host; window.makeKeyAndVisible()
-        try await Task.sleep(nanoseconds: 500_000_000)
+        for _ in 0..<20 {
+            if let presented = host.presentedViewController, !presented.isBeingPresented, presented.transitionCoordinator == nil { break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let presented = try XCTUnwrap(host.presentedViewController)
+        XCTAssertFalse(presented.isBeingPresented)
+        XCTAssertNil(presented.transitionCoordinator)
         let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
         let data = try XCTUnwrap(image.pngData())
         XCTAssertGreaterThan(data.count, 20_000)
         let folder = URL(fileURLWithPath: directory); try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let device = UIDevice.current.userInterfaceIdiom == .pad ? "tablet" : "phone"
-        let name = "\(device)-ios-setup\(variant.isEmpty ? "" : "-" + variant).png"
+        let name = "\(device)-ios-setup-step-\(step + 1)\(variant.isEmpty ? "" : "-" + variant).png"
         try data.write(to: folder.appendingPathComponent(name))
         window.isHidden = true
     }
@@ -51,6 +63,15 @@ final class VirtualLocationControlTests: XCTestCase {
         let device = UIDevice.current.userInterfaceIdiom == .pad ? "tablet" : "phone"
         let name = "\(device)-ios-map\(variant.isEmpty ? "" : "-" + variant).png"
         try data.write(to: folder.appendingPathComponent(name)); window.isHidden = true
+    }
+    func testDisabledSystemLocationOffersRecoveryWithoutStartingObservation() {
+        let tunnel = LocationControlTunnel()
+        let model = VirtualLocationModel(tunnel: tunnel, supportsSimulation: true)
+        model.locationServicesEnabled = false
+        model.observeLocation()
+        XCTAssertFalse(model.observing)
+        XCTAssertTrue(model.observed?.contains("Turn it back on") == true)
+        XCTAssertNil(tunnel.settings)
     }
     func testMapPositionDoesNotChangeLiveSimulationUntilApplied() async {
         let tunnel = LocationControlTunnel()

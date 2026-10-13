@@ -18,6 +18,7 @@ final class VirtualLocationModel: NSObject, ObservableObject, @preconcurrency CL
     @Published var favorites = VirtualLocationStore.favorites()
     @Published var snapshot = VirtualLocationSnapshot()
     @Published var vpnRunning = false
+    @Published var locationServicesEnabled: Bool?
     @Published var snapshotAvailable = false
     @Published var busy = false
     @Published var trustChecked = false
@@ -112,7 +113,15 @@ final class VirtualLocationModel: NSObject, ObservableObject, @preconcurrency CL
         if route == nil { latitude = String(point.latitude); longitude = String(point.longitude) }
         message = route == nil ? "Route stopped. Simulation holds the current point; turn simulation off to restore normal responses." : "Route \(snapshot.routeState?.lowercased() ?? "started"). Movement continues in the VPN extension when you leave this page."
     }
+    func refreshLocationServices() async {
+        locationServicesEnabled = await Task.detached { CLLocationManager.locationServicesEnabled() }.value
+        if locationServicesEnabled == false, observing {
+            cancelObservation()
+            observed = "Location Services is off. Turn it back on in Settings → Privacy & Security → Location Services, then retry."
+        }
+    }
     func refresh() async {
+        await refreshLocationServices()
         guard !busy else { return }
         vpnRunning = (try? await tunnel.status()) == .running
         if vpnRunning {
@@ -143,6 +152,16 @@ final class VirtualLocationModel: NSObject, ObservableObject, @preconcurrency CL
     func openAppSettings() {
         UIApplication.shared.open(URL(string: UIApplication.openSettingsURLString)!) { [weak self] opened in
             if !opened { Task { @MainActor in self?.message = "Open Settings manually, then follow the setup guide’s paths." } }
+        }
+    }
+    func openSetupSettings(_ destination: LocationSetupSettingsDestination) {
+        UIApplication.shared.open(destination.url) { [weak self] opened in
+            if !opened {
+                Task { @MainActor in
+                    self?.message = "Open \(destination.manualPath). The shortcut is unavailable on this device."
+                    self?.openAppSettings()
+                }
+            }
         }
     }
     func installCertificate() {
@@ -221,6 +240,10 @@ final class VirtualLocationModel: NSObject, ObservableObject, @preconcurrency CL
     }
     func deleteFavorites(_ offsets: IndexSet) { favorites.remove(atOffsets: offsets); try? VirtualLocationStore.saveFavorites(favorites) }
     func observeLocation() {
+        guard locationServicesEnabled != false else {
+            observed = "Location Services is off. Turn it back on in Settings → Privacy & Security → Location Services, then retry."
+            return
+        }
         guard !observing else { return }; observing = true; observed = nil
         observationTimeout?.cancel()
         observationTimeout = Task { [weak self] in
@@ -234,6 +257,7 @@ final class VirtualLocationModel: NSObject, ObservableObject, @preconcurrency CL
         }
     }
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        Task { await refreshLocationServices() }
         if observing, manager.authorizationStatus == .authorizedAlways || manager.authorizationStatus == .authorizedWhenInUse { manager.requestLocation() }
     }
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
@@ -252,7 +276,7 @@ final class VirtualLocationModel: NSObject, ObservableObject, @preconcurrency CL
     }
     var report: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
-        return "Sakamoto \(version) · iOS \(UIDevice.current.systemVersion)\nNetwork location diagnostic · \(Date().ISO8601Format())\nSelected WGS84: \(settings.latitude), \(settings.longitude); accuracy: \(settings.accuracy) m\nVPN running: \(vpnRunning); requested: \(settings.enabled); proxy enabled: \(snapshot.enabled)\nCA trust checked: \(trustChecked); fingerprint: \(fingerprint)\nTLS connections: \(snapshot.connections); requests: \(snapshot.requests); rewritten: \(snapshot.patched); passed through: \(snapshot.skipped); TLS failures: \(snapshot.tlsFailures)\nLast rewrite: \(snapshot.lastPatch > 0 ? Date(timeIntervalSince1970: Double(snapshot.lastPatch)).ISO8601Format() : "none")\nDetail: \(snapshot.error)\nRoute: \(routeSummary); current WGS84: \(snapshot.latitude ?? settings.latitude), \(snapshot.longitude ?? settings.longitude)\nObserved: \(observed ?? "not measured")"
+        return "Sakamoto \(version) · iOS \(UIDevice.current.systemVersion)\nNetwork location diagnostic · \(Date().ISO8601Format())\nSelected WGS84: \(settings.latitude), \(settings.longitude); accuracy: \(settings.accuracy) m\nVPN running: \(vpnRunning); requested: \(settings.enabled); proxy enabled: \(snapshot.enabled)\nSystem Location Services: \(locationServicesEnabled.map { $0 ? "on" : "off" } ?? "not checked")\nCA trust checked: \(trustChecked); fingerprint: \(fingerprint)\nTLS connections: \(snapshot.connections); requests: \(snapshot.requests); rewritten: \(snapshot.patched); passed through: \(snapshot.skipped); TLS failures: \(snapshot.tlsFailures)\nLast rewrite: \(snapshot.lastPatch > 0 ? Date(timeIntervalSince1970: Double(snapshot.lastPatch)).ISO8601Format() : "none")\nDetail: \(snapshot.error)\nRoute: \(routeSummary); current WGS84: \(snapshot.latitude ?? settings.latitude), \(snapshot.longitude ?? settings.longitude)\nObserved: \(observed ?? "not measured")"
     }
 }
 
@@ -261,7 +285,8 @@ struct VirtualLocationView: View {
     @State private var namingFavorite = false
     @State private var favoriteName = ""
     @State private var mapMode: MapMode?
-    @AppStorage("sakamoto.location.setupGuideExpanded") private var guideExpanded = true
+    @State private var showGuide = false
+    @AppStorage("sakamoto.location.setupWizardSeen") private var guideSeen = false
     @Environment(\.scenePhase) private var scenePhase
     private enum MapMode: String, Identifiable { case position, route; var id: String { rawValue } }
     init(tunnel: TunnelControlling, supportsSimulation: Bool = VirtualLocationStore.supportsNetworkSimulation) {
@@ -270,10 +295,15 @@ struct VirtualLocationView: View {
     var body: some View {
         ScrollViewReader { proxy in
         List {
-            LocationSetupGuide(model: model, expanded: $guideExpanded,
-                choosePosition: { mapMode = .position },
-                showRoute: { jump(to: "route", using: proxy) },
-                showDiagnostics: { jump(to: "diagnostics", using: proxy) })
+            Section("Setup guide") {
+                Button("Continue setup") { showGuide = true }
+                Text("One step per page, with shortcuts to Settings, the map and moving routes. Your place in the guide is remembered.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                if model.locationServicesEnabled == false {
+                    Label("Device Location Services is off. Turn it back on before checking fresh locations.", systemImage: "location.slash")
+                    Button("Open Location Services") { model.openSetupSettings(.locationServices) }
+                }
+            }
             Section {
                 Toggle("Simulate network location", isOn: Binding(get: { model.settings.enabled }, set: { enabled in Task { await model.apply(enabled: enabled, useEditedCoordinates: enabled) } }))
                     .disabled(model.busy || !model.supportsSimulation)
@@ -354,6 +384,10 @@ struct VirtualLocationView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("Virtual location")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear { if !guideSeen { guideSeen = true; showGuide = true } }
+        .fullScreenCover(isPresented: $showGuide) {
+            LocationSetupGuide(model: model, showRoute: { jump(to: "route", using: proxy) })
+        }
         .sheet(item: $mapMode) { mode in
             LocationMapPicker(isRoute: mode == .route, points: mode == .route ? model.mapRoutePoints : [model.mapPoint], center: model.mapPoint, current: livePoint) { points in
                 if mode == .route { model.selectMapRoute(points) }
@@ -379,7 +413,7 @@ struct VirtualLocationView: View {
         }
     }
     private func jump(to section: String, using proxy: ScrollViewProxy) {
-        guideExpanded = false
+        showGuide = false
         Task { @MainActor in
             await Task.yield()
             withAnimation { proxy.scrollTo(section, anchor: .top) }

@@ -16,7 +16,9 @@ import android.text.InputType
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.TextView
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.core.location.LocationCompat
@@ -50,6 +52,8 @@ class VirtualLocationFragment : Fragment() {
     private data class Controls(val page: GroupedPage, val toggle: MaterialSwitch, val status: TextView, val latitude: TextInputEditText, val longitude: TextInputEditText, val accuracy: TextInputEditText, val message: TextView, val observed: TextView, val routePoints: TextInputEditText, val duration: TextInputEditText, val interval: TextInputEditText, val routeStatus: TextView, val routeStart: MaterialButton, val routePause: MaterialButton, val routeHold: MaterialButton, val selectedPosition: TextView, val routeDraft: TextView)
     private var ui: Controls? = null
     private var setupGuide: LocationSetupGuide? = null
+    private var guideVisible = false
+    private var guideBack: OnBackPressedCallback? = null
     private var rendering = false
     private var pendingAction = ""
     private val handler = Handler(Looper.getMainLooper())
@@ -67,8 +71,8 @@ class VirtualLocationFragment : Fragment() {
     }
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, state: Bundle?): View {
         val page = GroupedPage(requireContext()); val store = MockLocationStore(requireContext()); val saved = store.load()
-        // Reserve the guide's place before the normal controls; wire it after their views exist.
         val guideContainer = page.section(getString(R.string.location_setup_title))
+        page.button(guideContainer, getString(R.string.location_setup_show)) { showGuide(true) }
         val run = page.section(getString(R.string.virtual_location))
         val toggle = page.toggle(run, getString(R.string.location_enable), false)
         val status = page.paragraph(run, "")
@@ -154,19 +158,26 @@ class VirtualLocationFragment : Fragment() {
         page.button(diagnostics, getString(R.string.location_share)) { share() }
         page.note(getString(R.string.location_android_diagnostics_note))
         ui = Controls(page, toggle, status, lat, lon, accuracy, message, observed, routePoints, duration, interval, routeStatus, routeStart, routePause, routeHold, selectedPosition, routeDraft)
-        setupGuide = LocationSetupGuide(page, guideContainer,
+        setupGuide = LocationSetupGuide(page,
+            close = { showGuide(false) },
             openDeviceInfo = { openSystemSettings(Settings.ACTION_DEVICE_INFO_SETTINGS) },
             openDeveloperOptions = { openSystemSettings(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS) },
             openLocationSettings = { openSystemSettings(Settings.ACTION_LOCATION_SOURCE_SETTINGS) },
             allowLocation = { pendingAction = "permission"; requestPermission() },
             openAppSettings = { openSystemSettings(Settings.ACTION_APPLICATION_DETAILS_SETTINGS) },
             choosePosition = { openMap(false) },
-            startSimulation = { start(); jumpTo(run) },
+            startSimulation = { start(); render() },
+            stopSimulation = { runCatching { MockLocationService.stop(requireContext()) }.onFailure { message.text = it.message }; render() },
             showRoute = { jumpTo(route) },
             checkLocation = {
                 if (!hasLocationPermission()) { pendingAction = "observe"; requestPermission() } else observe()
-                jumpTo(diagnostics)
-            })
+            },
+            showDiagnostics = { jumpTo(diagnostics) },
+            onStepChanged = { cancelObservation() })
+        observed.doAfterTextChanged { setupGuide?.setObservation(observed.text.toString()) }
+        message.doAfterTextChanged {
+            setupGuide?.setFeedback(message.text.toString().takeUnless { it == getString(R.string.location_android_explanation) } ?: "")
+        }
         updateDraftLabels()
         toggle.setOnCheckedChangeListener { _, enabled ->
             if (rendering) return@setOnCheckedChangeListener
@@ -175,9 +186,18 @@ class VirtualLocationFragment : Fragment() {
             } else runCatching { MockLocationService.stop(requireContext()) }.onFailure { message.text = it.message }
             render()
         }
-        return page.root
+        val root = FrameLayout(requireContext()).apply {
+            addView(page.root, FrameLayout.LayoutParams(-1, -1))
+            addView(setupGuide!!.root, FrameLayout.LayoutParams(-1, -1))
+        }
+        val prefs = requireContext().getSharedPreferences("virtual-location", android.content.Context.MODE_PRIVATE)
+        showGuide(state?.getBoolean("setupGuideVisible") ?: !prefs.getBoolean("setupWizardSeen", false))
+        return root
     }
     override fun onViewCreated(view: View, state: Bundle?) {
+        guideBack = object : OnBackPressedCallback(guideVisible) {
+            override fun handleOnBackPressed() { setupGuide?.back() }
+        }.also { requireActivity().onBackPressedDispatcher.addCallback(viewLifecycleOwner, it) }
         parentFragmentManager.setFragmentResultListener(LocationMapFragment.RESULT, viewLifecycleOwner) { _, result ->
             val controls = ui ?: return@setFragmentResultListener
             val latitudes = result.getDoubleArray("latitudes") ?: return@setFragmentResultListener
@@ -196,7 +216,19 @@ class VirtualLocationFragment : Fragment() {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) { MockLocationRuntime.snapshot.collect { render() } }
         }
     }
-    override fun onResume() { super.onResume(); render() }
+    override fun onResume() { super.onResume(); guideBack?.isEnabled = guideVisible; render() }
+    override fun onPause() { guideBack?.isEnabled = false; super.onPause() }
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean("setupGuideVisible", guideVisible)
+    }
+    private fun showGuide(show: Boolean) {
+        guideVisible = show
+        setupGuide?.root?.visibility = if (show) View.VISIBLE else View.GONE
+        ui?.page?.root?.visibility = if (show) View.GONE else View.VISIBLE
+        guideBack?.isEnabled = show && isResumed
+        if (show) requireContext().getSharedPreferences("virtual-location", android.content.Context.MODE_PRIVATE).edit().putBoolean("setupWizardSeen", true).apply()
+    }
     private fun openSystemSettings(action: String) {
         val intent = Intent(action)
         if (action == Settings.ACTION_APPLICATION_DETAILS_SETTINGS) {
@@ -216,7 +248,7 @@ class VirtualLocationFragment : Fragment() {
             page.root.offsetDescendantRectToMyCoords(view, rect)
             page.root.smoothScrollTo(0, rect.top)
         }
-        setupGuide?.setExpanded(false)
+        showGuide(false)
         content.requestLayout()
     }
     private fun openMap(route: Boolean) {
@@ -234,6 +266,7 @@ class VirtualLocationFragment : Fragment() {
         val controls = ui ?: return
         val point = runCatching { MockCoordinates.parse(controls.latitude.text.toString(), controls.longitude.text.toString(), "25") }.getOrNull()
         controls.selectedPosition.text = point?.let { getString(R.string.location_map_selected_coordinates, it.latitude, it.longitude) } ?: getString(R.string.location_map_invalid_coordinates)
+        setupGuide?.setPosition(controls.selectedPosition.text.toString())
         val route = runCatching { MockLocationRoute.parse(controls.routePoints.text.toString(), "300", "1", 25) }.getOrNull()
         controls.routeDraft.text = route?.let { getString(R.string.location_map_route_count, it.points.size, it.distance / 1000) } ?: getString(R.string.location_map_route_empty)
     }
@@ -320,5 +353,5 @@ class VirtualLocationFragment : Fragment() {
         val report = "Sakamoto $version · Android ${Build.VERSION.RELEASE}\nVirtual location · ${Date()}\nWGS84: ${point.latitude}, ${point.longitude}; accuracy: ${point.accuracy} m\nStatus: ${snapshot.phase}; injected fixes: ${snapshot.fixes}; fused mock: ${snapshot.fused}; last fix: ${snapshot.lastFix}\nRoute: ${snapshot.routeState}; elapsed: ${snapshot.routeElapsed} / ${snapshot.routeDuration} s\nDetail: ${snapshot.error}\nObserved: ${ui?.observed?.text}"
         startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, report), getString(R.string.location_share)))
     }
-    override fun onDestroyView() { cancelObservation(); setupGuide = null; ui = null; super.onDestroyView() }
+    override fun onDestroyView() { cancelObservation(); guideBack = null; setupGuide = null; ui = null; super.onDestroyView() }
 }
