@@ -139,7 +139,7 @@ class EditorFragment : androidx.fragment.app.Fragment(), UnsavedConfigEditor {
         when (kind) {
             "outbound" -> {
                 val outbound = findOutbound(root, tag) ?: run { showMissing(page); return page.root }
-                specs = EditingProtocols.plan(outbound.optString("type"), outbound)
+                specs = listOf(EditingProtocols.FieldSpec("tag", R.string.node_remark, EditingProtocols.Section.SERVER, optional = false)) + EditingProtocols.plan(outbound.optString("type"), outbound)
                 val server = page.section(getString(R.string.ux_editing_section_server))
                 page.row(server, getString(R.string.node_protocol), outbound.optString("type"), navigates = false)
                 for (spec in specs.filter { it.section == EditingProtocols.Section.SERVER }) {
@@ -319,6 +319,7 @@ class EditorFragment : androidx.fragment.app.Fragment(), UnsavedConfigEditor {
             if (spec.optional || spec.key == "match") return true
             return reject(R.string.required_value)
         }
+        if (spec.key == "server" && (raw.any { it.isWhitespace() } || raw.contains("://"))) return reject(R.string.invalid_value)
         when (spec.kind) {
             EditingProtocols.Kind.NUMBER -> {
                 val number = raw.toLongOrNull() ?: return reject(R.string.ux_editing_error_number)
@@ -345,11 +346,14 @@ class EditorFragment : androidx.fragment.app.Fragment(), UnsavedConfigEditor {
                 val detour = choices["detour"].orEmpty()
                 if (detour.isNotEmpty()) ConfigEdits.validateDetour(root.toString(), tag, detour)
                 val outbound = findOutbound(root, tag) ?: error(getString(R.string.ux_editing_error_missing_entry))
-                EditingProtocols.applyChanges(outbound, specs, originals, specs.associate { it.key to value(it.key) })
+                EditingProtocols.applyChanges(outbound, specs.filter { it.key != "tag" }, originals, specs.associate { it.key to value(it.key) })
                 if (detour != originals["detour"]) {
                     if (detour.isEmpty()) outbound.remove("detour") else outbound.put("detour", detour)
                 }
-                persist(root.toString())
+                val name = value("tag").trim()
+                val content = ConfigEdits.renamedOutbound(root.toString(), tag, name)
+                ConfigRepository.saveNodeEdit(requireContext(), content, tag, name)
+                finishSave()
             } else {
                 val index = requireArguments().getInt("index", -1)
                 val rules = root.getJSONObject("route").optJSONArray("rules") ?: JSONArray()
@@ -365,11 +369,18 @@ class EditorFragment : androidx.fragment.app.Fragment(), UnsavedConfigEditor {
                 }
                 persist(ConfigEdits.routeRule(root.toString(), if (index < 0) rules.length() else index, built))
             }
-        } catch (error: Exception) { fail(error.message) }
+        } catch (error: Exception) {
+            fail(error.message)
+            view?.let { Snackbar.make(it, error.message ?: getString(R.string.invalid_value), Snackbar.LENGTH_LONG).show() }
+        }
     }
 
     private fun persist(content: String) {
         ConfigRepository.saveGeneratedEdit(requireContext(), content)
+        finishSave()
+    }
+
+    private fun finishSave() {
         finished = true
         parentFragmentManager.setFragmentResult("config-updated", Bundle())
         Snackbar.make(requireActivity().findViewById(R.id.fragment_container), R.string.saved_pending_apply, Snackbar.LENGTH_LONG).show()

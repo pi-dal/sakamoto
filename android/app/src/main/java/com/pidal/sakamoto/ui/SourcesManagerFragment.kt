@@ -35,9 +35,14 @@ class SourcesManagerFragment : androidx.fragment.app.Fragment() {
         page.button(nodes, getString(R.string.add_node_action)) { AddNodeSheet().show(parentFragmentManager, "add-node") }
         for (raw in saved.nodes) {
             val info = runCatching { Mobilecore.parseShareLink(raw) }.getOrNull()
-            fun editNode() { AddNodeSheet().apply { arguments = Bundle().apply { putString("original", raw) } }.show(parentFragmentManager, "edit-node") }
-            val row = page.row(nodes, info?.tag ?: getString(R.string.profile_invalid_source), info?.type.orEmpty(), R.drawable.ic_node, navigates = false) { editNode() }
-            row.actionIcon(R.drawable.ic_edit, getString(R.string.profile_edit_node, info?.tag ?: getString(R.string.profile_invalid_source))) { editNode() }
+            val tag = info?.tag?.let { saved.nodeAliases[it] ?: it }
+            fun editNode() {
+                if (tag != null && runCatching { tag in com.pidal.sakamoto.runtime.ConfigEdits.outboundTags(saved.generatedContent) }.getOrDefault(false)) {
+                    (requireActivity() as com.pidal.sakamoto.MainActivity).openChild(EditorFragment().apply { arguments = Bundle().apply { putString("kind", "outbound"); putString("tag", tag) } }, getString(R.string.profile_edit_node, tag))
+                } else AddNodeSheet().apply { arguments = Bundle().apply { putString("original", raw) } }.show(parentFragmentManager, "edit-node")
+            }
+            val row = page.row(nodes, tag ?: getString(R.string.profile_invalid_source), info?.type.orEmpty(), R.drawable.ic_node, navigates = false) { editNode() }
+            row.actionIcon(R.drawable.ic_edit, getString(R.string.profile_edit_node, tag ?: getString(R.string.profile_invalid_source))) { editNode() }
             val remove = { removeWithUndo(saved) { current -> current.copy(nodes = current.nodes.filterNot { it == raw }, sourceNeedsGenerate = true) } }
             row.actionIcon(R.drawable.ux_profiles_delete, getString(R.string.remove)) { remove() }.apply {
                 // actionIcon is declared View; the button it builds is always an AppCompatImageButton.

@@ -14,6 +14,13 @@ final class NodeGroupUITests: XCTestCase {
         XCTAssertTrue(button.waitForExistence(timeout: 8)); button.tap()
         XCTAssertTrue(app.buttons["SourceNode-Review A"].waitForExistence(timeout: 4))
     }
+    private func replace(_ field: XCUIElement, with text: String) {
+        field.press(forDuration: 1.2)
+        let selectAll = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Select All")).firstMatch
+        XCTAssertTrue(selectAll.waitForExistence(timeout: 3))
+        selectAll.tap()
+        field.typeText(text)
+    }
     private func attachment(_ name: String) {
         let item = XCTAttachment(screenshot: app.screenshot()); item.name = name; item.lifetime = .keepAlways; add(item)
     }
@@ -34,15 +41,17 @@ final class NodeGroupUITests: XCTestCase {
     func testEditNodeServerSavesAndReopensWithNewValue() {
         openSources()
         app.buttons["SourceNode-Review A"].tap()
-        app.buttons["Edit server, credentials & TLS"].tap()
         let server = app.textFields["NodeField-server"]
         XCTAssertTrue(server.waitForExistence(timeout: 3))
-        server.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5)).tap()
-        server.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: (server.value as? String ?? "").count) + "edited.example")
+        let remark = app.textFields["NodeField-tag"]
+        replace(remark, with: "Renamed node")
+        replace(server, with: "192.0.2.8")
         app.buttons["NodeSettingsSave"].tap()
-        XCTAssertTrue(app.buttons["Edit server, credentials & TLS"].waitForExistence(timeout: 4))
-        app.buttons["Edit server, credentials & TLS"].tap()
-        XCTAssertEqual(app.textFields["NodeField-server"].value as? String, "edited.example")
+        XCTAssertTrue(app.buttons["SourceNode-Review A"].waitForExistence(timeout: 4))
+        XCTAssertTrue(app.buttons["SourceNode-Review A"].label.contains("Renamed node"))
+        app.buttons["SourceNode-Review A"].tap()
+        XCTAssertEqual(app.textFields["NodeField-server"].value as? String, "192.0.2.8")
+        XCTAssertEqual(app.textFields["NodeField-tag"].value as? String, "Renamed node")
         attachment("node-native-editor")
     }
     func testGroupMemberSelectionSavesAndReopens() {

@@ -44,6 +44,7 @@ object ConfigRepository {
         val policy: List<PolicyRule> = emptyList(),
         val nodes: List<String> = emptyList(),
         val subscriptions: List<Triple<String, String, String>> = emptyList(), // name, url, format
+        val nodeAliases: Map<String, String> = emptyMap(),
     )
 
     private fun file(context: Context): File = File(context.filesDir, FILE_NAME)
@@ -68,6 +69,7 @@ object ConfigRepository {
                         PolicyRule(o.optString("match"), o.optString("action"))
                     }
                 } ?: emptyList(),
+                nodeAliases = root.optJSONObject("nodeAliases")?.let { aliases -> aliases.keys().asSequence().associateWith { aliases.getString(it) } } ?: emptyMap(),
                 nodes = root.optJSONArray("nodes")?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList(),
                 subscriptions = root.optJSONArray("subscriptions")?.let { array ->
                     (0 until array.length()).mapNotNull { i ->
@@ -99,6 +101,7 @@ object ConfigRepository {
                 config.policy.forEach { put(JSONObject().put("match", it.match).put("action", it.action)) }
             },
         )
+        root.put("nodeAliases", JSONObject(config.nodeAliases))
         root.put("nodes", JSONArray().apply { config.nodes.forEach { put(it) } })
         root.put(
             "subscriptions",
@@ -114,6 +117,23 @@ object ConfigRepository {
             file(context).writeText(root.toString())
             tmp.delete()
         }
+    }
+
+    fun saveNodeEdit(context: Context, content: String, old: String, name: String) {
+        io.nekohasekai.mobilecore.Mobilecore.validateConfigJSON(content)
+        io.nekohasekai.libbox.Libbox.checkConfig(content)
+        val current = load(context)
+        val aliases = current.nodeAliases.mapValues { if (it.value == old) name else it.value }.toMutableMap()
+        if (old != name && current.nodeAliases.values.none { it == old }) aliases[old] = name
+        val metadata = JSONObject(current.hostMetadata)
+        metadata.optJSONObject("fallbacks")?.let { groups ->
+            for (key in groups.keys()) {
+                val members = groups.optJSONArray(key) ?: continue
+                groups.put(key, JSONArray((0 until members.length()).map { members.getString(it).let { member -> if (member == old) name else member } }))
+            }
+        }
+        save(context, current.copy(generatedContent = content, nodeAliases = aliases, hostMetadata = metadata.toString()))
+        MobilecoreRuntime.configEvent("modified")
     }
 
     fun saveGeneratedEdit(context: Context, content: String) {

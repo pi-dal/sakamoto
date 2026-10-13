@@ -11,7 +11,7 @@ import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
 import com.pidal.sakamoto.runtime.ConfigRepository
 import com.pidal.sakamoto.runtime.ProxyGroupEditing
-import com.pidal.sakamoto.ui.AddNodeSheet
+import com.pidal.sakamoto.ui.EditorFragment
 import com.pidal.sakamoto.ui.ProxyGroupEditorFragment
 import com.pidal.sakamoto.ui.SourcesManagerFragment
 import java.io.File
@@ -38,23 +38,27 @@ class NodeGroupSmokeChecks(private val instrumentation: Instrumentation) {
                 sources = SourcesManagerFragment(); activity.openChild(sources, context.getString(R.string.profile_source_title)); activity.supportFragmentManager.executePendingTransactions()
             }
             settle()
-            lateinit var sheet: AddNodeSheet
+            lateinit var editor: EditorFragment
             instrumentation.runOnMainSync {
                 var target: View = descendants(sources.requireView()).filterIsInstance<TextView>().first { it.text.toString() == "Review A" }
                 while (!target.isClickable && target.parent is View) target = target.parent as View
                 check(target.performClick())
                 activity.supportFragmentManager.executePendingTransactions()
-                sheet = activity.supportFragmentManager.findFragmentByTag("edit-node") as AddNodeSheet
-                val editor = descendants(sheet.requireDialog().window!!.decorView).filterIsInstance<EditText>().first()
-                editor.setText("trojan://test@edited.example:8443#Review%20A")
+                editor = activity.supportFragmentManager.primaryNavigationFragment as EditorFragment
+                val fields = descendants(editor.requireView()).filterIsInstance<EditText>()
+                fields.first { (it.parent.parent as com.google.android.material.textfield.TextInputLayout).hint == context.getString(R.string.node_remark) }.setText("Renamed node")
+                fields.first { (it.parent.parent as com.google.android.material.textfield.TextInputLayout).hint == context.getString(R.string.node_address) }.setText("192.0.2.8")
             }
             capture("nodes-edit.png")
             instrumentation.runOnMainSync {
-                descendants(sheet.requireDialog().window!!.decorView).filterIsInstance<MaterialButton>().first { it.text == context.getString(R.string.save) }.performClick()
+                activity.findViewById<MaterialToolbar>(R.id.top_app_bar).menu.performIdentifierAction(R.id.editor_save, 0)
                 activity.supportFragmentManager.executePendingTransactions()
             }
             settle()
-            check(ConfigRepository.load(context).nodes.first().contains("edited.example:8443"))
+            val edited = ConfigRepository.load(context)
+            check(edited.nodeAliases["Review A"] == "Renamed node")
+            check(ProxyGroupEditing.rows(edited.generatedContent).first { it.optString("tag") == "Renamed node" }.getString("server") == "192.0.2.8")
+            check(ProxyGroupEditing.groups(edited.generatedContent).single().defaultMember == "Renamed node")
             instrumentation.runOnMainSync {
                 descendants(sources.requireView()).first { it.contentDescription == context.getString(R.string.remove) }.performClick()
             }
@@ -75,12 +79,12 @@ class NodeGroupSmokeChecks(private val instrumentation: Instrumentation) {
             settle(); capture("groups-edit.png")
             instrumentation.runOnMainSync {
                 val controls = descendants(groups.requireView())
-                controls.first { it.contentDescription == context.getString(R.string.group_move_down, "Review A") }.apply {
+                controls.first { it.contentDescription == context.getString(R.string.group_move_down, "Renamed node") }.apply {
                     check(width >= 48 * context.resources.displayMetrics.density); check(height >= 48 * context.resources.displayMetrics.density); performClick()
                 }
             }
             instrumentation.runOnMainSync {
-                descendants(groups.requireView()).first { it.contentDescription == context.getString(R.string.group_remove_member, "Review A") }.performClick()
+                descendants(groups.requireView()).first { it.contentDescription == context.getString(R.string.group_remove_member, "Renamed node") }.performClick()
             }
             instrumentation.runOnMainSync { activity.findViewById<MaterialToolbar>(R.id.top_app_bar).menu.performIdentifierAction(R.id.editor_save, 0) }
             settle()

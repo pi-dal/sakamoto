@@ -17,6 +17,43 @@ final class NodeGroupEditingTests: XCTestCase {
         try await store.generateFromSources()
         return (store, defaults, suite)
     }
+    func testRemarkAndIPRenameRepairReferencesAndSurviveRepeatedEditingAndGeneration() async throws {
+        let (store, defaults, suite) = try await setup()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        try store.saveProxyGroup(ProxyGroupEdit(tag: "MainProxy", members: ["A", "B"], defaultMember: "A"), expectedProfile: store.selectedProfileID, expectedContent: store.content)
+        for (old, new) in [("A", "Japan"), ("Japan", "Tokyo 日本")] {
+            var node = try XCTUnwrap(ProxyGroupEditing.outbounds(store.content).first { $0["tag"] as? String == old })
+            node["tag"] = new; node["server"] = "192.0.2.8"; node["server_port"] = 8443
+            let json = String(decoding: try JSONSerialization.data(withJSONObject: node), as: UTF8.self)
+            try store.saveNodeSettings(tag: old, nodeJSON: json, expectedProfile: store.selectedProfileID, expectedContent: store.content)
+        }
+        XCTAssertEqual(Set(store.selectedProfile?.nodeOverrides?.keys.map { $0 } ?? []), ["A"])
+        try await store.generateFromSources()
+        let restored = ConfigStore(persistence: defaults, keyStore: ConfigStoreTests.EmptyKeys())
+        XCTAssertEqual(ProxyGroupEditing.groups(restored.content).first { $0.tag == "MainProxy" }?.members, ["Tokyo 日本", "B"])
+        XCTAssertEqual(ProxyGroupEditing.groups(restored.content).first { $0.tag == "MainProxy" }?.defaultMember, "Tokyo 日本")
+        let source = try XCTUnwrap(restored.nodesSources.nodes.first { $0.tag == "A" })
+        XCTAssertEqual(restored.editableSourceNode(source)?["server"] as? String, "192.0.2.8")
+        XCTAssertNoThrow(try restored.connectionContent())
+        var duplicate = try XCTUnwrap(restored.editableSourceNode(source)); duplicate["tag"] = "B"
+        let before = restored.content
+        XCTAssertThrowsError(try restored.saveNodeSettings(tag: "Tokyo 日本", nodeJSON: String(decoding: JSONSerialization.data(withJSONObject: duplicate), as: UTF8.self), expectedProfile: restored.selectedProfileID, expectedContent: before))
+        XCTAssertEqual(restored.content, before)
+        try restored.removeSourceNode(source)
+        XCTAssertEqual(restored.selectedProfile?.proxyGroups?.first?.members, ["B"])
+        try await restored.generateFromSources()
+        XCTAssertFalse(ProxyGroupEditing.outbounds(restored.content).contains { $0["tag"] as? String == "Tokyo 日本" })
+    }
+    func testRenameTouchesOnlyOutboundReferences() throws {
+        let content = #"{"outbounds":[{"tag":"A","type":"socks","server":"A","server_port":1080,"username":"A"},{"tag":"group","type":"selector","outbounds":["A"],"default":"A"},{"tag":"next","type":"socks","server":"x","server_port":1080,"detour":"A"}],"route":{"final":"A","rules":[{"type":"logical","rules":[{"domain":["A"],"outbound":"A"}]}]},"dns":{"servers":[{"tag":"A","type":"https","server":"A","detour":"A"}]}}"#
+        let saved = try ProxyGroupEditing.replacingNode(tag: "A", with: #"{"tag":"Japan","type":"socks","server":"192.0.2.8","server_port":1080,"username":"A"}"#, in: content)
+        let root = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(saved.utf8)) as? [String: Any])
+        XCTAssertEqual((root["route"] as? [String: Any])?["final"] as? String, "Japan")
+        let dns = try XCTUnwrap((root["dns"] as? [String: Any])?["servers"] as? [[String: Any]])[0]
+        XCTAssertEqual(dns["detour"] as? String, "Japan"); XCTAssertEqual(dns["tag"] as? String, "A"); XCTAssertEqual(dns["server"] as? String, "A")
+        XCTAssertEqual(ProxyGroupEditing.groups(saved).first?.defaultMember, "Japan")
+        XCTAssertEqual(ProxyGroupEditing.outbounds(saved).first { $0["tag"] as? String == "next" }?["detour"] as? String, "Japan")
+    }
     func testNodeAndGroupOverridesSurviveGenerationAndRestart() async throws {
         let (store, defaults, suite) = try await setup()
         defer { defaults.removePersistentDomain(forName: suite) }

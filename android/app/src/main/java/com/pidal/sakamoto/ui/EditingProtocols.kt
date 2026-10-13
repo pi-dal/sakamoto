@@ -122,7 +122,7 @@ object EditingProtocols {
     fun plan(type: String, outbound: JSONObject): List<FieldSpec> {
         val known = plans[type].orEmpty()
         val fields = mutableListOf(
-            FieldSpec("server", R.string.proxy_server, Section.SERVER, optional = false),
+            FieldSpec("server", R.string.node_address, Section.SERVER, optional = false),
             FieldSpec("server_port", R.string.proxy_port, Section.SERVER, Kind.NUMBER, optional = false),
         )
         for (entry in known) {

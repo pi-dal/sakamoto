@@ -102,13 +102,20 @@ class AddNodeSheet : ConfigSheet() {
         val original = arguments?.getString("original")
         val root = content()
         sheetTitle(root, R.string.ux_editing_sheet_node_title)
-        val link = root.sheetField(getString(R.string.node_link_hint), InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS)
-        link.setText(original ?: arguments?.getString("prefill").orEmpty())
-        link.isSaveEnabled = false
-        if (android.os.Build.VERSION.SDK_INT >= 26) link.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+        val endpoint = original?.let { runCatching { com.pidal.sakamoto.runtime.NodeLinkEditing.endpoint(it) }.getOrNull() }
+        val remark = if (original != null) root.sheetField(getString(R.string.node_remark)).apply { setText(endpoint?.remark.orEmpty()) } else null
+        val server = if (original != null) root.sheetField(getString(R.string.node_address)).apply { setText(endpoint?.server.orEmpty()) } else null
+        val port = if (endpoint?.port != null) root.sheetField(getString(R.string.proxy_port), InputType.TYPE_CLASS_NUMBER).apply { setText(endpoint.port.toString()) } else null
+        val link = if (original == null) root.sheetField(getString(R.string.node_link_hint), InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS).apply {
+            setText(arguments?.getString("prefill").orEmpty()); isSaveEnabled = false
+            if (android.os.Build.VERSION.SDK_INT >= 26) importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+        } else null
         finishButton(root, if (original == null) R.string.add else R.string.save) {
             try {
-                val raw = link.text.toString().trim()
+                val raw = if (original == null) link!!.text.toString().trim() else {
+                    check(port == null || port.text.toString().toIntOrNull() != null) { getString(R.string.ux_editing_error_port) }
+                    com.pidal.sakamoto.runtime.NodeLinkEditing.update(original, remark!!.text.toString(), server!!.text.toString(), port?.text.toString().toIntOrNull())
+                }
                 check(raw.isNotEmpty()) { getString(R.string.required_value) }
                 check(!Mobilecore.isSubLink(raw)) { getString(R.string.subscription_link_hint) }
                 Mobilecore.parseShareLink(raw)
@@ -116,7 +123,7 @@ class AddNodeSheet : ConfigSheet() {
                 check(original == null || original in current.nodes) { getString(R.string.editor_conflict) }
                 check(current.nodes.none { it == raw && it != original }) { getString(R.string.duplicate_node) }
                 ConfigRepository.save(requireContext(), current.copy(sourceNeedsGenerate = true, nodes = if (original == null) current.nodes + raw else current.nodes.map { if (it == original) raw else it })); com.pidal.sakamoto.runtime.MobilecoreRuntime.configEvent("modified"); parentFragmentManager.setFragmentResult("config-updated", Bundle()); dismiss()
-            } catch (e: Exception) { link.error = e.message ?: getString(R.string.invalid_value) }
+            } catch (e: Exception) { (link ?: server)?.error = e.message ?: getString(R.string.invalid_value) }
         }
         return scrollWrap(root)
     }

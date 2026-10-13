@@ -5,6 +5,33 @@ import org.json.JSONObject
 
 /** Pure validated edits of the device's saved config, independent of host files. */
 object ConfigEdits {
+    fun renamedOutbound(content: String, old: String, name: String): String {
+        require(name.isNotBlank() && name.none { it == '\n' || it == '\r' || it == '\u0000' }) { "Enter a remark for this node" }
+        val root = JSONObject(content)
+        val rows = root.getJSONArray("outbounds")
+        val node = (0 until rows.length()).map { rows.getJSONObject(it) }.firstOrNull { it.optString("tag") == old } ?: error("Node no longer exists")
+        val endpoints = root.optJSONArray("endpoints") ?: JSONArray()
+        require(name == old || ((0 until rows.length()).map { rows.getJSONObject(it) } + (0 until endpoints.length()).map { endpoints.getJSONObject(it) }).none { it.optString("tag") == name }) { "This remark already belongs to another node or group" }
+        node.put("tag", name)
+        return rewriteNodeReferences(root, old, name).toString()
+    }
+
+    fun rewriteNodeReferences(value: Any, old: String, name: String): Any {
+        if (value is JSONArray) return JSONArray((0 until value.length()).map { rewriteNodeReferences(value.get(it), old, name) })
+        if (value !is JSONObject) return value
+        val result = JSONObject()
+        for (key in value.keys()) result.put(key, rewriteNodeReferences(value.get(key), old, name))
+        for (key in listOf("outbound", "outbounds", "detour", "download_detour")) {
+            when (val reference = value.opt(key)) {
+                is String -> if (reference == old) result.put(key, name)
+                is JSONArray -> if ((0 until reference.length()).all { reference.get(it) is String }) result.put(key, JSONArray((0 until reference.length()).map { reference.getString(it).let { tag -> if (tag == old) name else tag } }))
+            }
+        }
+        if (value.optString("type") in setOf("selector", "urltest") && value.optString("default") == old) result.put("default", name)
+        result.optJSONObject("route")?.let { if (it.optString("final") == old) it.put("final", name) }
+        return result
+    }
+
     fun outboundTags(content: String): List<String> {
         val array = JSONObject(content).optJSONArray("outbounds") ?: JSONArray()
         return (0 until array.length()).map { array.getJSONObject(it).getString("tag") }

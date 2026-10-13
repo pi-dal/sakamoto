@@ -69,18 +69,47 @@ public enum ProxyGroupEditing {
         return String(decoding: try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys]), as: UTF8.self)
     }
 
+    /// Rewrite outbound references, never arbitrary strings such as hosts or credentials.
+    public static func renamingReferences(_ names: [String: String], in value: Any) -> Any {
+        if let array = value as? [Any] { return array.map { renamingReferences(names, in: $0) } }
+        guard let object = value as? [String: Any] else { return value }
+        var result = object.mapValues { renamingReferences(names, in: $0) }
+        for key in ["outbound", "outbounds", "detour", "download_detour"] {
+            if let name = object[key] as? String { result[key] = names[name] ?? name }
+            else if let members = object[key] as? [String] { result[key] = members.map { names[$0] ?? $0 } }
+        }
+        if ["selector", "urltest"].contains(object["type"] as? String ?? ""), let name = object["default"] as? String { result["default"] = names[name] ?? name }
+        if var route = result["route"] as? [String: Any], let name = route["final"] as? String { route["final"] = names[name] ?? name; result["route"] = route }
+        return result
+    }
     public static func replacingNode(tag: String, with nodeJSON: String, in content: String) throws -> String {
         guard var root = try JSONSerialization.jsonObject(with: Data(content.utf8)) as? [String: Any], var rows = root["outbounds"] as? [[String: Any]],
               let index = rows.firstIndex(where: { $0["tag"] as? String == tag }), let node = try JSONSerialization.jsonObject(with: Data(nodeJSON.utf8)) as? [String: Any],
-              node["tag"] as? String == tag, node["type"] as? String == rows[index]["type"] as? String,
+              let name = node["tag"] as? String, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !name.contains(where: { $0.isNewline || $0 == "\0" }), node["type"] as? String == rows[index]["type"] as? String,
               !["selector", "urltest", "direct", "block", "dns"].contains(node["type"] as? String ?? "") else { throw TunnelProfile.InvalidProfile("The node changed or was removed. Reopen its editor.") }
+        let endpoints = root["endpoints"] as? [[String: Any]] ?? []
+        guard name == tag || !(rows + endpoints).contains(where: { $0["tag"] as? String == name }) else { throw TunnelProfile.InvalidProfile("This remark already belongs to another node or group.") }
         rows[index] = node; root["outbounds"] = rows
+        root = renamingReferences([tag: name], in: root) as! [String: Any]
         return String(decoding: try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys]), as: UTF8.self)
     }
     public static func applyingNodes(_ overrides: [String: String], to content: String) throws -> String {
-        var next = content
-        let tags = Set(outbounds(content).compactMap { $0["tag"] as? String })
-        for tag in overrides.keys.sorted() where tags.contains(tag) { next = try replacingNode(tag: tag, with: overrides[tag]!, in: next) }
-        return next
+        guard !overrides.isEmpty else { return content }
+        guard var root = try JSONSerialization.jsonObject(with: Data(content.utf8)) as? [String: Any], var rows = root["outbounds"] as? [[String: Any]] else { throw TunnelProfile.InvalidProfile("Generate or import a configuration first.") }
+        var replacements: [Int: [String: Any]] = [:], names: [String: String] = [:]
+        for index in rows.indices {
+            guard let source = rows[index]["tag"] as? String, let json = overrides[source] else { continue }
+            guard let node = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any], let name = node["tag"] as? String, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !name.contains(where: { $0.isNewline || $0 == "\0" }),
+                  node["type"] as? String == rows[index]["type"] as? String else { throw TunnelProfile.InvalidProfile("The node changed. Reopen its editor.") }
+            replacements[index] = node; names[source] = name
+        }
+        // Batch aliases before replacement so name swaps remain valid on regeneration.
+        root = renamingReferences(names, in: root) as! [String: Any]
+        rows = root["outbounds"] as? [[String: Any]] ?? []
+        for (index, node) in replacements { rows[index] = node }
+        let tags = (rows + (root["endpoints"] as? [[String: Any]] ?? [])).compactMap { $0["tag"] as? String }
+        guard tags.count == Set(tags).count else { throw TunnelProfile.InvalidProfile("A saved remark conflicts with another node or group.") }
+        root["outbounds"] = rows
+        return String(decoding: try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys]), as: UTF8.self)
     }
 }

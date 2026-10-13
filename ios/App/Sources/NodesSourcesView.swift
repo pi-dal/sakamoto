@@ -21,10 +21,14 @@ struct NodesSourcesView: View {
             Section {
                 ForEach(model.store.nodesSources.nodes) { node in
                     HStack {
-                        NavigationLink { SourceNodeForm(model: model, original: node) } label: {
+                        NavigationLink {
+                            if let row = model.store.editableSourceNode(node), let tag = row["tag"] as? String { SavedNodeEditor(store: model.store, tag: tag) }
+                            else { SourceNodeForm(model: model, original: node) }
+                        } label: {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(node.tag)
-                                Text("\(node.type) · \(node.server)").font(.caption).foregroundStyle(.secondary)
+                                let row = model.store.editableSourceNode(node)
+                                Text(row?["tag"] as? String ?? node.tag)
+                                Text("\(node.type) · \(row?["server"] as? String ?? node.server)").font(.caption).foregroundStyle(.secondary)
                             }
                         }.accessibilityIdentifier("SourceNode-\(node.tag)")
                         Button(role: .destructive) { removal = SourceRemoval(node: node, source: nil, profileID: model.store.selectedProfileID) } label: { Image(systemName: "trash").frame(minWidth: 44, minHeight: 44) }
@@ -36,7 +40,7 @@ struct NodesSourcesView: View {
                 }
                 NavigationLink { SourceNodeForm(model: model, original: nil) } label: { Label("Add node", systemImage: "plus") }
                 Button("Import nodes.txt from Files…") { model.importNodesFile = true; model.showFileImporter = true }
-            } header: { Text("Manual nodes") } footer: { Text("Tap a node to edit its share link or saved settings. Changes stay local until Apply changes.") }
+            } header: { Text("Manual nodes") } footer: { Text("Tap a node to edit its remark, IP or hostname, port and protocol settings. Apply changes to activate.") }
             if !savedNodes.isEmpty {
                 Section {
                     NavigationLink { SavedConfigNodesView(store: model.store) } label: { LabeledContent("Saved config nodes", value: "\(savedNodes.count)") }
@@ -67,7 +71,9 @@ struct NodesSourcesView: View {
         } message: { selection in Text(blockedDeletion(selection) ?? "Remove \(selection.name) from this configuration? The running VPN keeps its current configuration until you apply changes.") }
     }
     private func blockedDeletion(_ selection: SourceRemoval) -> String? {
-        guard let node = selection.node, let group = model.store.selectedProfile?.proxyGroups?.first(where: { $0.members == [node.tag] }) else { return nil }
+        guard let node = selection.node else { return nil }
+        let tag = model.store.editableSourceNode(node)?["tag"] as? String ?? node.tag
+        guard let group = model.store.selectedProfile?.proxyGroups?.first(where: { $0.members == [tag] }) else { return nil }
         return "\(node.tag) is the last member of \(group.tag). Choose another member in Proxy groups before deleting it."
     }
     private func delete(_ selection: SourceRemoval) {
@@ -98,27 +104,51 @@ struct SourceNodeForm: View {
     @ObservedObject var model: ConfigModel
     let original: StagedNode?
     private let profileID: String?
+    @State private var remark: String
+    @State private var server: String
+    @State private var port: String
+    private let singlePort: Bool
     @State private var link: String
     @State private var error: String?
     @Environment(\.dismiss) private var dismiss
     init(model: ConfigModel, original: StagedNode?) {
         self.model = model; self.original = original; profileID = model.store.selectedProfileID
+        let endpoint = original.flatMap { try? NodeLinkEditing.endpoint($0.rawLink) }
+        _remark = State(initialValue: endpoint?.remark ?? original?.tag ?? "")
+        _server = State(initialValue: endpoint?.server ?? original?.server ?? "")
+        _port = State(initialValue: endpoint?.port.map(String.init) ?? "")
+        singlePort = endpoint?.port != nil
         _link = State(initialValue: original?.rawLink ?? "")
     }
     var body: some View {
         Form {
-            Section("Share link") {
-                TextEditor(text: $link).frame(minHeight: 150).textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive().accessibilityLabel("Node share link").accessibilityIdentifier("NodeShareLink")
+            if original != nil {
+                Section("Node") {
+                    TextField("Remark / name", text: $remark).accessibilityIdentifier("SourceField-remark")
+                    TextField("IP / hostname", text: $server).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("SourceField-server")
+                    if singlePort { TextField("Port", text: $port).keyboardType(.numberPad).accessibilityIdentifier("SourceField-port") }
+                }
+            } else {
+                Section("Import node") {
+                    TextEditor(text: $link).frame(minHeight: 150).textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive().accessibilityLabel("Node share link").accessibilityIdentifier("NodeShareLink")
+                }
             }
             if let original, model.store.nodesSources.nodes.filter({ $0.tag == original.tag }).count == 1, ProxyGroupEditing.outbounds(model.store.content).contains(where: { $0["tag"] as? String == original.tag }) {
                 Section { NavigationLink("Edit server, credentials & TLS") { SavedNodeEditor(store: model.store, tag: original.tag) } }
             }
             if let error { Text(error).font(.callout) }
-            Section { Text("Use the share link from your provider. Saving validates it and keeps the node’s place in the list. Apply changes to generate and use the edited source.").font(.callout).foregroundStyle(.secondary) }
+            Section { Text("Save stages these fields. Apply changes generates the node with its existing credentials and protocol options.").font(.callout).foregroundStyle(.secondary) }
         }
         .navigationTitle(original == nil ? "Add node" : "Edit node").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Save") {
-            do { try model.saveSourceNode(link, original: original, profileID: profileID); dismiss() }
+            do {
+                let raw: String
+                if let original {
+                    if singlePort && Int(port) == nil { throw TunnelProfile.InvalidProfile("Port must be 1–65535.") }
+                    raw = try NodeLinkEditing.updating(original.rawLink, remark: remark, server: server, port: singlePort ? Int(port) : nil)
+                } else { raw = link }
+                try model.saveSourceNode(raw, original: original, profileID: profileID); dismiss()
+            }
             catch { self.error = TunnelDiagnostics.sanitized(error.localizedDescription) }
         }.accessibilityIdentifier("SourceNodeSave").disabled(link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.store.applying || model.store.generating) } }
     }
@@ -172,12 +202,24 @@ struct SavedNodeEditor: View {
     init(store: ConfigStore, tag: String) {
         self.store = store; self.tag = tag; baseline = store.content; profileID = store.selectedProfileID
         let row = ProxyGroupEditing.outbounds(store.content).first { $0["tag"] as? String == tag } ?? [:]; original = row
-        var plan = [Field(path: "server", label: "Server", section: "Server", kind: "text"), Field(path: "server_port", label: "Port", section: "Server", kind: "number")]
+        var plan = [Field(path: "tag", label: "Remark / name", section: "Node", kind: "text")]
+        if row["server"] != nil { plan.append(Field(path: "server", label: "IP / hostname", section: "Server", kind: "text")) }
+        if row["server_port"] != nil { plan.append(Field(path: "server_port", label: "Port", section: "Server", kind: "number")) }
+        if row["server_ports"] is [String] { plan.append(Field(path: "server_ports", label: "Port ranges", section: "Server", kind: "list")) }
         for key in ["username", "password", "uuid", "method", "auth_str", "token", "private_key", "peer_public_key"] where row[key] is String {
             plan.append(Field(path: key, label: key.replacingOccurrences(of: "_", with: " ").capitalized, section: "Authentication", kind: ["method", "username"].contains(key) ? "text" : "secret"))
         }
+        let structural: Set<String> = ["tag", "type", "server", "server_port", "server_ports", "tls", "transport", "multiplex", "detour"]
+        for key in row.keys.sorted() where !structural.contains(key) && !plan.contains(where: { $0.path == key }) {
+            let kind: String
+            if row[key] is String { kind = ["secret", "psk"].contains(key) || key.contains("token") || key.contains("password") ? "secret" : "text" }
+            else if let number = row[key] as? NSNumber { kind = String(cString: number.objCType) == "c" ? "bool" : "numeric" }
+            else { continue }
+            plan.append(Field(path: key, label: key.replacingOccurrences(of: "_", with: " ").capitalized, section: "Protocol settings", kind: kind))
+        }
         if row["tls"] != nil {
             plan += [Field(path: "tls.server_name", label: "Server name (SNI)", section: "TLS", kind: "text"), Field(path: "tls.insecure", label: "Skip certificate verification", section: "TLS", kind: "bool")]
+            if Self.read(row, "tls.alpn") is [String] { plan.append(Field(path: "tls.alpn", label: "ALPN", section: "TLS", kind: "list")) }
             for (path, label) in [("tls.utls.fingerprint", "TLS fingerprint"), ("tls.reality.public_key", "Reality public key"), ("tls.reality.short_id", "Reality short ID")] where Self.read(row, path) != nil {
                 plan.append(Field(path: path, label: label, section: "TLS", kind: "text"))
             }
@@ -185,11 +227,17 @@ struct SavedNodeEditor: View {
         for (path, label) in [("transport.path", "Path"), ("transport.headers.Host", "Host header"), ("transport.service_name", "Service name")] where Self.read(row, path) is String {
             plan.append(Field(path: path, label: label, section: "Transport", kind: "text"))
         }
+        if Self.read(row, "transport.host") is [String] { plan.append(Field(path: "transport.host", label: "Host", section: "Transport", kind: "list")) }
         specs = plan
         _values = State(initialValue: Dictionary(uniqueKeysWithValues: plan.map { field in
-            let value = Self.read(row, field.path)
-            return (field.path, field.kind == "bool" ? ((value as? Bool ?? false) ? "true" : "false") : value.map { String(describing: $0) } ?? "")
+            return (field.path, Self.fieldText(row, field))
         }))
+    }
+    private static func fieldText(_ row: [String: Any], _ field: Field) -> String {
+        let value = read(row, field.path)
+        if field.kind == "bool" { return (value as? Bool ?? false) ? "true" : "false" }
+        if field.kind == "list", let list = value as? [String] { return list.joined(separator: ", ") }
+        return value.map { String(describing: $0) } ?? ""
     }
     private static func read(_ row: [String: Any], _ path: String) -> Any? {
         var value: Any = row
@@ -204,8 +252,8 @@ struct SavedNodeEditor: View {
     }
     var body: some View {
         Form {
-            Section { LabeledContent("Node", value: tag); LabeledContent("Protocol", value: original["type"] as? String ?? "") }
-            ForEach(["Server", "Authentication", "TLS", "Transport"], id: \.self) { section in
+            Section { LabeledContent("Protocol", value: original["type"] as? String ?? "") }
+            ForEach(["Node", "Server", "Authentication", "Protocol settings", "TLS", "Transport"], id: \.self) { section in
                 let fields = specs.filter { $0.section == section }
                 if !fields.isEmpty {
                     Section(section) {
@@ -234,13 +282,22 @@ struct SavedNodeEditor: View {
     private func save() {
         do {
             var node = original
-            for field in specs {
+            for field in specs where (values[field.path] ?? "") != Self.fieldText(original, field) {
                 let value = values[field.path] ?? ""
                 let replacement: Any?
                 if field.kind == "number" { guard let port = Int(value), (1...65535).contains(port) else { throw TunnelProfile.InvalidProfile("Port must be 1–65535.") }; replacement = port }
+                else if field.kind == "numeric" { guard let number = Double(value), number.isFinite else { throw TunnelProfile.InvalidProfile("Enter a valid number for \(field.label).") }; replacement = number }
+                else if field.kind == "list" { replacement = value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty } }
                 else if field.kind == "bool" { replacement = value == "true" }
                 else { replacement = value.isEmpty ? nil : value }
                 Self.set(replacement, path: ArraySlice(field.path.components(separatedBy: ".")), row: &node)
+            }
+            guard let name = node["tag"] as? String, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw TunnelProfile.InvalidProfile("Enter a remark for this node.") }
+            node["tag"] = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let server = node["server"] as? String {
+                let host = server.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !host.isEmpty, !host.contains(where: { $0.isWhitespace }), !host.contains("://") else { throw TunnelProfile.InvalidProfile("Enter an IP address or hostname, without a URL scheme.") }
+                node["server"] = host
             }
             let json = String(decoding: try JSONSerialization.data(withJSONObject: node, options: [.sortedKeys]), as: UTF8.self)
             try store.saveNodeSettings(tag: tag, nodeJSON: json, expectedProfile: profileID, expectedContent: baseline)

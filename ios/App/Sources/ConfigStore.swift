@@ -323,12 +323,44 @@ final class ConfigStore: ObservableObject {
         lastAction = "Group saved. Apply changes to use it."
     }
 
+    func editableSourceNode(_ node: StagedNode) -> [String: Any]? {
+        if let json = selectedProfile?.nodeOverrides?[node.tag], let row = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] { return row }
+        guard nodesSources.nodes.filter({ $0.tag == node.tag }).count == 1 else { return nil }
+        return ProxyGroupEditing.outbounds(content).first { $0["tag"] as? String == node.tag }
+    }
+
+    private func renameNodeReferences(from old: String, to name: String, profile: inout TunnelProfile) throws {
+        guard old != name else { return }
+        profile.proxyGroups = profile.proxyGroups?.map { group in
+            var next = group
+            next.members = group.members.map { $0 == old ? name : $0 }
+            if next.defaultMember == old { next.defaultMember = name }
+            return next
+        }
+        if profile.proxyChain?.upstream == old { profile.proxyChain?.upstream = name }
+        if profile.proxyChain?.exit == old { profile.proxyChain?.exit = name }
+        if let priorities = profile.experiment?.fallbacks { profile.experiment?.fallbacks = priorities.mapValues { $0.map { $0 == old ? name : $0 } } }
+        if let overrides = profile.nodeOverrides {
+            for (key, json) in overrides {
+                let node = try JSONSerialization.jsonObject(with: Data(json.utf8))
+                profile.nodeOverrides?[key] = String(decoding: try JSONSerialization.data(withJSONObject: ProxyGroupEditing.renamingReferences([old: name], in: node), options: [.sortedKeys]), as: UTF8.self)
+            }
+        }
+    }
+
     func saveNodeSettings(tag: String, nodeJSON: String, expectedProfile: String?, expectedContent: String) throws {
         guard !generating && !applying, selectedProfileID == expectedProfile, content == expectedContent,
               let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) else { throw TunnelProfile.InvalidProfile("Configuration changed while editing. Reopen the node and try again.") }
         var candidate = profiles[index]
         candidate.config = try ProxyGroupEditing.replacingNode(tag: tag, with: nodeJSON, in: content)
-        var overrides = candidate.nodeOverrides ?? [:]; overrides[tag] = nodeJSON; candidate.nodeOverrides = overrides
+        let node = try JSONSerialization.jsonObject(with: Data(nodeJSON.utf8)) as! [String: Any]
+        let name = node["tag"] as! String
+        let source = (candidate.nodeOverrides ?? [:]).keys.sorted().first { key in
+            guard let json = candidate.nodeOverrides?[key], let row = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] else { return false }
+            return row["tag"] as? String == tag
+        } ?? tag
+        try renameNodeReferences(from: tag, to: name, profile: &candidate)
+        var overrides = candidate.nodeOverrides ?? [:]; overrides[source] = nodeJSON; candidate.nodeOverrides = overrides
         _ = try prepare(candidate)
         profiles[index] = candidate; profiles[index].pendingApply = true
         content = candidate.config
@@ -341,11 +373,12 @@ final class ConfigStore: ObservableObject {
         if let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) {
             var candidate = profiles[index]
             var groups = candidate.proxyGroups ?? []
+            let tag = editableSourceNode(node)?["tag"] as? String ?? node.tag
             var changed = false
-            for offset in groups.indices where groups[offset].members.contains(node.tag) {
-                groups[offset].members.removeAll { $0 == node.tag }
+            for offset in groups.indices where groups[offset].members.contains(tag) {
+                groups[offset].members.removeAll { $0 == tag }
                 guard !groups[offset].members.isEmpty else { throw TunnelProfile.InvalidProfile("\(node.tag) is the last member of \(groups[offset].tag). Choose another member in Proxy groups before deleting it.") }
-                if groups[offset].defaultMember == node.tag { groups[offset].defaultMember = "" }
+                if groups[offset].defaultMember == tag { groups[offset].defaultMember = "" }
                 changed = true
             }
             if changed {
@@ -362,7 +395,12 @@ final class ConfigStore: ObservableObject {
 
     func clearNodeOverride(_ tag: String) {
         guard let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) else { return }
-        profiles[index].nodeOverrides?.removeValue(forKey: tag)
+        var candidate = profiles[index]
+        if let json = candidate.nodeOverrides?[tag], let row = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any], let name = row["tag"] as? String {
+            try? renameNodeReferences(from: name, to: tag, profile: &candidate)
+        }
+        candidate.nodeOverrides?.removeValue(forKey: tag)
+        profiles[index] = candidate
     }
 
     func saveProxyChain(_ settings: ProxyChainSettings) throws {
