@@ -21,7 +21,8 @@ final class NodeGroupEditingTests: XCTestCase {
         let (store, defaults, suite) = try await setup()
         defer { defaults.removePersistentDomain(forName: suite) }
         try store.saveProxyGroup(ProxyGroupEdit(tag: "MainProxy", members: ["A", "B"], defaultMember: "A"), expectedProfile: store.selectedProfileID, expectedContent: store.content)
-        for (old, new) in [("A", "Japan"), ("Japan", "Tokyo 日本")] {
+        let renamed = "Tokyo \u{65e5}\u{672c}"
+        for (old, new) in [("A", "Japan"), ("Japan", renamed)] {
             var node = try XCTUnwrap(ProxyGroupEditing.outbounds(store.content).first { $0["tag"] as? String == old })
             node["tag"] = new; node["server"] = "192.0.2.8"; node["server_port"] = 8443
             let json = String(decoding: try JSONSerialization.data(withJSONObject: node), as: UTF8.self)
@@ -30,19 +31,19 @@ final class NodeGroupEditingTests: XCTestCase {
         XCTAssertEqual(Set(store.selectedProfile?.nodeOverrides?.keys.map { $0 } ?? []), ["A"])
         try await store.generateFromSources()
         let restored = ConfigStore(persistence: defaults, keyStore: ConfigStoreTests.EmptyKeys())
-        XCTAssertEqual(ProxyGroupEditing.groups(restored.content).first { $0.tag == "MainProxy" }?.members, ["Tokyo 日本", "B"])
-        XCTAssertEqual(ProxyGroupEditing.groups(restored.content).first { $0.tag == "MainProxy" }?.defaultMember, "Tokyo 日本")
+        XCTAssertEqual(ProxyGroupEditing.groups(restored.content).first { $0.tag == "MainProxy" }?.members, [renamed, "B"])
+        XCTAssertEqual(ProxyGroupEditing.groups(restored.content).first { $0.tag == "MainProxy" }?.defaultMember, renamed)
         let source = try XCTUnwrap(restored.nodesSources.nodes.first { $0.tag == "A" })
         XCTAssertEqual(restored.editableSourceNode(source)?["server"] as? String, "192.0.2.8")
         XCTAssertNoThrow(try restored.connectionContent())
         var duplicate = try XCTUnwrap(restored.editableSourceNode(source)); duplicate["tag"] = "B"
         let before = restored.content
-        XCTAssertThrowsError(try restored.saveNodeSettings(tag: "Tokyo 日本", nodeJSON: String(decoding: JSONSerialization.data(withJSONObject: duplicate), as: UTF8.self), expectedProfile: restored.selectedProfileID, expectedContent: before))
+        XCTAssertThrowsError(try restored.saveNodeSettings(tag: renamed, nodeJSON: String(decoding: JSONSerialization.data(withJSONObject: duplicate), as: UTF8.self), expectedProfile: restored.selectedProfileID, expectedContent: before))
         XCTAssertEqual(restored.content, before)
         try restored.removeSourceNode(source)
         XCTAssertEqual(restored.selectedProfile?.proxyGroups?.first?.members, ["B"])
         try await restored.generateFromSources()
-        XCTAssertFalse(ProxyGroupEditing.outbounds(restored.content).contains { $0["tag"] as? String == "Tokyo 日本" })
+        XCTAssertFalse(ProxyGroupEditing.outbounds(restored.content).contains { $0["tag"] as? String == renamed })
     }
     func testRenameTouchesOnlyOutboundReferences() throws {
         let content = #"{"outbounds":[{"tag":"A","type":"socks","server":"A","server_port":1080,"username":"A"},{"tag":"group","type":"selector","outbounds":["A"],"default":"A"},{"tag":"next","type":"socks","server":"x","server_port":1080,"detour":"A"}],"route":{"final":"A","rules":[{"type":"logical","rules":[{"domain":["A"],"outbound":"A"}]}]},"dns":{"servers":[{"tag":"A","type":"https","server":"A","detour":"A"}]}}"#

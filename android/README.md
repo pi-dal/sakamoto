@@ -6,9 +6,9 @@ JNI runtime. Native frameworks and private configuration are never committed.
 
 ## Install the official release
 
-Download `sakamoto-android-v0.1.6-arm64-v8a.apk` and `SHA256SUMS` from the
-[Android v0.1.6 release](https://github.com/pi-dal/sakamoto/releases/tag/android-v0.1.6).
-Most current phones use arm64-v8a. Use `sakamoto-android-v0.1.6.apk` as the
+Download `sakamoto-android-v0.1.13-arm64-v8a.apk` and `SHA256SUMS` from the
+[Android v0.1.13 release](https://github.com/pi-dal/sakamoto/releases/tag/android-v0.1.13).
+Most current phones use arm64-v8a. Use `sakamoto-android-v0.1.13.apk` as the
 universal fallback when the architecture is unknown.
 Verify the checksum before installation. The APK is a non-debuggable release
 signed with the project's dedicated Android certificate:
@@ -17,7 +17,7 @@ signed with the project's dedicated Android certificate:
 SHA-256: a6fb9d4b3070023b52c0efcf254b2cad251fa3fa79cab6eeec2c378f6daa66bc
 ```
 
-The package is `com.pidal.sakamoto`, versionName `0.1.6`, versionCode `8`.
+The package is `com.pidal.sakamoto`, versionName `0.1.13`, versionCode `15`.
 Future official versions retain the signing certificate for upgrades.
 A development APK uses a different debug certificate and cannot be replaced
 in place by the official APK. Preserve/export configuration and credentials
@@ -51,7 +51,14 @@ source URL import stages a conf; it does not generate a runnable tunnel.
 - **Data:** actual traffic and connection streams, connection details and
   confirmed close actions.
 - **Settings:** tunnel settings, Tailscale, S3 sync, experiments, widgets,
-  notifications and About.
+  notifications, App updates and About. App updates checks official GitHub
+  releases and verifies the downloaded APK before opening Android's installer.
+
+Version 0.1.13 adds direct remark/IP/port editing, native proxy group controls
+and an explicit domain-and-all-subdomains policy choice. See
+[mobile editing](../docs/mobile-node-editing.md),
+[policy matching](../docs/mobile-policy-matching.md) and
+[app updates](../docs/mobile-updates.md).
 
 Generated-config edits (rule/action/final, selector default, server/detour,
 log level/TUN settings) are validated before saving and take effect on a

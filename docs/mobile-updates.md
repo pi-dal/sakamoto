@@ -1,6 +1,6 @@
 # Mobile app updates
 
-Open **Settings → App updates** on either platform. Checking is manual; opening the app does not start a download or installation.
+Open **Settings → App updates** on either platform. Available starting with iOS **0.1.17** and Android **0.1.13**. Checking is manual; opening the app does not start a download or installation.
 
 ## Android: official GitHub APKs
 

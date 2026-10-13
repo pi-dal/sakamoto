@@ -4,9 +4,9 @@ import SakamotoKit
 final class NodeLinkEditingTests: XCTestCase {
     func testEndpointFieldsPreserveEncodedCredentialsTLSAndTransportAndAcceptIPv6() throws {
         let raw = "vless://uuid%2Bsecret@old.example:443?security=reality&pbk=key%2Bvalue&type=ws&path=%2Fa%3Fb%3D1&sni=cdn.example#Old"
-        let saved = try NodeLinkEditing.updating(raw, remark: "Japan #1 / 日本", server: "2001:db8::8", port: 8443)
+        let saved = try NodeLinkEditing.updating(raw, remark: "Japan #1 / \u{65e5}\u{672c}", server: "2001:db8::8", port: 8443)
         let endpoint = try NodeLinkEditing.endpoint(saved)
-        XCTAssertEqual(endpoint.remark, "Japan #1 / 日本")
+        XCTAssertEqual(endpoint.remark, "Japan #1 / \u{65e5}\u{672c}")
         XCTAssertEqual(endpoint.server, "2001:db8::8")
         XCTAssertEqual(endpoint.port, 8443)
         let oldURL = try XCTUnwrap(URLComponents(string: raw)), url = try XCTUnwrap(URLComponents(string: saved))

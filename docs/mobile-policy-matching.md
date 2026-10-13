@@ -16,4 +16,4 @@ The **From input / prefixes** option retains the existing syntax: `aihubmix.com`
 
 On Android, open **Config → Routing rules** and add or edit a rule. Choose **Domain & all subdomains**, enter `aihubmix.com`, and choose the action and outbound. The suffix field also accepts `*.aihubmix.com` and `suffix:aihubmix.com`, converting them to `domain_suffix: ["aihubmix.com"]` in the saved configuration. Comma-separated domains are supported. Saving preserves unrelated existing predicates, so they continue to restrict that rule. Apply changes or connect to use the saved rule.
 
-Existing exact rules retain their scope until explicitly edited. These changes require a new APK/TestFlight build to reach installed clients.
+Existing exact rules retain their scope until explicitly edited. Available starting with iOS **0.1.17** and Android **0.1.13**.

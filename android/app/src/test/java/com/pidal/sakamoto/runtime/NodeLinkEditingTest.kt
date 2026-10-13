@@ -8,8 +8,8 @@ import java.util.Base64
 class NodeLinkEditingTest {
     @Test fun editsIPv6UnicodeRemarkAndPortWithoutChangingCredentialOrOptions() {
         val raw = "vless://uuid%2Bsecret@old.example:443?security=reality&type=ws&path=%2Fa%3Fb%3D1&sni=cdn.example#Old"
-        val saved = NodeLinkEditing.update(raw, "Japan #1 / 日本", "2001:db8::8", 8443)
-        assertEquals(NodeLinkEditing.Endpoint("Japan #1 / 日本", "2001:db8::8", 8443), NodeLinkEditing.endpoint(saved))
+        val saved = NodeLinkEditing.update(raw, "Japan #1 / \u65e5\u672c", "2001:db8::8", 8443)
+        assertEquals(NodeLinkEditing.Endpoint("Japan #1 / \u65e5\u672c", "2001:db8::8", 8443), NodeLinkEditing.endpoint(saved))
         assertEquals(java.net.URI(raw).rawQuery, java.net.URI(saved).rawQuery)
         assertEquals(java.net.URI(raw).rawUserInfo, java.net.URI(saved).rawUserInfo)
     }
