@@ -8,9 +8,9 @@ In iOS **0.1.17** and Android **0.1.13**, open **Config → Proxy groups → Rea
 
 “Automatic” describes how the group chooses among its members by latency; it does not require every Reality node to participate. Excluding a node from RealityAuto leaves the node and other memberships, including **ManualPick**, intact. This does not block selecting that node manually. The same controls work for **OthersAuto** and user-created automatic groups.
 
-The next release changes **RealityAuto** and **OthersAuto** to remember an **exclusion list**. After choosing members once, newly added matching nodes join automatically, while excluded nodes stay out across iOS regeneration and Android package updates. Existing edited automatic groups migrate their omitted nodes to exclusions. Exclusions survive temporarily missing nodes; reselect a node in **Choose members** to clear its exclusion. Renaming a node in the app updates its exclusion; an externally renamed subscription entry is treated as a new name. Manually added members outside the generated category are kept when available. Other groups retain explicit member lists. An update that would leave an existing automatic group empty is rejected and keeps the previous configuration.
+Starting with **iOS 0.1.18 / Android 0.1.14**, **RealityAuto** and **OthersAuto** remember an **exclusion list**. After choosing members once, newly added matching nodes join automatically, while excluded nodes stay out across iOS regeneration and Android package updates. Existing edited automatic groups migrate their omitted nodes to exclusions. Exclusions survive temporarily missing nodes; reselect a node in **Choose members** to clear its exclusion. Renaming a node in the app updates its exclusion; an externally renamed subscription entry is treated as a new name. Manually added members outside the generated category are kept when available. Other groups retain explicit member lists. An update that would leave an existing automatic group empty is rejected and keeps the previous configuration.
 
-The currently published **iOS 0.1.17 / Android 0.1.13** still use fixed member lists; the exclusion behavior described above requires the next app update.
+**iOS 0.1.17 / Android 0.1.13** use fixed member lists; the exclusion behavior described above requires **iOS 0.1.18 / Android 0.1.14** or later.
 
 ## Node and source editing
 
