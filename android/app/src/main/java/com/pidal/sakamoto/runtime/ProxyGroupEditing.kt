@@ -4,9 +4,65 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URI
 
-data class ProxyGroupEdit(val tag: String, val type: String = "selector", val members: List<String> = emptyList(), val defaultMember: String = "", val url: String = "https://www.gstatic.com/generate_204", val interval: String = "3m")
+data class ProxyGroupEdit(val tag: String, val type: String = "selector", val members: List<String> = emptyList(), val defaultMember: String = "", val url: String = "https://www.gstatic.com/generate_204", val interval: String = "3m", val excludedMembers: List<String>? = null, val additionalMembers: List<String>? = null)
 
 object ProxyGroupEditing {
+    fun followsGeneratedNodes(edit: ProxyGroupEdit): Boolean = edit.type == "urltest" && edit.tag in setOf("RealityAuto", "OthersAuto")
+    fun automaticCandidates(content: String, tag: String): List<String> = rows(content).filter { row ->
+        row.optString("type") !in setOf("selector", "urltest", "direct", "block", "dns", "socks") && row.has("tag")
+    }.filter { row ->
+        val reality = row.optJSONObject("tls")?.optJSONObject("reality")?.optBoolean("enabled") == true || row.getString("tag").contains("reality", true)
+        (tag == "RealityAuto" && reality) || (tag == "OthersAuto" && !reality)
+    }.map { it.getString("tag") }
+    fun recording(content: String, edit: ProxyGroupEdit, previous: ProxyGroupEdit? = null): ProxyGroupEdit {
+        if (!followsGeneratedNodes(edit)) return edit
+        val candidates = automaticCandidates(content, edit.tag)
+        val current = groups(content).firstOrNull { it.tag == edit.tag }?.members.orEmpty()
+        val removable = (candidates + current + previous?.additionalMembers.orEmpty()).distinct()
+        val excluded = ((edit.excludedMembers ?: previous?.excludedMembers).orEmpty() + (removable - edit.members.toSet())).distinct() - edit.members.toSet()
+        return edit.copy(excludedMembers = excluded.sorted(), additionalMembers = edit.members - candidates.toSet())
+    }
+    fun resolving(content: String, edit: ProxyGroupEdit): ProxyGroupEdit {
+        if (!followsGeneratedNodes(edit) || edit.excludedMembers == null) return edit
+        val candidates = automaticCandidates(content, edit.tag) - edit.excludedMembers.toSet()
+        val root = JSONObject(content)
+        val endpoints = root.optJSONArray("endpoints") ?: JSONArray()
+        val known = (rows(content).map { it.getString("tag") } + (0 until endpoints.length()).map { endpoints.getJSONObject(it).getString("tag") }).toSet()
+        val extras = edit.additionalMembers.orEmpty().filter { it in known && it !in edit.excludedMembers }
+        val ordered = edit.members.filter { it in candidates || it in extras }
+        return edit.copy(members = (ordered + candidates + extras).distinct())
+    }
+    fun encodeSaved(edits: List<ProxyGroupEdit>): JSONArray = JSONArray(edits.map { edit ->
+        JSONObject().put("tag", edit.tag).put("type", edit.type).put("members", JSONArray(edit.members))
+            .put("defaultMember", edit.defaultMember).put("url", edit.url).put("interval", edit.interval).apply {
+                edit.excludedMembers?.let { put("excludedMembers", JSONArray(it)) }
+                edit.additionalMembers?.let { put("additionalMembers", JSONArray(it)) }
+            }
+    })
+    private fun strings(row: JSONObject, key: String): List<String>? = row.optJSONArray(key)?.let { array -> (0 until array.length()).map { array.getString(it) } }
+    fun decodeSaved(array: JSONArray?): List<ProxyGroupEdit> = if (array == null) emptyList() else (0 until array.length()).map { index ->
+        val row = array.getJSONObject(index)
+        ProxyGroupEdit(row.getString("tag"), row.optString("type", "urltest"), strings(row, "members").orEmpty(), row.optString("defaultMember"),
+            row.optString("url", "https://www.gstatic.com/generate_204"), row.optString("interval", "3m"), strings(row, "excludedMembers"), strings(row, "additionalMembers"))
+    }
+    fun renamingSaved(edits: List<ProxyGroupEdit>, names: Map<String, String>): List<ProxyGroupEdit> = edits.map { edit ->
+        edit.copy(members = edit.members.map { names[it] ?: it }, excludedMembers = edit.excludedMembers?.map { names[it] ?: it },
+            additionalMembers = edit.additionalMembers?.map { names[it] ?: it })
+    }
+    fun forImport(content: String, saved: List<ProxyGroupEdit>, aliases: Map<String, String>): List<ProxyGroupEdit> {
+        val edits = saved + groups(content).filter { followsGeneratedNodes(it) && saved.none { edit -> edit.tag == it.tag } }.map { recording(content, it) }
+        val sources = aliases.entries.associate { it.value to it.key }
+        return renamingSaved(edits, sources)
+    }
+    fun applySaved(content: String, edits: List<ProxyGroupEdit>): String {
+        var result = content
+        for (edit in edits) {
+            val resolved = resolving(result, edit)
+            if (followsGeneratedNodes(edit) && edit.excludedMembers != null && resolved.members.isEmpty() && rows(result).none { it.optString("tag") == edit.tag }) continue
+            result = apply(result, resolved)
+        }
+        return result
+    }
     fun rows(content: String): List<JSONObject> {
         val array = JSONObject(content).optJSONArray("outbounds") ?: JSONArray()
         return (0 until array.length()).map { array.getJSONObject(it) }
@@ -15,7 +71,8 @@ object ProxyGroupEditing {
         val members = row.optJSONArray("outbounds") ?: JSONArray()
         ProxyGroupEdit(row.getString("tag"), row.getString("type"), (0 until members.length()).map { members.getString(it) }, row.optString("default"), row.optString("url", "https://www.gstatic.com/generate_204"), row.optString("interval", "3m"))
     }
-    fun apply(content: String, edit: ProxyGroupEdit): String {
+    fun apply(content: String, saved: ProxyGroupEdit): String {
+        val edit = resolving(content, saved)
         val root = JSONObject(content)
         val rows = rows(content).toMutableList()
         val endpoints = root.optJSONArray("endpoints") ?: JSONArray()

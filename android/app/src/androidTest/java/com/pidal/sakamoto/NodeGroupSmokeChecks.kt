@@ -21,6 +21,10 @@ class NodeGroupSmokeChecks(private val instrumentation: Instrumentation) {
     fun run() {
         val context = instrumentation.targetContext
         val original = ConfigRepository.load(context)
+        val originalImports = File(context.filesDir, "imports")
+        val importsBackup = File(context.cacheDir, "editor-import-backup-${java.util.UUID.randomUUID()}")
+        val hadImports = originalImports.exists()
+        if (hadImports) check(originalImports.copyRecursively(importsBackup))
         val links = listOf("trojan://test@a.example:443#Review%20A", "trojan://test@b.example:443#Review%20B")
         val config = """{"log":{"level":"warn"},"dns":{"servers":[{"type":"udp","tag":"dns-direct","server":"1.1.1.1"}]},"inbounds":[{"type":"tun","tag":"tun-in","address":["172.19.0.1/30"],"auto_route":true,"stack":"mixed"}],"outbounds":[{"type":"selector","tag":"MainProxy","outbounds":["Review A","Review B"],"default":"Review A"},{"type":"trojan","tag":"Review A","server":"a.example","server_port":443,"password":"test","tls":{"enabled":true}},{"type":"trojan","tag":"Review B","server":"b.example","server_port":443,"password":"test","tls":{"enabled":true}},{"type":"direct","tag":"direct"}],"route":{"final":"MainProxy","auto_detect_interface":true}}"""
         fun descendants(view: View): List<View> = listOf(view) + if (view is ViewGroup) (0 until view.childCount).flatMap { descendants(view.getChildAt(it)) } else emptyList()
@@ -105,7 +109,7 @@ class NodeGroupSmokeChecks(private val instrumentation: Instrumentation) {
             }
             settle()
             instrumentation.runOnMainSync {
-                check(descendants(groups.requireView()).filterIsInstance<TextView>().any { it.text.toString() == context.getString(R.string.group_automatic_members_note) })
+                check(descendants(groups.requireView()).filterIsInstance<TextView>().any { it.text.toString() == context.getString(R.string.group_follow_nodes_note) })
                 check(descendants(groups.requireView()).first { it.contentDescription == context.getString(R.string.group_remove_member, "Review B") }.performClick())
                 activity.findViewById<MaterialToolbar>(R.id.top_app_bar).menu.performIdentifierAction(R.id.editor_save, 0)
             }
@@ -119,6 +123,28 @@ class NodeGroupSmokeChecks(private val instrumentation: Instrumentation) {
                 activity.openChild(groups, context.getString(R.string.group_edit)); activity.supportFragmentManager.executePendingTransactions()
             }
             settle(); capture("reality-auto-excluded-member.png")
+            val updatedRoot = org.json.JSONObject(automaticSaved)
+            updatedRoot.getJSONArray("outbounds").put(org.json.JSONObject("""{"type":"vless","tag":"New Reality","server":"r3.example","server_port":443,"uuid":"00000000-0000-4000-8000-000000000001","tls":{"enabled":true,"server_name":"example.com","utls":{"enabled":true,"fingerprint":"chrome"},"reality":{"enabled":true,"public_key":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}}}"""))
+            updatedRoot.getJSONArray("outbounds").let { rows ->
+                for (index in 0 until rows.length()) if (rows.getJSONObject(index).optString("tag") == "RealityAuto") {
+                    rows.getJSONObject(index).put("outbounds", org.json.JSONArray(listOf("Renamed node", "Review B", "New Reality")))
+                }
+            }
+            val stateFile = org.json.JSONObject(File(context.filesDir, "sakamoto-config.json").readText())
+            stateFile.put("generatedContent", updatedRoot.toString())
+            val packageBytes = java.io.ByteArrayOutputStream()
+            java.util.zip.ZipOutputStream(packageBytes).use { zip ->
+                zip.putNextEntry(java.util.zip.ZipEntry("sakamoto-config.json")); zip.write(stateFile.toString().toByteArray()); zip.closeEntry()
+            }
+            com.pidal.sakamoto.runtime.TunnelPackage.import(context, java.io.ByteArrayInputStream(packageBytes.toByteArray()))
+            val afterImport = ConfigRepository.load(context)
+            check(ProxyGroupEditing.groups(afterImport.generatedContent).first { it.tag == "RealityAuto" }.members == listOf("Renamed node", "New Reality"))
+            check(afterImport.automaticGroups.first { it.tag == "RealityAuto" }.excludedMembers == listOf("Review B"))
+            instrumentation.runOnMainSync {
+                groups = ProxyGroupEditorFragment().apply { arguments = Bundle().apply { putString("tag", "RealityAuto") } }
+                activity.openChild(groups, context.getString(R.string.group_edit)); activity.supportFragmentManager.executePendingTransactions()
+            }
+            settle(); capture("reality-auto-new-node-keeps-exclusions.png")
             lateinit var policy: EditorFragment
             instrumentation.runOnMainSync {
                 policy = EditorFragment().apply { arguments = Bundle().apply { putString("kind", "rule"); putInt("index", -1) } }
@@ -154,6 +180,11 @@ class NodeGroupSmokeChecks(private val instrumentation: Instrumentation) {
                 check(descendants(policy.requireView()).filterIsInstance<TextView>().any { it.text.toString() == context.getString(R.string.ux_editing_pred_domain_suffix) })
                 activity.finish()
             }
-        } finally { ConfigRepository.save(context, original) }
+        } finally {
+            ConfigRepository.save(context, original)
+            originalImports.deleteRecursively()
+            if (hadImports) check(importsBackup.copyRecursively(originalImports))
+            importsBackup.deleteRecursively()
+        }
     }
 }

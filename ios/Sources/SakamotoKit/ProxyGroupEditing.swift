@@ -7,6 +7,9 @@ public struct ProxyGroupEdit: Codable, Equatable, Identifiable, Sendable {
     public var defaultMember: String
     public var url: String
     public var interval: String
+    /// Non-nil marks a generated automatic group whose membership follows new nodes.
+    public var excludedMembers: [String]?
+    public var additionalMembers: [String]?
     public var id: String { tag }
     public init(tag: String, type: String = "selector", members: [String] = [], defaultMember: String = "", url: String = "https://www.gstatic.com/generate_204", interval: String = "3m") {
         self.tag = tag; self.type = type; self.members = members; self.defaultMember = defaultMember; self.url = url; self.interval = interval
@@ -14,6 +17,45 @@ public struct ProxyGroupEdit: Codable, Equatable, Identifiable, Sendable {
 }
 
 public enum ProxyGroupEditing {
+    public static func followsGeneratedNodes(_ edit: ProxyGroupEdit) -> Bool {
+        edit.type == "urltest" && ["RealityAuto", "OthersAuto"].contains(edit.tag)
+    }
+    public static func automaticCandidates(for tag: String, in content: String) -> [String] {
+        outbounds(content).compactMap { row in
+            guard let name = row["tag"] as? String, let type = row["type"] as? String,
+                  !["selector", "urltest", "direct", "block", "dns", "socks"].contains(type) else { return nil }
+            let tls = row["tls"] as? [String: Any]
+            let reality = (tls?["reality"] as? [String: Any])?["enabled"] as? Bool == true || name.lowercased().contains("reality")
+            return (tag == "RealityAuto" && reality) || (tag == "OthersAuto" && !reality) ? name : nil
+        }
+    }
+    /// Store exclusions, including absent nodes, rather than freezing the current members.
+    public static func recording(_ edit: ProxyGroupEdit, in content: String, previous: ProxyGroupEdit? = nil) -> ProxyGroupEdit {
+        guard followsGeneratedNodes(edit) else { return edit }
+        var saved = edit
+        let candidates = Set(automaticCandidates(for: edit.tag, in: content))
+        let current = groups(content).first { $0.tag == edit.tag }?.members ?? []
+        let removable = candidates.union(current).union(previous?.additionalMembers ?? [])
+        let excluded = Set(edit.excludedMembers ?? previous?.excludedMembers ?? [])
+            .union(removable.subtracting(edit.members)).subtracting(edit.members)
+        saved.excludedMembers = excluded.sorted()
+        saved.additionalMembers = edit.members.filter { !candidates.contains($0) }
+        return saved
+    }
+    public static func resolving(_ edit: ProxyGroupEdit, in content: String, knownTags: Set<String>? = nil) -> ProxyGroupEdit {
+        guard followsGeneratedNodes(edit), let excluded = edit.excludedMembers else { return edit }
+        var result = edit
+        let candidates = automaticCandidates(for: edit.tag, in: content)
+        let allowed = Set(candidates).subtracting(excluded)
+        let root = (try? JSONSerialization.jsonObject(with: Data(content.utf8))) as? [String: Any]
+        let endpoints = root?["endpoints"] as? [[String: Any]] ?? []
+        let known = knownTags ?? Set((outbounds(content) + endpoints).compactMap { $0["tag"] as? String })
+        let extras = (edit.additionalMembers ?? []).filter { known.contains($0) && !excluded.contains($0) }
+        let ordered = edit.members.filter { allowed.contains($0) || extras.contains($0) }
+        result.members = ordered + (candidates + extras).filter { !ordered.contains($0) && !excluded.contains($0) }
+        result.members = result.members.reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
+        return result
+    }
     public static func outbounds(_ content: String) -> [[String: Any]] {
         ((try? JSONSerialization.jsonObject(with: Data(content.utf8))) as? [String: Any])?["outbounds"] as? [[String: Any]] ?? []
     }
@@ -30,7 +72,11 @@ public enum ProxyGroupEditing {
         let tags = rows.compactMap { $0["tag"] as? String } + endpoints.compactMap { $0["tag"] as? String }
         guard Set(tags).count == tags.count, Set(edits.map(\.tag)).count == edits.count else { throw TunnelProfile.InvalidProfile("Configuration contains duplicate names.") }
         let known = Set(tags).union(edits.map(\.tag))
-        for edit in edits {
+        for saved in edits {
+            let edit = resolving(saved, in: content, knownTags: known)
+            // Keep the exclusions when the generator has no nodes for this group yet.
+            if followsGeneratedNodes(edit), edit.excludedMembers != nil, edit.members.isEmpty,
+               !rows.contains(where: { $0["tag"] as? String == edit.tag }) { continue }
             guard !edit.tag.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, edit.tag.count <= 128, !edit.tag.contains(where: { $0.isNewline }), ["selector", "urltest"].contains(edit.type) else { throw TunnelProfile.InvalidProfile("Enter a group name and choose Manual or Automatic.") }
             guard !edit.members.isEmpty, Set(edit.members).count == edit.members.count, !edit.members.contains(edit.tag), edit.members.allSatisfy(known.contains) else { throw TunnelProfile.InvalidProfile("Choose at least one existing member. A group cannot contain itself or missing nodes.") }
             let index = rows.firstIndex { $0["tag"] as? String == edit.tag }

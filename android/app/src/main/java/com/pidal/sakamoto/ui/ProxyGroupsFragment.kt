@@ -88,7 +88,7 @@ class ProxyGroupEditorFragment : androidx.fragment.app.Fragment(), UnsavedConfig
         behavior = android.widget.LinearLayout(requireContext()).apply { orientation = android.widget.LinearLayout.VERTICAL; settings.addView(this) }
         renderBehavior()
         selected = page.section(getString(R.string.group_selected_members))
-        membershipNote = page.note(getString(if (edit.type == "urltest") R.string.group_automatic_members_note else R.string.group_order_note))
+        membershipNote = page.note(getString(memberNoteResource()))
         val find = page.section(getString(R.string.group_choose_members))
         page.field(find, getString(R.string.group_search)).apply {
             addTextChangedListener(object : android.text.TextWatcher {
@@ -103,9 +103,14 @@ class ProxyGroupEditorFragment : androidx.fragment.app.Fragment(), UnsavedConfig
         renderMembers()
         return page.root
     }
+    private fun memberNoteResource() = when {
+        ProxyGroupEditing.followsGeneratedNodes(edit) -> R.string.group_follow_nodes_note
+        edit.type == "urltest" -> R.string.group_automatic_members_note
+        else -> R.string.group_order_note
+    }
     private fun renderBehavior() {
         val page = page ?: return; val group = behavior ?: return
-        membershipNote?.text = getString(if (edit.type == "urltest") R.string.group_automatic_members_note else R.string.group_order_note)
+        membershipNote?.text = getString(memberNoteResource())
         group.removeAllViews()
         if (edit.type == "selector") {
             page.row(group, getString(R.string.group_default), edit.defaultMember.ifEmpty { getString(R.string.group_first_member) }) {
@@ -171,7 +176,7 @@ class ProxyGroupEditorFragment : androidx.fragment.app.Fragment(), UnsavedConfig
             check(digest(current.generatedContent) == baselineDigest) { getString(R.string.editor_conflict) }
             edit = edit.copy(tag = edit.tag.trim())
             check(originalTag.isNotEmpty() || candidates.none { it.first == edit.tag }) { getString(R.string.group_duplicate_name) }
-            ConfigRepository.saveGeneratedEdit(requireContext(), ProxyGroupEditing.apply(current.generatedContent, edit))
+            ConfigRepository.saveProxyGroup(requireContext(), edit)
             finished = true
             parentFragmentManager.setFragmentResult("config-updated", Bundle())
             Snackbar.make(requireActivity().findViewById(R.id.fragment_container), R.string.saved_pending_apply, Snackbar.LENGTH_LONG).show()

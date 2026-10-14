@@ -42,9 +42,14 @@ object TunnelPackage {
     fun validPath(name: String): Boolean = name.isNotEmpty() && !name.startsWith('/') && !name.contains('\\') &&
         name.removeSuffix("/").split('/').none { it.isEmpty() || it == "." || it == ".." }
 
-    fun prepare(staging: File, destination: File): Prepared {
+    fun prepare(staging: File, destination: File, automaticGroups: List<ProxyGroupEdit> = emptyList()): Prepared {
         val state = JSONObject(File(staging, "sakamoto-config.json").readText())
-        val root = JSONObject(state.getString("generatedContent"))
+        val content = state.getString("generatedContent")
+        val incomingAliases = state.optJSONObject("nodeAliases")?.let { aliases -> aliases.keys().asSequence().associateWith { aliases.getString(it) } }.orEmpty()
+        val localGroups = if (automaticGroups.isNotEmpty()) ProxyGroupEditing.renamingSaved(automaticGroups, incomingAliases) else ProxyGroupEditing.decodeSaved(state.optJSONArray("automaticGroups"))
+        val adapted = ProxyGroupEditing.applySaved(content, localGroups)
+        val root = JSONObject(adapted)
+        state.put("automaticGroups", ProxyGroupEditing.encodeSaved(localGroups))
         val sets = root.optJSONObject("route")?.optJSONArray("rule_set")
         if (sets != null) for (i in 0 until sets.length()) {
             val rule = sets.getJSONObject(i)
@@ -68,10 +73,12 @@ object TunnelPackage {
         val moved = mutableListOf<String>()
         try {
             extract(input, staging)
-            val check = prepare(staging, staging)
+            val current = ConfigRepository.load(context)
+            val groups = if (current.generatedContent.isBlank()) emptyList() else ProxyGroupEditing.forImport(current.generatedContent, current.automaticGroups, current.nodeAliases)
+            val check = prepare(staging, staging, groups)
             io.nekohasekai.mobilecore.Mobilecore.validateConfigJSON(check.generated)
             io.nekohasekai.libbox.Libbox.checkConfig(check.generated)
-            val prepared = prepare(staging, context.filesDir)
+            val prepared = prepare(staging, context.filesDir, groups)
             prepared.state.put("generatedContent", prepared.generated)
             File(staging, "sakamoto-config.json").writeText(prepared.state.toString())
             File(staging, "imports/local/config.json").apply { parentFile?.mkdirs(); writeText(JSONObject(prepared.generated).toString(2)) }

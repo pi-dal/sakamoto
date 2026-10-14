@@ -45,6 +45,7 @@ object ConfigRepository {
         val nodes: List<String> = emptyList(),
         val subscriptions: List<Triple<String, String, String>> = emptyList(), // name, url, format
         val nodeAliases: Map<String, String> = emptyMap(),
+        val automaticGroups: List<ProxyGroupEdit> = emptyList(),
     )
 
     private fun file(context: Context): File = File(context.filesDir, FILE_NAME)
@@ -69,6 +70,7 @@ object ConfigRepository {
                         PolicyRule(o.optString("match"), o.optString("action"))
                     }
                 } ?: emptyList(),
+                automaticGroups = ProxyGroupEditing.decodeSaved(root.optJSONArray("automaticGroups")),
                 nodeAliases = root.optJSONObject("nodeAliases")?.let { aliases -> aliases.keys().asSequence().associateWith { aliases.getString(it) } } ?: emptyMap(),
                 nodes = root.optJSONArray("nodes")?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList(),
                 subscriptions = root.optJSONArray("subscriptions")?.let { array ->
@@ -101,6 +103,7 @@ object ConfigRepository {
                 config.policy.forEach { put(JSONObject().put("match", it.match).put("action", it.action)) }
             },
         )
+        root.put("automaticGroups", ProxyGroupEditing.encodeSaved(config.automaticGroups))
         root.put("nodeAliases", JSONObject(config.nodeAliases))
         root.put("nodes", JSONArray().apply { config.nodes.forEach { put(it) } })
         root.put(
@@ -132,7 +135,20 @@ object ConfigRepository {
                 groups.put(key, JSONArray((0 until members.length()).map { members.getString(it).let { member -> if (member == old) name else member } }))
             }
         }
-        save(context, current.copy(generatedContent = content, nodeAliases = aliases, hostMetadata = metadata.toString()))
+        val groups = current.automaticGroups.map { edit -> edit.copy(members = edit.members.map { if (it == old) name else it },
+            excludedMembers = edit.excludedMembers?.map { if (it == old) name else it }, additionalMembers = edit.additionalMembers?.map { if (it == old) name else it }) }
+        save(context, current.copy(generatedContent = content, nodeAliases = aliases, hostMetadata = metadata.toString(), automaticGroups = groups))
+        MobilecoreRuntime.configEvent("modified")
+    }
+
+    fun saveProxyGroup(context: Context, edit: ProxyGroupEdit) {
+        val current = load(context)
+        val recorded = ProxyGroupEditing.recording(current.generatedContent, edit, current.automaticGroups.firstOrNull { it.tag == edit.tag })
+        val content = ProxyGroupEditing.apply(current.generatedContent, recorded)
+        io.nekohasekai.mobilecore.Mobilecore.validateConfigJSON(content)
+        io.nekohasekai.libbox.Libbox.checkConfig(content)
+        val groups = current.automaticGroups.filterNot { it.tag == edit.tag } + if (ProxyGroupEditing.followsGeneratedNodes(recorded)) listOf(recorded) else emptyList()
+        save(context, current.copy(generatedContent = content, automaticGroups = groups))
         MobilecoreRuntime.configEvent("modified")
     }
 

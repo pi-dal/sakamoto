@@ -69,7 +69,9 @@ struct ProxyGroupEditor: View {
                 }
                 .onMove { offsets, destination in edit.members.move(fromOffsets: offsets, toOffset: destination) }
             } header: { Text("Selected members (\(edit.members.count))") } footer: {
-                if edit.type == "urltest" {
+                if ProxyGroupEditing.followsGeneratedNodes(edit) {
+                    Text("Excluded nodes stay out when sources update. New matching nodes join automatically. Removing a node here keeps it available in other groups; keep at least one member.")
+                } else if edit.type == "urltest" {
                     Text("Only these members take part in automatic latency testing. Remove a node here to exclude it from this group without deleting it or changing other groups. Keep at least one member.")
                 } else {
                     Text("Use Edit to reorder members. The first member is the fallback default for manual selection.")

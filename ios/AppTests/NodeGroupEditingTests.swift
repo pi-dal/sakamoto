@@ -62,7 +62,8 @@ final class NodeGroupEditingTests: XCTestCase {
         restored.commitNodesSources(restored.nodesSources.adding(node: try reality("R3")))
         try await restored.generateFromSources()
         let groups = ProxyGroupEditing.groups(restored.content)
-        XCTAssertEqual(groups.first { $0.tag == "RealityAuto" }?.members, ["R1"])
+        XCTAssertEqual(groups.first { $0.tag == "RealityAuto" }?.members, ["R1", "R3"])
+        XCTAssertEqual(restored.selectedProfile?.proxyGroups?.first { $0.tag == "RealityAuto" }?.excludedMembers, ["R2"])
         XCTAssertEqual(groups.first { $0.tag == "ManualPick" }?.members, ["A", "B", "R1", "R2", "R3"])
         XCTAssertTrue(ProxyGroupEditing.outbounds(restored.content).contains { $0["tag"] as? String == "R2" })
         XCTAssertNoThrow(try restored.connectionContent())
@@ -70,6 +71,46 @@ final class NodeGroupEditingTests: XCTestCase {
         let before = restored.content
         XCTAssertThrowsError(try restored.saveProxyGroup(selected, expectedProfile: restored.selectedProfileID, expectedContent: before))
         XCTAssertEqual(restored.content, before)
+    }
+
+    func testLegacyAutomaticMembershipMigratesAndRetainsAbsentExclusionsAndRenames() async throws {
+        let (store, defaults, suite) = try await setup()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        func reality(_ name: String) throws -> StagedNode {
+            try ConfigModel.validateNode("vless://00000000-0000-4000-8000-000000000001@\(name.lowercased()).example:443?security=reality&sni=example.com&pbk=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA#\(name)")
+        }
+        let r1 = try reality("R1"), r2 = try reality("R2")
+        store.commitNodesSources(store.nodesSources.adding(node: r1).adding(node: r2))
+        try await store.generateFromSources()
+        // Simulate a profile saved by the previous release, with only a member list.
+        var legacy = try XCTUnwrap(store.selectedProfile)
+        legacy.id = UUID().uuidString
+        var group = try XCTUnwrap(ProxyGroupEditing.groups(store.content).first { $0.tag == "RealityAuto" })
+        group.members = ["R1"]
+        legacy.proxyGroups = [group]
+        legacy.config = try ProxyGroupEditing.applying([group], to: legacy.config)
+        try store.installProfile(legacy)
+        store.commitNodesSources(store.nodesSources.adding(node: try reality("R3")))
+        try await store.generateFromSources()
+        XCTAssertEqual(ProxyGroupEditing.groups(store.content).first { $0.tag == "RealityAuto" }?.members, ["R1", "R3"])
+        XCTAssertEqual(store.selectedProfile?.proxyGroups?.first?.excludedMembers, ["R2"])
+        var node = try XCTUnwrap(ProxyGroupEditing.outbounds(store.content).first { $0["tag"] as? String == "R2" })
+        node["tag"] = "Excluded Japan"
+        try store.saveNodeSettings(tag: "R2", nodeJSON: String(decoding: JSONSerialization.data(withJSONObject: node), as: UTF8.self), expectedProfile: store.selectedProfileID, expectedContent: store.content)
+        XCTAssertEqual(store.selectedProfile?.proxyGroups?.first?.excludedMembers, ["Excluded Japan"])
+        store.commitNodesSources(store.nodesSources.removingNode(id: r2.id))
+        try await store.generateFromSources()
+        XCTAssertEqual(store.selectedProfile?.proxyGroups?.first?.excludedMembers, ["Excluded Japan"])
+        store.commitNodesSources(store.nodesSources.adding(node: r2))
+        try await store.generateFromSources()
+        XCTAssertEqual(ProxyGroupEditing.groups(store.content).first { $0.tag == "RealityAuto" }?.members, ["R1", "R3"])
+        XCTAssertTrue(ProxyGroupEditing.groups(store.content).first { $0.tag == "ManualPick" }?.members.contains("Excluded Japan") == true)
+        var restore = try XCTUnwrap(ProxyGroupEditing.groups(store.content).first { $0.tag == "RealityAuto" })
+        restore.members.append("Excluded Japan")
+        try store.saveProxyGroup(restore, expectedProfile: store.selectedProfileID, expectedContent: store.content)
+        XCTAssertEqual(store.selectedProfile?.proxyGroups?.first?.excludedMembers, [])
+        try await store.generateFromSources()
+        XCTAssertTrue(ProxyGroupEditing.groups(store.content).first { $0.tag == "RealityAuto" }?.members.contains("Excluded Japan") == true)
     }
 
     func testRenameTouchesOnlyOutboundReferences() throws {

@@ -6,6 +6,42 @@ import org.junit.Test
 
 class ProxyGroupEditingTest {
     private val content = """{"outbounds":[{"tag":"A","type":"trojan","server":"a.example","server_port":443,"password":"test"},{"tag":"B","type":"socks","server":"b.example","server_port":1080},{"tag":"Main","type":"selector","outbounds":["A","B"],"interrupt_exist_connections":true},{"tag":"direct","type":"direct"}],"endpoints":[{"tag":"tail","type":"tailscale"}],"route":{"final":"Main"},"future":{"keep":true}}"""
+    private val automaticContent = """{"outbounds":[{"tag":"R1","type":"vless","tls":{"reality":{"enabled":true}}},{"tag":"R2","type":"vless","tls":{"reality":{"enabled":true}}},{"tag":"Other","type":"trojan"},{"tag":"RealityAuto","type":"urltest","outbounds":["R1","R2"],"url":"https://test.example/204","interval":"1m"},{"tag":"ManualPick","type":"selector","outbounds":["R1","R2","Other"]}]}"""
+    @Test fun newRealityNodesJoinButExclusionsSurvivePersistenceAbsenceAndRestoration() {
+        val original = ProxyGroupEditing.groups(automaticContent).first { it.tag == "RealityAuto" }
+        val excluded = ProxyGroupEditing.recording(automaticContent, original.copy(members = listOf("R1")))
+        assertEquals(listOf("R2"), excluded.excludedMembers)
+        val restored = ProxyGroupEditing.decodeSaved(ProxyGroupEditing.encodeSaved(listOf(excluded))).single()
+        val root = JSONObject(automaticContent)
+        root.getJSONArray("outbounds").put(JSONObject("""{"tag":"R3","type":"vless","tls":{"reality":{"enabled":true}}}"""))
+        val updated = ProxyGroupEditing.applySaved(root.toString(), listOf(restored))
+        assertEquals(listOf("R1", "R3"), ProxyGroupEditing.groups(updated).first { it.tag == "RealityAuto" }.members)
+        assertEquals(listOf("R1", "R2", "Other"), ProxyGroupEditing.groups(updated).first { it.tag == "ManualPick" }.members)
+        val absent = JSONObject(updated)
+        val rows = absent.getJSONArray("outbounds")
+        for (index in rows.length() - 1 downTo 0) if (rows.getJSONObject(index).optString("tag") == "R2") rows.remove(index)
+        val savedAgain = ProxyGroupEditing.recording(absent.toString(), ProxyGroupEditing.groups(absent.toString()).first { it.tag == "RealityAuto" }, restored)
+        assertEquals(listOf("R2"), savedAgain.excludedMembers)
+        assertEquals(listOf("R1", "R3"), ProxyGroupEditing.groups(ProxyGroupEditing.applySaved(root.toString(), listOf(savedAgain))).first { it.tag == "RealityAuto" }.members)
+        val readded = ProxyGroupEditing.recording(root.toString(), restored.copy(members = listOf("R1", "R2", "R3")), savedAgain)
+        assertEquals(emptyList<String>(), readded.excludedMembers)
+    }
+    @Test fun migrationRemembersExclusionsAcrossLocalRenameAndPackageImport() {
+        val removed = ProxyGroupEditing.apply(automaticContent, ProxyGroupEditing.groups(automaticContent).first { it.tag == "RealityAuto" }.copy(members = listOf("R1")))
+        val legacy = ProxyGroupEditing.forImport(removed, emptyList(), emptyMap()).single()
+        assertEquals(listOf("R2"), legacy.excludedMembers)
+        val renamed = legacy.copy(excludedMembers = listOf("Japan"))
+        val imported = ProxyGroupEditing.forImport(removed, listOf(renamed), mapOf("R2" to "Japan")).single()
+        assertEquals(listOf("R2"), imported.excludedMembers)
+        assertEquals(listOf("R1"), ProxyGroupEditing.groups(ProxyGroupEditing.applySaved(automaticContent, listOf(imported))).first { it.tag == "RealityAuto" }.members)
+    }
+    @Test fun emptyAutomaticGroupIsRejectedWithoutChangingManualMembership() {
+        val group = ProxyGroupEditing.groups(automaticContent).first { it.tag == "RealityAuto" }
+        val edit = ProxyGroupEditing.recording(automaticContent, group.copy(members = emptyList()))
+        assertThrows(IllegalArgumentException::class.java) { ProxyGroupEditing.applySaved(automaticContent, listOf(edit)) }
+        assertEquals(listOf("R1", "R2", "Other"), ProxyGroupEditing.groups(automaticContent).first { it.tag == "ManualPick" }.members)
+    }
+
     private fun rejects(edit: ProxyGroupEdit, input: String = content) {
         try { ProxyGroupEditing.apply(input, edit); fail("Invalid edit was accepted") } catch (_: IllegalArgumentException) {}
     }

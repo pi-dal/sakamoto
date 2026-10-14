@@ -313,8 +313,9 @@ final class ConfigStore: ObservableObject {
         guard !generating && !applying, selectedProfileID == expectedProfile, content == expectedContent,
               let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) else { throw TunnelProfile.InvalidProfile("Configuration changed while editing. Reopen the group and try again.") }
         var candidate = profiles[index]
-        candidate.config = try ProxyGroupEditing.applying([edit], to: content)
-        candidate.proxyGroups = (candidate.proxyGroups ?? []).filter { $0.tag != edit.tag } + [edit]
+        let saved = ProxyGroupEditing.recording(edit, in: content, previous: candidate.proxyGroups?.first { $0.tag == edit.tag })
+        candidate.config = try ProxyGroupEditing.applying([saved], to: content)
+        candidate.proxyGroups = (candidate.proxyGroups ?? []).filter { $0.tag != edit.tag } + [saved]
         _ = try prepare(candidate)
         profiles[index] = candidate
         profiles[index].pendingApply = true
@@ -334,6 +335,8 @@ final class ConfigStore: ObservableObject {
         profile.proxyGroups = profile.proxyGroups?.map { group in
             var next = group
             next.members = group.members.map { $0 == old ? name : $0 }
+            next.excludedMembers = group.excludedMembers?.map { $0 == old ? name : $0 }
+            next.additionalMembers = group.additionalMembers?.map { $0 == old ? name : $0 }
             if next.defaultMember == old { next.defaultMember = name }
             return next
         }
@@ -372,11 +375,13 @@ final class ConfigStore: ObservableObject {
         guard !generating && !applying, nodesSources.nodes.contains(node) else { throw TunnelProfile.InvalidProfile("This node changed or was removed. Reopen the list.") }
         if let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) {
             var candidate = profiles[index]
-            var groups = candidate.proxyGroups ?? []
+            var groups = (candidate.proxyGroups ?? []).map { ProxyGroupEditing.resolving($0, in: content) }
             let tag = editableSourceNode(node)?["tag"] as? String ?? node.tag
             var changed = false
             for offset in groups.indices where groups[offset].members.contains(tag) {
                 groups[offset].members.removeAll { $0 == tag }
+                if groups[offset].excludedMembers != nil { groups[offset].excludedMembers = Array(Set(groups[offset].excludedMembers! + [tag])).sorted() }
+                groups[offset].additionalMembers?.removeAll { $0 == tag }
                 guard !groups[offset].members.isEmpty else { throw TunnelProfile.InvalidProfile("\(node.tag) is the last member of \(groups[offset].tag). Choose another member in Proxy groups before deleting it.") }
                 if groups[offset].defaultMember == tag { groups[offset].defaultMember = "" }
                 changed = true
@@ -385,6 +390,13 @@ final class ConfigStore: ObservableObject {
                 candidate.config = try ProxyGroupEditing.applying(groups, to: content)
                 candidate.proxyGroups = groups
                 _ = try prepare(candidate)
+            }
+            if tag != node.tag {
+                candidate.proxyGroups = candidate.proxyGroups?.map { group in
+                    var next = group
+                    next.excludedMembers = group.excludedMembers?.map { $0 == tag ? node.tag : $0 }
+                    return next
+                }
             }
             candidate.nodeOverrides?.removeValue(forKey: node.tag)
             profiles[index] = candidate
@@ -483,7 +495,9 @@ final class ConfigStore: ObservableObject {
         candidate.experiment = settingsBefore
         candidate.forceTailscaleDERP = selectedProfile?.forceTailscaleDERP
         candidate.proxyChain = selectedProfile?.proxyChain ?? ProxyChainSettings.importedChain(in: contentBefore)
-        candidate.proxyGroups = selectedProfile?.proxyGroups
+        candidate.proxyGroups = selectedProfile?.proxyGroups?.map { edit in
+            edit.excludedMembers == nil ? ProxyGroupEditing.recording(edit, in: contentBefore) : edit
+        }
         candidate.nodeOverrides = selectedProfile?.nodeOverrides
         // Preserve device-specific Tailscale endpoint and advanced settings;
         // generated sources own rules/nodes, not endpoint identity or auth.
@@ -506,6 +520,12 @@ final class ConfigStore: ObservableObject {
         }
         candidate.config = try ProxyGroupEditing.applyingNodes(candidate.nodeOverrides ?? [:], to: candidate.config)
         candidate.config = try ProxyGroupEditing.applying(candidate.proxyGroups ?? [], to: candidate.config)
+        candidate.proxyGroups = candidate.proxyGroups?.map { saved in
+            var next = saved
+            if ProxyGroupEditing.followsGeneratedNodes(saved), saved.excludedMembers != nil,
+               let group = ProxyGroupEditing.groups(candidate.config).first(where: { $0.tag == saved.tag }) { next.members = group.members }
+            return next
+        }
         do {
             _ = try prepare(candidate)
             _ = try decodeSources(candidate)

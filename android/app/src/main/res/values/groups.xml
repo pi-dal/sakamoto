@@ -18,9 +18,10 @@
     <string name="group_search">Search nodes and groups</string>
     <string name="group_empty_members">Select members below.</string>
     <string name="group_no_matches">No matching unselected members.</string>
+    <string name="group_follow_nodes_note">Excluded nodes stay out when sources update. New matching nodes join automatically. Removing a node here keeps it available in other groups; keep at least one member.</string>
     <string name="group_automatic_members_note">Only selected members take part in automatic latency testing, including RealityAuto. Remove a node from this group to exclude it without deleting it or changing other groups. Keep at least one member.</string>
     <string name="group_order_note">Use the arrows to reorder members. The first member is the fallback default for manual selection.</string>
-    <string name="group_save_note">Choose members, save, then Apply saved config in Config. New groups can be included in an existing group. Importing a new tunnel package replaces its saved groups.</string>
+    <string name="group_save_note">Choose members, save, then Apply saved config in Config. RealityAuto and OthersAuto keep your exclusions when importing updated nodes; other groups come from the new package.</string>
     <string name="group_config_required">Generate or import a configuration first.</string>
     <string name="group_move_up">Move %1$s up</string>
     <string name="group_move_down">Move %1$s down</string>
