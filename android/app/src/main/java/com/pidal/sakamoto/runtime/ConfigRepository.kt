@@ -123,8 +123,9 @@ object ConfigRepository {
     }
 
     fun saveNodeEdit(context: Context, content: String, old: String, name: String) {
-        io.nekohasekai.mobilecore.Mobilecore.validateConfigJSON(content)
-        io.nekohasekai.libbox.Libbox.checkConfig(content)
+        val protected = io.nekohasekai.mobilecore.Mobilecore.prepareTailscaleConnectivityJSON(content)
+        io.nekohasekai.mobilecore.Mobilecore.validateConfigJSON(protected)
+        io.nekohasekai.libbox.Libbox.checkConfig(protected)
         val current = load(context)
         val aliases = current.nodeAliases.mapValues { if (it.value == old) name else it.value }.toMutableMap()
         if (old != name && current.nodeAliases.values.none { it == old }) aliases[old] = name
@@ -137,7 +138,7 @@ object ConfigRepository {
         }
         val groups = current.automaticGroups.map { edit -> edit.copy(members = edit.members.map { if (it == old) name else it },
             excludedMembers = edit.excludedMembers?.map { if (it == old) name else it }, additionalMembers = edit.additionalMembers?.map { if (it == old) name else it }) }
-        save(context, current.copy(generatedContent = content, nodeAliases = aliases, hostMetadata = metadata.toString(), automaticGroups = groups))
+        save(context, current.copy(generatedContent = protected, nodeAliases = aliases, hostMetadata = metadata.toString(), automaticGroups = groups))
         MobilecoreRuntime.configEvent("modified")
     }
 
@@ -153,11 +154,12 @@ object ConfigRepository {
     }
 
     fun saveGeneratedEdit(context: Context, content: String) {
-        io.nekohasekai.mobilecore.Mobilecore.validateConfigJSON(content)
+        val protected = io.nekohasekai.mobilecore.Mobilecore.prepareTailscaleConnectivityJSON(content)
+        io.nekohasekai.mobilecore.Mobilecore.validateConfigJSON(protected)
         // libbox validates semantic options and outbound references as well.
-        io.nekohasekai.libbox.Libbox.checkConfig(content)
+        io.nekohasekai.libbox.Libbox.checkConfig(protected)
         val current = load(context)
-        save(context, current.copy(generatedContent = content))
+        save(context, current.copy(generatedContent = protected))
         MobilecoreRuntime.configEvent("modified")
     }
 

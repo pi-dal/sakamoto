@@ -330,5 +330,6 @@ public enum ICloudSyncError: Error, Equatable, Sendable {
     case deletedLocally(String)
     case deletedInCloud(String)
     case conflict(String)
+    case sourceDownloading(String)
     case filesystem(String)
 }

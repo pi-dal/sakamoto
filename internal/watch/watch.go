@@ -114,7 +114,7 @@ func (w *Watcher) proxyLoop(ctx context.Context) {
 			}
 			if cfg.ICloud.Enabled && time.Since(lastSync) >= time.Minute {
 				lastSync = time.Now()
-				updates, syncErr := icloud.Sync(filepath.Dir(w.cfgPath), cfg)
+				updates, syncErr := icloud.SyncConfig(w.cfgPath, cfg)
 				if syncErr != nil {
 					w.emit("error", "iCloud sync failed: %v", syncErr)
 				} else {
@@ -186,26 +186,44 @@ func (w *Watcher) runOnce(ctx context.Context) error {
 	var settle *time.Timer
 	var settleCh <-chan time.Time
 	var started int64
+	var roundAccepted bool
 	defer func() {
 		if settle != nil {
 			settle.Stop()
 		}
 	}()
 	startTests := func() {
-		started = time.Now().Unix()
+		// Whole-second native history requires crossing a timestamp boundary
+		// before dispatch, so a previous quick result is not current-round data.
+		boundary := time.Now().Truncate(time.Second).Add(time.Second)
+		timer := time.NewTimer(time.Until(boundary))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		started = boundary.Unix()
+		roundAccepted = true
 		for _, chain := range w.cfg.Fallbacks {
 			for _, tag := range chain {
-				testCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				testCtx, cancel := context.WithTimeout(ctx, sbclient.URLTestRequestTimeout)
 				err := c.URLTest(testCtx, tag)
 				cancel()
 				if err != nil {
-					w.emit("error", "URL test %s failed: %v", tag, err)
+					roundAccepted = false
+					w.emit("error", "URL test %s request failed: %v", tag, err)
 				}
 			}
 		}
+		var testedTags []string
+		for _, chain := range w.cfg.Fallbacks {
+			testedTags = append(testedTags, chain...)
+		}
+		minimumSettle := sbclient.URLTestGroupWait(w.lastSnap.GetGroup(), testedTags)
 		settleDuration := w.cfg.TestSettle
-		if settleDuration < 10*time.Second {
-			settleDuration = 10 * time.Second
+		if settleDuration < minimumSettle {
+			settleDuration = minimumSettle
 		}
 		settle = time.NewTimer(settleDuration)
 		settleCh = settle.C
@@ -301,7 +319,12 @@ func (w *Watcher) runOnce(ctx context.Context) error {
 			startTests()
 		case <-settleCh:
 			settleCh = nil
-			w.evaluate(ctx, c, started)
+			if roundAccepted {
+				w.evaluate(ctx, c, started)
+			} else {
+				clear(w.healthy)
+				w.emit("error", "URL test round was not fully accepted; retaining current selection")
+			}
 		}
 	}
 }

@@ -91,7 +91,7 @@ final class S3SyncModel: ObservableObject {
                         })
                         if bundle.mainConf.hasPrefix("conf/") { bundle.mainConf = String(bundle.mainConf.dropFirst(5)) }
                     }
-                    for (name, body) in sourcesBefore.files where !(response.downloads ?? []).contains(name) && (name == "policy.json" || name == "subscriptions.json") {
+                    for (name, body) in sourcesBefore.files where !(response.downloads ?? []).contains(name) && (name == "policy.json" || name == "subscriptions.json" || name == AutomaticGroupSources.fileName) {
                         bundle.files[name] = body
                     }
                     try store.adoptSourceBundle(bundle)

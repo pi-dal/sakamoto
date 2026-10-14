@@ -38,7 +38,7 @@ type Baseline struct {
 }
 
 func ValidName(name string) bool {
-	if name == "nodes.txt" || name == "policy.json" || name == "subscriptions.json" {
+	if name == "nodes.txt" || name == "policy.json" || name == "subscriptions.json" || name == GroupsFile {
 		return true
 	}
 	if !strings.HasPrefix(name, "conf/") || !strings.HasSuffix(name, ".conf") || path.Clean(name) != name || strings.ContainsAny(name, "\\\x00\r\n") {
@@ -58,6 +58,10 @@ func Canonical(b Bundle) Bundle {
 	files := make(map[string]string, len(b.Files))
 	for name, content := range b.Files {
 		switch name {
+		case GroupsFile:
+			if groups, err := DecodeGroups(content); err == nil {
+				content, _ = groups.JSON()
+			}
 		case "policy.json":
 			var rows []Policy
 			if json.Unmarshal([]byte(content), &rows) == nil {
@@ -109,6 +113,10 @@ func (b Bundle) Validate() error {
 			return errors.New("invalid source name or bundle size")
 		}
 		switch name {
+		case GroupsFile:
+			if _, err := DecodeGroups(content); err != nil {
+				return err
+			}
 		case "nodes.txt":
 			for _, line := range strings.Split(content, "\n") {
 				line = strings.TrimSpace(line)

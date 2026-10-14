@@ -146,8 +146,8 @@ func TestVPNConflictAndFailedNodeLabels(t *testing.T) {
 	}
 	m.Update(serviceMsg{state: "connected", shadowrocket: false}) // do not execute network diagnostic command
 	m.lastTest = map[string]int32{"Realm": -1}
-	if !strings.Contains(m.View(), "Failed/timed out") {
-		t.Fatal("tested-but-failed node shown as untested")
+	if !strings.Contains(m.View(), "No current result") {
+		t.Fatal("missing fresh result was shown as untested")
 	}
 }
 
@@ -642,7 +642,7 @@ func TestMouseImportRemoteConfWithInclude(t *testing.T) {
 		t.Fatal("remote source not cached", err)
 	}
 	if _, err := exec.LookPath("sing-box"); err == nil {
-		cmd := exec.Command("sing-box", "check", "-c", filepath.Join(filepath.Dir(m.cfgPath), "config.json"))
+		cmd := exec.Command("sing-box", "check", "-D", filepath.Dir(m.cfgPath), "-c", filepath.Join(filepath.Dir(m.cfgPath), "config.json"))
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("generated config invalid: %v: %s", err, out)
 		}

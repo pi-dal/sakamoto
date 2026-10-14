@@ -345,19 +345,7 @@ func (c *Config) ValidateExperiment() error {
 
 // ValidateAutomaticGroups rejects misspelled groups and invalid node tags.
 func (c *Config) ValidateAutomaticGroups() error {
-	for group, tags := range c.AutomaticGroupExclusions {
-		if group != "RealityAuto" && group != "OthersAuto" {
-			return fmt.Errorf("automatic_group_exclusions: unknown group %q", group)
-		}
-		seen := map[string]bool{}
-		for _, tag := range tags {
-			if strings.TrimSpace(tag) == "" || strings.ContainsAny(tag, "\x00\r\n") || seen[tag] {
-				return fmt.Errorf("automatic_group_exclusions.%s must contain distinct non-empty node tags", group)
-			}
-			seen[tag] = true
-		}
-	}
-	return nil
+	return sourcesync.Groups(c.AutomaticGroupExclusions).Validate()
 }
 
 // MarshalYAML serializes the sidecar without writing secrets to stdout.

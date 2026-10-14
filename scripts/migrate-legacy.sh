@@ -24,7 +24,7 @@ check() {
   [[ -f "$old_plist" && -f "$old_agent" ]] || { echo 'Legacy launchd files missing; migrate manually using docs/migration.md.' >&2; return 1; }
   [[ -f "$new/config.json" && -f "$new/sakamoto.yaml" ]] || { echo "Prepare $new config.json and sakamoto.yaml first." >&2; return 1; }
   command -v sing-box >/dev/null || { echo 'sing-box not installed' >&2; return 1; }
-  sing-box check -c "$new/config.json"
+  sing-box check -D "$new" -c "$new/config.json"
   [[ ! -S "$new/svc.sock" ]] || { echo 'New daemon is already active.' >&2; return 1; }
   echo "Legacy daemon: $(sock_cmd "$old/svc.sock" status)"
   echo "New config: $new/config.json (validated)"

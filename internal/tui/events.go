@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/pi-dal/sakamoto/internal/config"
 	"github.com/pi-dal/sakamoto/internal/core"
+	"github.com/pi-dal/sakamoto/internal/sbclient"
 	"github.com/pi-dal/sakamoto/internal/svc"
 	"github.com/sagernet/sing-box/daemon"
 )
@@ -57,8 +58,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.onLogs((*daemon.Log)(v))
 	case testDispatchMsg:
 		if m.batch == v.batch {
+			m.batch.dispatched = true
+			m.batch.deadline = v.completedAt.Add(sbclient.URLTestNodeWait)
 			for tag := range v.errors {
-				m.batch.results[tag] = -1
+				m.batch.results[tag] = -2
 			}
 			m.refreshTestProgress()
 		}

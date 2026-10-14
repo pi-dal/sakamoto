@@ -5,17 +5,18 @@ import (
 	"sort"
 	"time"
 
+	"github.com/pi-dal/sakamoto/internal/sbclient"
 	"github.com/sagernet/sing-box/daemon"
 )
 
 // testBatch tracks leaf proxies, not selector/urltest groups or direct.
 type testBatch struct {
-	tags          []string
-	baseline      map[string]int64
-	baselineDelay map[string]int32
-	results       map[string]int32 // >0 success; -1 failure or timeout
-	start         time.Time
-	deadline      time.Time
+	tags       []string
+	baseline   map[string]int64
+	results    map[string]int32 // >0 success; -1 no fresh result; -2 request failure
+	start      time.Time
+	deadline   time.Time
+	dispatched bool
 }
 
 func nodeTags(groups []*daemon.Group) []string {
@@ -40,7 +41,6 @@ func nodeTags(groups []*daemon.Group) []string {
 func newTestBatch(groups []*daemon.Group, now time.Time) *testBatch {
 	tags := nodeTags(groups)
 	baseline := map[string]int64{}
-	delay := map[string]int32{}
 	for _, tag := range tags {
 		baseline[tag] = 0
 	}
@@ -48,11 +48,13 @@ func newTestBatch(groups []*daemon.Group, now time.Time) *testBatch {
 		for _, it := range g.Items {
 			if _, ok := baseline[it.Tag]; ok && it.UrlTestTime >= baseline[it.Tag] {
 				baseline[it.Tag] = it.UrlTestTime
-				delay[it.Tag] = it.UrlTestDelay
 			}
 		}
 	}
-	return &testBatch{tags: tags, baseline: baseline, baselineDelay: delay, results: map[string]int32{}, start: now, deadline: now.Add(15*time.Second + time.Duration(len(tags))*50*time.Millisecond)}
+	// Native history exposes whole seconds. Dispatch after the next boundary
+	// so an unchanged fast result can be distinguished from its predecessor.
+	start := now.Truncate(time.Second).Add(time.Second)
+	return &testBatch{tags: tags, baseline: baseline, results: map[string]int32{}, start: start, deadline: start.Add(sbclient.URLTestNodeWait)}
 }
 func (b *testBatch) observe(groups []*daemon.Group) {
 	for _, g := range groups {
@@ -63,15 +65,14 @@ func (b *testBatch) observe(groups []*daemon.Group) {
 			if b.results[it.Tag] != 0 {
 				continue
 			}
-			if it.UrlTestDelay > 0 && (it.UrlTestTime > b.baseline[it.Tag] ||
-				(it.UrlTestTime >= b.start.Unix()-1 && it.UrlTestDelay != b.baselineDelay[it.Tag])) {
+			if it.UrlTestDelay > 0 && it.UrlTestTime >= b.start.Unix() && it.UrlTestTime > b.baseline[it.Tag] {
 				b.results[it.Tag] = it.UrlTestDelay
 			}
 		}
 	}
 }
 func (b *testBatch) expire(now time.Time) {
-	if now.Before(b.deadline) {
+	if !b.dispatched || now.Before(b.deadline) {
 		return
 	}
 	for _, tag := range b.tags {
@@ -82,16 +83,18 @@ func (b *testBatch) expire(now time.Time) {
 }
 func (b *testBatch) done() bool { return len(b.results) == len(b.tags) }
 func (b *testBatch) message() string {
-	ok, bad := 0, 0
+	ok, pendingResult, requestErrors := 0, 0, 0
 	for _, v := range b.results {
 		if v > 0 {
 			ok++
+		} else if v == -2 {
+			requestErrors++
 		} else {
-			bad++
+			pendingResult++
 		}
 	}
 	if b.done() {
-		return fmt.Sprintf("All tests complete: %d nodes · %d passed · %d failed/timed out", len(b.tags), ok, bad)
+		return fmt.Sprintf("Tests complete: %d nodes · %d passed · %d no current result · %d request errors", len(b.tags), ok, pendingResult, requestErrors)
 	}
-	return fmt.Sprintf("Node tests %d/%d · %d passed · %d failed", len(b.results), len(b.tags), ok, bad)
+	return fmt.Sprintf("Node tests %d/%d · %d passed · %d request errors", len(b.results), len(b.tags), ok, requestErrors)
 }

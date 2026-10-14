@@ -70,8 +70,9 @@ type actionMsg struct {
 	mode       string
 }
 type testDispatchMsg struct {
-	batch  *testBatch
-	errors map[string]error
+	batch       *testBatch
+	errors      map[string]error
+	completedAt time.Time
 }
 type importMsg struct {
 	source string
@@ -114,6 +115,7 @@ type model struct {
 	shadowrocket                                    bool
 	conflictStopping                                bool
 	lastTest                                        map[string]int32
+	lastTestStarted                                 int64
 	networkState                                    string
 	netChecking                                     bool
 	nextNetworkProbe                                time.Time

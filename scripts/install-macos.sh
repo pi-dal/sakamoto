@@ -25,7 +25,7 @@ if [[ -S "$home/.config/sakamoto/svc.sock" ]]; then
 fi
 sing_box="$(command -v sing-box || true)"
 [[ -n "$sing_box" && -x "$sing_box" && "$sing_box" = /* ]] || { echo 'Install sing-box via Homebrew first: brew install sing-box' >&2; exit 1; }
-"$sing_box" check -c "$dir/config.json"
+"$sing_box" check -D "$dir" -c "$dir/config.json"
 if [[ ! -t 0 ]]; then echo 'Run interactively to approve installing a root LaunchDaemon.' >&2; exit 1; fi
 read -r -p "Install sakamoto daemon (root) + watch for $user in $dir? [y/N] " answer
 [[ "$answer" == y || "$answer" == Y ]] || exit 0

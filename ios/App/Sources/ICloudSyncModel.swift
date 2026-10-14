@@ -218,7 +218,7 @@ final class ICloudSyncModel: ObservableObject {
             let (payload, skipped) = buildPayload()
             let outcome = await syncStore.syncNow(
                 staging: payload.entries, directoryURL: directory,
-                downloadNames: ["nodes.txt", "policy.json", "subscriptions.json"],
+                downloadNames: ["nodes.txt", "policy.json", "subscriptions.json", AutomaticGroupSources.fileName],
                 sourceScope: profileBefore ?? "unassigned",
                 mainConf: settings.includesConf ? store.sourceBundle.mainConf : "",
                 discoverConf: settings.includesConf,
@@ -226,7 +226,7 @@ final class ICloudSyncModel: ObservableObject {
                     switch name {
                     case "nodes.txt":
                         if !String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { _ = try NodeFileImport.parse(data, validate: ConfigModel.validateNode) }
-                    case "policy.json", "subscriptions.json": try ConfigStore.validateStructuredSource(name: name, data: data)
+                    case "policy.json", "subscriptions.json", AutomaticGroupSources.fileName: try ConfigStore.validateStructuredSource(name: name, data: data)
                     default:
                         if name.lowercased().hasSuffix(".conf") {
                             var error: NSError?

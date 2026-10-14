@@ -37,13 +37,14 @@ Access/secret keys and session tokens live in private `s3-credentials.json` (060
 
 Open **Settings → S3 Sync**, fill connection settings and credentials, enable sync and save. Tap **Sync now** to upload or download. iOS stores credentials in Keychain; Android encrypts them with an Android Keystore AES-GCM key. Source data stays in app-private storage. Mobile sync is manual while the app is open; this does not promise background execution when iOS/Android suspends the app.
 
-Downloads are staged in the Config page. They do not silently replace a running tunnel's generated config. The existing mobile generation boundary still applies: imported sources are validated and staged; host generation remains responsible for producing full sing-box configurations.
+Downloads are staged in the Config page. They do not silently replace a running tunnel's generated config. Generate from the adopted sources on the device, validate, and explicitly apply the new configuration.
 
 ## Scope and conflicts
 
 The versioned JSON source bundle contains only:
 
 - `nodes.txt`: manual node share links;
+- `groups.json`: automatic group exclusions under `RealityAuto` and `OthersAuto`, using original source-node names; `{}` explicitly clears exclusions;
 - `policy.json`: an array of `{match, action}` rules;
 - `subscriptions.json`: an array of `{name, url, format}` declarations;
 - `conf/*.conf`: the selected local conf and its relative includes, with `main_conf` identifying the main file.

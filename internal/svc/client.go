@@ -2,6 +2,7 @@ package svc
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"regexp"
 	"strconv"
@@ -14,12 +15,20 @@ import (
 
 // Send sends one command to the supervisor socket and returns its reply.
 func Send(cmd string) (string, error) {
-	conn, err := net.DialTimeout("unix", SockPath(), 3*time.Second)
+	return SendTo(SockPath(), cmd)
+}
+
+func SendTo(socketPath, cmd string) (string, error) {
+	conn, err := net.DialTimeout("unix", socketPath, 3*time.Second)
 	if err != nil {
 		return "", fmt.Errorf("supervisor is not running (start its LaunchDaemon first): %w", err)
 	}
 	defer func() { _ = conn.Close() }()
 	timeout := 5 * time.Second
+	verb, _, _ := strings.Cut(cmd, " ")
+	if verb == "state" || verb == "urltest" || verb == "select" || verb == "reload" {
+		timeout = 15 * time.Second
+	}
 	if cmd == "connect" {
 		timeout = 70 * time.Second
 	}
@@ -32,12 +41,14 @@ func Send(cmd string) (string, error) {
 	if _, err := fmt.Fprintln(conn, cmd); err != nil {
 		return "", err
 	}
-	buf := make([]byte, 64<<10)
-	n, err := conn.Read(buf)
-	if err != nil && n == 0 {
+	buf, err := io.ReadAll(io.LimitReader(conn, (1<<20)+1))
+	if err != nil {
 		return "", err
 	}
-	return string(buf[:n]), nil
+	if len(buf) > 1<<20 {
+		return "", fmt.Errorf("supervisor reply exceeds 1 MiB")
+	}
+	return string(buf), nil
 }
 
 // RequireDNSLifecycle prevents a new client from mistaking an old root daemon

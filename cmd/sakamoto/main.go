@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -31,6 +32,9 @@ Usage:
   sakamoto daemon       Root supervisor (LaunchDaemon); manages sing-box and
                         accepts connect/disconnect commands on a Unix socket
   sakamoto watch        LaunchAgent for automatic proxy group fallback
+  sakamoto ctl state | status | logs | reload  Inspect/control the supervisor
+  sakamoto ctl urltest "TAG"             Queue a background latency check
+  sakamoto ctl select "GROUP" "OUTBOUND"  Change a selector explicitly
   sakamoto recover      Ask the user-level watcher for fresh MainProxy tests
   sakamoto dns-restore  Restore an orphaned DNS snapshot (core must be stopped)
   sakamoto dns-prepare  Build a private protected-DNS candidate; do not activate
@@ -109,6 +113,39 @@ func main() {
 			fatal("dns-restore", fmt.Errorf("%s", strings.TrimSpace(reply)))
 		}
 		fmt.Println(strings.TrimSpace(reply))
+	case "ctl":
+		if len(args) < 2 {
+			fatal("ctl", fmt.Errorf("choose state, status, logs, reload, urltest TAG, or select GROUP OUTBOUND"))
+		}
+		command := args[1]
+		switch command {
+		case "state", "status", "logs", "reload":
+			if len(args) != 2 {
+				fatal("ctl", fmt.Errorf("%s takes no arguments", command))
+			}
+		case "urltest":
+			if len(args) != 3 {
+				fatal("ctl", fmt.Errorf("urltest needs a tag"))
+			}
+			raw, _ := json.Marshal(map[string]string{"tag": args[2]})
+			command += " " + string(raw)
+		case "select":
+			if len(args) != 4 {
+				fatal("ctl", fmt.Errorf("select needs a group and outbound"))
+			}
+			raw, _ := json.Marshal(map[string]string{"group": args[2], "outbound": args[3]})
+			command += " " + string(raw)
+		default:
+			fatal("ctl", fmt.Errorf("unsupported command %s", command))
+		}
+		reply, err := svc.SendTo(filepath.Join(filepath.Dir(*cfgPath), svc.SockName), command)
+		if err != nil {
+			fatal("ctl", err)
+		}
+		if strings.HasPrefix(reply, "error:") || strings.HasPrefix(reply, "unknown:") {
+			fatal("ctl", fmt.Errorf("%s", strings.TrimSpace(reply)))
+		}
+		fmt.Print(reply)
 	case "recover":
 		if len(args) != 1 {
 			fatal("recover", fmt.Errorf("recover takes no arguments"))

@@ -17,6 +17,64 @@ final class NodeGroupEditingTests: XCTestCase {
         try await store.generateFromSources()
         return (store, defaults, suite)
     }
+    func testGroupSourceMovesBetweenDevicesAndClearsOldLocalExclusions() async throws {
+        let (store, defaults, suite) = try await setup()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var group = try XCTUnwrap(ProxyGroupEditing.groups(store.content).first { $0.tag == "OthersAuto" })
+        group.members = ["A"]
+        try store.saveProxyGroup(group, expectedProfile: store.selectedProfileID, expectedContent: store.content)
+        XCTAssertEqual(store.sourceBundle.files["groups.json"], #"{"OthersAuto":["B"]}"#)
+        let sync = ICloudSyncModel(store: store, defaults: defaults)
+        XCTAssertEqual(sync.buildPayload().payload.entries.first { $0.name == "groups.json" }?.data, Data(#"{"OthersAuto":["B"]}"#.utf8))
+        let otherSuite = "group-sync-" + UUID().uuidString
+        let otherDefaults = UserDefaults(suiteName: otherSuite)!
+        defer { otherDefaults.removePersistentDomain(forName: otherSuite) }
+        let other = ConfigStore(persistence: otherDefaults, keyStore: ConfigStoreTests.EmptyKeys())
+        try other.adoptSourceBundle(store.sourceBundle)
+        try await other.generateFromSources()
+        XCTAssertEqual(ProxyGroupEditing.groups(other.content).first { $0.tag == "OthersAuto" }?.members, ["A"])
+        other.commitNodesSources(other.nodesSources.adding(node: try ConfigModel.validateNode("trojan://test@203.0.113.3:443#C")))
+        try await other.generateFromSources()
+        XCTAssertEqual(ProxyGroupEditing.groups(other.content).first { $0.tag == "OthersAuto" }?.members, ["A", "C"])
+        var node = try XCTUnwrap(ProxyGroupEditing.outbounds(other.content).first { $0["tag"] as? String == "B" })
+        node["tag"] = "Local Japan"; node["server"] = "203.0.113.8"
+        try other.saveNodeSettings(tag: "B", nodeJSON: String(decoding: try JSONSerialization.data(withJSONObject: node), as: UTF8.self), expectedProfile: other.selectedProfileID, expectedContent: other.content)
+        XCTAssertEqual(other.sourceBundle.files["groups.json"], #"{"OthersAuto":["B"]}"#)
+        var fromDesktop = other.sourceBundle
+        fromDesktop.files["groups.json"] = #"{"OthersAuto":["A"]}"#
+        try other.adoptSourceBundle(fromDesktop)
+        XCTAssertTrue(other.selectedProfile?.sourcesChanged == true)
+        try await other.generateFromSources()
+        XCTAssertEqual(Set(ProxyGroupEditing.groups(other.content).first { $0.tag == "OthersAuto" }?.members ?? []), ["Local Japan", "C"])
+        fromDesktop.files["groups.json"] = "{}"
+        try other.adoptSourceBundle(fromDesktop)
+        try await other.generateFromSources()
+        XCTAssertEqual(Set(ProxyGroupEditing.groups(other.content).first { $0.tag == "OthersAuto" }?.members ?? []), ["A", "Local Japan", "C"])
+        let before = other.sourceBundle.files
+        fromDesktop.files["groups.json"] = #"{"Unknown":["A"]}"#
+        XCTAssertThrowsError(try other.adoptSourceBundle(fromDesktop))
+        XCTAssertEqual(other.sourceBundle.files, before)
+        let relaunched = ConfigStore(persistence: otherDefaults, keyStore: ConfigStoreTests.EmptyKeys())
+        XCTAssertEqual(relaunched.sourceBundle.files["groups.json"], "{}")
+        XCTAssertEqual(Set(ProxyGroupEditing.groups(relaunched.content).first { $0.tag == "OthersAuto" }?.members ?? []), ["A", "Local Japan", "C"])
+    }
+
+    func testIPOverrideIsExcludedImmediatelyAndAfterGeneration() async throws {
+        let (store, defaults, suite) = try await setup()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var node = try XCTUnwrap(ProxyGroupEditing.outbounds(store.content).first { $0["tag"] as? String == "A" })
+        node["server"] = "203.0.113.8"
+        try store.saveNodeSettings(tag: "A", nodeJSON: String(decoding: try JSONSerialization.data(withJSONObject: node), as: UTF8.self), expectedProfile: store.selectedProfileID, expectedContent: store.content)
+        func excluded(_ content: String) throws -> [String] {
+            let root = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(content.utf8)) as? [String: Any])
+            return ((root["inbounds"] as? [[String: Any]])?.first { $0["type"] as? String == "tun" })?["route_exclude_address"] as? [String] ?? []
+        }
+        XCTAssertTrue(try excluded(store.content).contains("203.0.113.8/32"))
+        XCTAssertTrue(try excluded(store.connectionContent()).contains("203.0.113.8/32"))
+        try await store.generateFromSources()
+        XCTAssertTrue(try excluded(store.content).contains("203.0.113.8/32"))
+    }
+
     func testRemarkAndIPRenameRepairReferencesAndSurviveRepeatedEditingAndGeneration() async throws {
         let (store, defaults, suite) = try await setup()
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -85,6 +143,9 @@ final class NodeGroupEditingTests: XCTestCase {
         // Simulate a profile saved by the previous release, with only a member list.
         var legacy = try XCTUnwrap(store.selectedProfile)
         legacy.id = UUID().uuidString
+        var legacySources = try JSONDecoder().decode(SourceBundle.self, from: Data(try XCTUnwrap(legacy.sourceBundleJSON).utf8))
+        legacySources.files.removeValue(forKey: AutomaticGroupSources.fileName)
+        legacy.sourceBundleJSON = String(decoding: try JSONEncoder().encode(legacySources), as: UTF8.self)
         var group = try XCTUnwrap(ProxyGroupEditing.groups(store.content).first { $0.tag == "RealityAuto" })
         group.members = ["R1"]
         legacy.proxyGroups = [group]
@@ -93,14 +154,14 @@ final class NodeGroupEditingTests: XCTestCase {
         store.commitNodesSources(store.nodesSources.adding(node: try reality("R3")))
         try await store.generateFromSources()
         XCTAssertEqual(ProxyGroupEditing.groups(store.content).first { $0.tag == "RealityAuto" }?.members, ["R1", "R3"])
-        XCTAssertEqual(store.selectedProfile?.proxyGroups?.first?.excludedMembers, ["R2"])
+        XCTAssertEqual(store.selectedProfile?.proxyGroups?.first { $0.tag == "RealityAuto" }?.excludedMembers, ["R2"])
         var node = try XCTUnwrap(ProxyGroupEditing.outbounds(store.content).first { $0["tag"] as? String == "R2" })
         node["tag"] = "Excluded Japan"
         try store.saveNodeSettings(tag: "R2", nodeJSON: String(decoding: JSONSerialization.data(withJSONObject: node), as: UTF8.self), expectedProfile: store.selectedProfileID, expectedContent: store.content)
-        XCTAssertEqual(store.selectedProfile?.proxyGroups?.first?.excludedMembers, ["Excluded Japan"])
+        XCTAssertEqual(store.selectedProfile?.proxyGroups?.first { $0.tag == "RealityAuto" }?.excludedMembers, ["Excluded Japan"])
         store.commitNodesSources(store.nodesSources.removingNode(id: r2.id))
         try await store.generateFromSources()
-        XCTAssertEqual(store.selectedProfile?.proxyGroups?.first?.excludedMembers, ["Excluded Japan"])
+        XCTAssertEqual(store.selectedProfile?.proxyGroups?.first { $0.tag == "RealityAuto" }?.excludedMembers, ["Excluded Japan"])
         store.commitNodesSources(store.nodesSources.adding(node: r2))
         try await store.generateFromSources()
         XCTAssertEqual(ProxyGroupEditing.groups(store.content).first { $0.tag == "RealityAuto" }?.members, ["R1", "R3"])
@@ -108,7 +169,7 @@ final class NodeGroupEditingTests: XCTestCase {
         var restore = try XCTUnwrap(ProxyGroupEditing.groups(store.content).first { $0.tag == "RealityAuto" })
         restore.members.append("Excluded Japan")
         try store.saveProxyGroup(restore, expectedProfile: store.selectedProfileID, expectedContent: store.content)
-        XCTAssertEqual(store.selectedProfile?.proxyGroups?.first?.excludedMembers, [])
+        XCTAssertEqual(store.selectedProfile?.proxyGroups?.first { $0.tag == "RealityAuto" }?.excludedMembers, [])
         try await store.generateFromSources()
         XCTAssertTrue(ProxyGroupEditing.groups(store.content).first { $0.tag == "RealityAuto" }?.members.contains("Excluded Japan") == true)
     }

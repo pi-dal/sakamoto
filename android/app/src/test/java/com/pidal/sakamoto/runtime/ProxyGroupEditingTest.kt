@@ -7,6 +7,25 @@ import org.junit.Test
 class ProxyGroupEditingTest {
     private val content = """{"outbounds":[{"tag":"A","type":"trojan","server":"a.example","server_port":443,"password":"test"},{"tag":"B","type":"socks","server":"b.example","server_port":1080},{"tag":"Main","type":"selector","outbounds":["A","B"],"interrupt_exist_connections":true},{"tag":"direct","type":"direct"}],"endpoints":[{"tag":"tail","type":"tailscale"}],"route":{"final":"Main"},"future":{"keep":true}}"""
     private val automaticContent = """{"outbounds":[{"tag":"R1","type":"vless","tls":{"reality":{"enabled":true}}},{"tag":"R2","type":"vless","tls":{"reality":{"enabled":true}}},{"tag":"Other","type":"trojan"},{"tag":"RealityAuto","type":"urltest","outbounds":["R1","R2"],"url":"https://test.example/204","interval":"1m"},{"tag":"ManualPick","type":"selector","outbounds":["R1","R2","Other"]}]}"""
+    @Test fun sharedExclusionsUseSourceNamesAndExplicitClearSurvivesReimport() {
+        val original = ProxyGroupEditing.groups(automaticContent).first { it.tag == "RealityAuto" }
+        val excluded = ProxyGroupEditing.recording(automaticContent, original.copy(members = listOf("R1")))
+        val renamed = excluded.copy(excludedMembers = listOf("Local Japan"))
+        val aliases = mapOf("R2" to "Local Japan")
+        assertEquals("{\"RealityAuto\":[\"R2\"]}", ProxyGroupEditing.sourceExclusions(automaticContent, listOf(renamed), aliases).toString())
+        val adopted = ProxyGroupEditing.adoptingSource(JSONObject("{\"RealityAuto\":[\"R2\",\"absent\"]}"), emptyList(), automaticContent, emptyMap())
+        assertEquals(listOf("R1"), adopted.first { it.tag == "RealityAuto" }.members)
+        assertEquals(listOf("R2", "absent"), adopted.first { it.tag == "RealityAuto" }.excludedMembers)
+        val old = ProxyGroupEditing.applySaved(automaticContent, listOf(excluded))
+        val clear = ProxyGroupEditing.adoptingSource(JSONObject("{}"), listOf(excluded), old, emptyMap())
+        assertEquals(emptyList<String>(), clear.first { it.tag == "RealityAuto" }.excludedMembers)
+        val imported = ProxyGroupEditing.forImport(old, clear, emptyMap())
+        assertEquals(listOf("R1", "R2"), ProxyGroupEditing.groups(ProxyGroupEditing.applySaved(automaticContent, imported)).first { it.tag == "RealityAuto" }.members)
+        assertEquals("{}", ProxyGroupEditing.sourceExclusions(old, clear, emptyMap()).toString())
+        for (invalid in listOf("{\"Wrong\":[]}", "{\"RealityAuto\":[1]}", "{\"RealityAuto\":[\"R2\",\"R2\"]}")) {
+            assertThrows(Exception::class.java) { ProxyGroupEditing.adoptingSource(JSONObject(invalid), clear, old, emptyMap()) }
+        }
+    }
     @Test fun newRealityNodesJoinButExclusionsSurvivePersistenceAbsenceAndRestoration() {
         val original = ProxyGroupEditing.groups(automaticContent).first { it.tag == "RealityAuto" }
         val excluded = ProxyGroupEditing.recording(automaticContent, original.copy(members = listOf("R1")))

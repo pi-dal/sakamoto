@@ -41,12 +41,15 @@ If `conf:` points at `~/.sakamoto/sources/current/macOS.conf`, the cloud copies 
 ```text
 sakamoto/
 ├── nodes.txt
+├── groups.json
 └── sources/current/
     ├── macOS.conf
     └── sr_top500_banlist_ad_5_25.conf
 ```
 
 Relative includes are discovered recursively on **both sides**, so a cloud-only conf or a cloud edit that introduces a new nested include downloads its dependencies too. Include paths stay within the conf's source directory, with cycle/depth/size limits. For a local conf outside the runtime directory (e.g. Downloads), the cloud copy uses `conf/<filename>.conf` and keeps relative subdirectories. To share across Macs, use matching runtime-relative paths or the same external main filename; sync does not change `conf:` or select another rule profile for you.
+
+`groups.json` shares `RealityAuto` and `OthersAuto` exclusions using original source-node names. TUI, iOS and Android retain those exclusions when new nodes arrive; local remark changes do not change their source identity. `{}` explicitly clears the shared exclusions. Custom groups, device paths, API credentials and local node overrides stay on their device. After downloading a group change, regenerate and apply the checked configuration.
 
 `files:` remains the explicit list for nodes and other source paths. Safe relative subdirectories are supported; **Additional source paths** in Settings edits this list. The conf and its includes do not need to be manually listed. To keep the old nodes-only behavior, set `include_conf: false`.
 
@@ -65,4 +68,4 @@ Never sync the entire runtime folder. `sakamoto.yaml`, `config.json`, `dns-resto
 
 **Privacy:** node files can contain UUIDs/passwords. Conf files can contain proxy credentials and private host mappings. Enabling sync uploads those selected sources to your iCloud Drive; a rule-only setup can use `files: []` with `include_conf: true`. Make that choice explicitly and consider Advanced Data Protection. Do not enable another Mac's previously disabled sync merely because the CLI was upgraded.
 
-If iCloud temporarily evicts a file or a read fails, the pass reports an error rather than inventing a replacement. Avoid editing a source on two Macs before their shared baseline has synchronized.
+Evicted or dataless files are requested for download and retried on the next pass; macOS uses a bounded `brctl download` request, and iOS uses the native ubiquity download API. A pending file is never treated as missing, overwritten, or given a new baseline. If any `.conf` is pending, the entire discovered rule graph waits while independent sources such as `nodes.txt` continue syncing. The pending sources are reported. Other I/O errors and genuine conflicts still stop the pass. Avoid editing a source on two Macs before their shared baseline has synchronized.

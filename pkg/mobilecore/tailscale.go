@@ -19,6 +19,11 @@ var tailnetPrefixes = []netip.Prefix{
 // already excluded that address from the TUN. Desktop's external Tailscale
 // bypass policy must not apply to the embedded mobile endpoint.
 func PrepareTailscaleConnectivityJSON(configJSON string) (string, error) {
+	protected, err := EnsureProxyServerRoutesJSON(configJSON)
+	if err != nil {
+		return "", err
+	}
+	configJSON = protected
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(configJSON), &root); err != nil || root == nil {
 		return "", fmt.Errorf("invalid mobile configuration")

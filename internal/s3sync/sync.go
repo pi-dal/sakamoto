@@ -143,6 +143,13 @@ func Export(cfg *config.Config) (sourcesync.Bundle, error) {
 	if len(subs) > 0 {
 		b.Files["subscriptions.json"] = string(raw)
 	}
+	if cfg.AutomaticGroupExclusions != nil {
+		groups, err := sourcesync.Groups(cfg.AutomaticGroupExclusions).JSON()
+		if err != nil {
+			return b, err
+		}
+		b.Files[sourcesync.GroupsFile] = groups
+	}
 	if cfg.ConfPath != "" && !mobileconf.IsRemote(cfg.ConfPath) {
 		root, err := filepath.Abs(cfg.ConfPath)
 		if err != nil {
@@ -245,6 +252,9 @@ func syncWithClient(ctx context.Context, cfgPath string, client *http.Client) ([
 	if _, ok := base.Hashes["subscriptions.json"]; ok && len(cfg.Subscriptions) == 0 {
 		local.Files["subscriptions.json"] = "[]"
 	}
+	if _, ok := base.Hashes[sourcesync.GroupsFile]; ok && cfg.AutomaticGroupExclusions == nil {
+		local.Files[sourcesync.GroupsFile] = "{}"
+	}
 	result, err := sourcesync.Sync(ctx, cfg.S3, c, local, base, client)
 	if err != nil {
 		return nil, err
@@ -262,6 +272,9 @@ func syncWithClient(ctx context.Context, cfgPath string, client *http.Client) ([
 	}
 	if _, ok := base.Hashes["subscriptions.json"]; ok && len(latest.Subscriptions) == 0 {
 		check.Files["subscriptions.json"] = "[]"
+	}
+	if _, ok := base.Hashes[sourcesync.GroupsFile]; ok && latest.AutomaticGroupExclusions == nil {
+		check.Files[sourcesync.GroupsFile] = "{}"
 	}
 	before, _ := json.Marshal(local)
 	after, _ := json.Marshal(check)
@@ -300,6 +313,13 @@ func syncWithClient(ctx context.Context, cfgPath string, client *http.Client) ([
 		for _, s := range subs {
 			cfg.Subscriptions = append(cfg.Subscriptions, config.SubSource{Name: s.Name, URL: s.URL, Format: s.Format})
 		}
+	}
+	if downloads[sourcesync.GroupsFile] {
+		groups, e := sourcesync.DecodeGroups(result.Bundle.Files[sourcesync.GroupsFile])
+		if e != nil {
+			return nil, e
+		}
+		cfg.AutomaticGroupExclusions = groups
 	}
 	confChanged := local.MainConf != result.Bundle.MainConf
 	for _, name := range result.Downloads {

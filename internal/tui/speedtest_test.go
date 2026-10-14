@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pi-dal/sakamoto/internal/sbclient"
 	"github.com/sagernet/sing-box/daemon"
 )
 
@@ -31,11 +32,17 @@ func TestAllSpeedtestsDeduplicateLeafNodes(t *testing.T) {
 	if len(batch.results) != 2 || batch.done() {
 		t.Fatal(batch.message())
 	}
+	batch.dispatched = true
+	batch.deadline = batch.start.Add(sbclient.URLTestNodeWait)
 	batch.expire(now.Add(20 * time.Second))
+	if batch.done() {
+		t.Fatal("native probe budget was cut off early")
+	}
+	batch.expire(batch.deadline)
 	if !batch.done() || batch.results["vision-jp"] != 120 || batch.results["anytls-us"] != -1 {
 		t.Fatal(batch.message())
 	}
-	if !strings.Contains(batch.message(), "2 passed") || !strings.Contains(batch.message(), "3 failed/timed out") {
+	if !strings.Contains(batch.message(), "2 passed") || !strings.Contains(batch.message(), "3 no current result") {
 		t.Fatal(batch.message())
 	}
 }

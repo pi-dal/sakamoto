@@ -127,8 +127,14 @@ func (s *Server) handle(c net.Conn) {
 	if !sc.Scan() {
 		return
 	}
-	cmd := strings.TrimSpace(sc.Text())
+	command := strings.TrimSpace(sc.Text())
+	cmd, arguments, _ := strings.Cut(command, " ")
+	arguments = strings.TrimSpace(arguments)
 	var reply string
+	if arguments != "" && cmd != "urltest" && cmd != "select" {
+		_, _ = fmt.Fprintln(c, "error: command takes no arguments")
+		return
+	}
 	switch cmd {
 	case "connect":
 		reply = s.start()
@@ -140,6 +146,8 @@ func (s *Server) handle(c net.Conn) {
 		reply = "native-dns-v1"
 	case "dns-restore":
 		reply = s.restoreDNSCommand()
+	case "state", "urltest", "select", "reload":
+		reply = s.control(cmd, arguments)
 	case "logs":
 		reply = strings.Join(s.lastLogs(15), "\n")
 	default:

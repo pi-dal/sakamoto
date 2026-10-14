@@ -49,6 +49,38 @@ object ProxyGroupEditing {
         edit.copy(members = edit.members.map { names[it] ?: it }, excludedMembers = edit.excludedMembers?.map { names[it] ?: it },
             additionalMembers = edit.additionalMembers?.map { names[it] ?: it })
     }
+    fun sourceExclusions(content: String, saved: List<ProxyGroupEdit>, aliases: Map<String, String>): JSONObject? {
+        val edits = saved.filter(::followsGeneratedNodes)
+        if (edits.isEmpty()) return null
+        val sources = aliases.entries.associate { it.value to it.key }
+        return JSONObject().apply {
+            for (savedEdit in edits) {
+                val edit = if (savedEdit.excludedMembers == null && content.isNotBlank()) recording(content, savedEdit) else savedEdit
+                val excluded = edit.excludedMembers.orEmpty().map { sources[it] ?: it }.distinct().sorted()
+                if (excluded.isNotEmpty()) put(edit.tag, JSONArray(excluded))
+            }
+        }
+    }
+    fun adoptingSource(source: JSONObject, saved: List<ProxyGroupEdit>, content: String, aliases: Map<String, String>): List<ProxyGroupEdit> {
+        val excluded = source.keys().asSequence().associateWith { tag ->
+            require(tag in setOf("RealityAuto", "OthersAuto")) { "Unknown automatic group" }
+            val values = source.getJSONArray(tag)
+            val names = (0 until values.length()).map { index ->
+                val name = values.get(index)
+                require(name is String && name.isNotBlank() && name.none { it == '\u0000' || it == '\r' || it == '\n' }) { "Invalid group exclusion" }
+                name
+            }
+            require(names.distinct().size == names.size) { "Duplicate group exclusion" }
+            names
+        }
+        val current = if (content.isBlank()) emptyList() else groups(content)
+        val names = (excluded.keys + saved.filter(::followsGeneratedNodes).map { it.tag } + current.filter(::followsGeneratedNodes).map { it.tag }).toSet()
+        return saved.filterNot { it.tag in names } + names.sorted().map { tag ->
+            val edit = saved.firstOrNull { it.tag == tag } ?: current.firstOrNull { it.tag == tag } ?: ProxyGroupEdit(tag, type = "urltest")
+            val adopted = edit.copy(type = "urltest", excludedMembers = excluded[tag].orEmpty().map { aliases[it] ?: it }.sorted())
+            if (content.isBlank()) adopted else resolving(content, adopted)
+        }
+    }
     fun forImport(content: String, saved: List<ProxyGroupEdit>, aliases: Map<String, String>): List<ProxyGroupEdit> {
         val edits = saved + groups(content).filter { followsGeneratedNodes(it) && saved.none { edit -> edit.tag == it.tag } }.map { recording(content, it) }
         val sources = aliases.entries.associate { it.value to it.key }

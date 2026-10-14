@@ -1,4 +1,16 @@
 import Foundation
+import Darwin
+
+public func isICloudSourceDownloading(_ error: Error) -> Bool {
+    if case ICloudSyncError.sourceDownloading = error { return true }
+    var current = error as NSError
+    for _ in 0..<8 {
+        if current.domain == NSPOSIXErrorDomain && current.code == Int(EDEADLK) { return true }
+        guard let underlying = current.userInfo[NSUnderlyingErrorKey] as? NSError else { return false }
+        current = underlying
+    }
+    return false
+}
 
 // Filesystem seams for the iCloud sync store. Everything the sync pass does
 // goes through these protocols, so unit tests run entirely in memory and the
@@ -275,6 +287,12 @@ public final class CloudFilesystem: ICloudFilesystem, @unchecked Sendable {
 
     public func contents(atPath path: String) throws -> Data? {
         guard fileManager.fileExists(atPath: path) else { return nil }
+        let sourceURL = URL(fileURLWithPath: path)
+        let values = try sourceURL.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey])
+        if values.isUbiquitousItem == true && values.ubiquitousItemDownloadingStatus != .current {
+            try? fileManager.startDownloadingUbiquitousItem(at: sourceURL)
+            throw ICloudSyncError.sourceDownloading(path)
+        }
         var readError: NSError?
         var data: Data?
         var thrown: Error?
@@ -289,8 +307,14 @@ public final class CloudFilesystem: ICloudFilesystem, @unchecked Sendable {
                 thrown = error
             }
         }
-        if let thrown { throw thrown }
-        if let readError { throw ICloudSyncError.filesystem(readError.localizedDescription) }
+        if let thrown {
+            if isICloudSourceDownloading(thrown) { try? fileManager.startDownloadingUbiquitousItem(at: sourceURL); throw ICloudSyncError.sourceDownloading(path) }
+            throw thrown
+        }
+        if let readError {
+            if isICloudSourceDownloading(readError) { try? fileManager.startDownloadingUbiquitousItem(at: sourceURL); throw ICloudSyncError.sourceDownloading(path) }
+            throw ICloudSyncError.filesystem(readError.localizedDescription)
+        }
         return data
     }
 

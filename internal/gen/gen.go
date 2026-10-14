@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,19 +16,21 @@ import (
 
 	"github.com/pi-dal/sakamoto/internal/config"
 	"github.com/pi-dal/sakamoto/internal/experiment"
+	"github.com/pi-dal/sakamoto/pkg/mobileconf"
 )
 
 // ---------------- Main generation pipeline ----------------
 
 type Options struct {
-	ConfPath   string
-	SRJSONPath string
-	NodesFile  string // optional share-link file
-	AllowHosts string // comma-separated manual-node host allowlist
-	Cfg        *config.Config
-	OutDir     string       // output directory (defaults to the active runtime)
-	Quiet      bool         // suppress stdout so generation does not disrupt the TUI
-	HTTPClient *http.Client // optional platform-specific fetching policy
+	ConfPath       string
+	SRJSONPath     string
+	NodesFile      string // optional share-link file
+	AllowHosts     string // comma-separated manual-node host allowlist
+	Cfg            *config.Config
+	OutDir         string                                              // output directory (defaults to the active runtime)
+	Quiet          bool                                                // suppress stdout so generation does not disrupt the TUI
+	HTTPClient     *http.Client                                        // optional platform-specific fetching policy
+	LookupProxyIPs func(context.Context, string) ([]netip.Addr, error) // injectable bounded DNS lookup
 }
 
 func Run(o Options) error {
@@ -141,6 +145,19 @@ func Run(o Options) error {
 	}
 	bypass := splitCSV(p.general["bypass-tun"])
 	bypass = append(bypass, splitCSV(p.general["tun-excluded-routes"])...)
+	lookup := o.LookupProxyIPs
+	if lookup == nil {
+		lookup = func(ctx context.Context, host string) ([]netip.Addr, error) {
+			return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+		}
+	}
+	resolveContext, cancelResolve := context.WithTimeout(context.Background(), 3*time.Second)
+	serverRoutes, unresolved := mobileconf.ResolveProxyServerRoutes(resolveContext, outbounds, lookup)
+	cancelResolve()
+	bypass = append(bypass, serverRoutes...)
+	if len(unresolved) > 0 {
+		reportf("  warning: %d proxy hostnames could not be resolved for TUN exclusions; regenerate when DNS is available (outbound interface binding remains active)\n", len(unresolved))
+	}
 	if ts.Present {
 		for _, c := range []string{"100.64.0.0/10", "fd7a:115c:a1e0::/48"} {
 			if !containsStr(bypass, c) {

@@ -17,6 +17,10 @@ import (
 	"github.com/sagernet/sing-box/option"
 )
 
+func portableRulePath(rulesDir, path string) string {
+	return filepath.ToSlash(filepath.Join(filepath.Base(rulesDir), filepath.Base(path)))
+}
+
 // applyPolicyRules adds user-owned overrides before compiling SRS. Direct rules
 // are intentionally compiled into the direct set, which has priority over proxy.
 func applyPolicyRules(p *parsedConf, cfg *config.Config) error {
@@ -112,7 +116,7 @@ func buildRules(p *parsedConf, rulesDir string, hc *http.Client, ts tailscaleInf
 			return nil, fmt.Errorf("flush rs-%s: %w", b, closeErr)
 		}
 		srsEntries = append(srsEntries, map[string]any{
-			"type": "local", "tag": "rs-" + b, "format": "binary", "path": srsPath})
+			"type": "local", "tag": "rs-" + b, "format": "binary", "path": portableRulePath(rulesDir, srsPath)})
 		reportf("  rs-%s: %d entries\n", b, len(m["domain"])+len(m["domain_suffix"])+len(m["domain_keyword"])+len(m["ip_cidr"]))
 
 		// Also compile a domain-only set for DNS request-time matching.
@@ -135,7 +139,7 @@ func buildRules(p *parsedConf, rulesDir string, hc *http.Client, ts tailscaleInf
 				return nil, fmt.Errorf("flush rs-%s-domains: %w", b, closeErr)
 			}
 			srsEntries = append(srsEntries, map[string]any{
-				"type": "local", "tag": "rs-" + b + "-domains", "format": "binary", "path": p2})
+				"type": "local", "tag": "rs-" + b + "-domains", "format": "binary", "path": portableRulePath(rulesDir, p2)})
 		}
 	}
 
@@ -173,7 +177,7 @@ func buildRules(p *parsedConf, rulesDir string, hc *http.Client, ts tailscaleInf
 		}
 		srsEntries = append(srsEntries, map[string]any{
 			"type": "local", "tag": "geoip-" + strings.ToLower(cc),
-			"format": "binary", "path": srsPath})
+			"format": "binary", "path": portableRulePath(rulesDir, srsPath)})
 		_ = tgt
 	}
 

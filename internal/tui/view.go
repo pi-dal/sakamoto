@@ -431,28 +431,35 @@ func (m *model) renderHome(b *strings.Builder, startY int) {
 			marker = "●"
 		}
 		name := r.item.Tag
-		if lipgloss.Width(name) > 38 {
-			name = trunc(name, 37)
+		contentWidth := m.width - 4
+		if m.width >= 100 && m.menuRow < 0 && m.detailRow < 0 {
+			contentWidth -= 38
 		}
-		latency := "Untested"
-		if r.item.UrlTestDelay > 0 {
-			latency = fmt.Sprintf("Reachable %dms", r.item.UrlTestDelay)
+		nameWidth := min(38, max(12, contentWidth-35))
+		if lipgloss.Width(name) > nameWidth {
+			name = trunc(name, nameWidth-1)
 		}
-		if m.lastTest[r.item.Tag] < 0 {
-			latency = "Failed/timed out"
+		staleAfter := max(2*time.Minute, 2*m.cfg.CheckInterval)
+		latency := latencySnapshot(r.item, time.Now(), staleAfter)
+		if m.lastTest[r.item.Tag] == -2 && r.item.UrlTestTime <= m.lastTestStarted {
+			latency = "Request failed"
+		} else if m.lastTest[r.item.Tag] < 0 && r.item.UrlTestTime <= m.lastTestStarted {
+			latency = "No current result"
 		}
 		if m.batch != nil {
 			if v, ok := m.batch.results[r.item.Tag]; ok {
-				if v < 0 {
-					latency = "Failed/timed out"
+				if v == -2 {
+					latency = "Request failed"
+				} else if v < 0 {
+					latency = "No current result"
 				} else {
-					latency = fmt.Sprintf("Reachable %dms", v)
+					latency = fmt.Sprintf("%dms · now", v)
 				}
 			} else if _, ok := m.batch.baseline[r.item.Tag]; ok {
 				latency = "Testing…"
 			}
 		}
-		line := fmt.Sprintf(" %s %-38s %-10s %s", marker, name, r.item.Type, latency)
+		line := fmt.Sprintf(" %s %-*s %-10s %s", marker, nameWidth, name, r.item.Type, latency)
 		if i == m.cursor || m.hovered("node", i) {
 			line = focus.Render(">" + line)
 		} else if r.item.UrlTestDelay == 0 {
@@ -464,7 +471,7 @@ func (m *model) renderHome(b *strings.Builder, startY int) {
 		m.addHit(0, max(m.width, 80), y, "node", i)
 		y++
 	}
-	fmt.Fprintf(b, "\n %s\n", muted.Render(fmt.Sprintf("Node %d/%d · ● selected, not necessarily reachable · scroll for more", m.cursor+1, len(m.rows))))
+	fmt.Fprintf(b, "\n %s\n", muted.Render(fmt.Sprintf("Node %d/%d · latency is the last check · t/u refresh", m.cursor+1, len(m.rows))))
 }
 
 func (m *model) renderNodeDetail(b *strings.Builder, startY int) {
@@ -481,6 +488,11 @@ func (m *model) renderNodeDetail(b *strings.Builder, startY int) {
 		delay = fmt.Sprintf("%d ms", r.item.UrlTestDelay)
 	}
 	fmt.Fprintf(b, " Latency     %s\n", delay)
+	lastTest := "Not reported by core"
+	if r.item.UrlTestTime > 0 {
+		lastTest = time.Unix(r.item.UrlTestTime, 0).Format("2006-01-02 15:04:05") + " (" + testAge(r.item.UrlTestTime, time.Now()) + ")"
+	}
+	fmt.Fprintf(b, " Last test   %s\n", lastTest)
 	// Show the server address only; never display UUIDs or passwords.
 	data, _ := os.ReadFile(filepath.Join(filepath.Dir(m.cfgPath), "config.json"))
 	var cfg struct {
@@ -500,7 +512,7 @@ func (m *model) renderNodeDetail(b *strings.Builder, startY int) {
 	}
 	fmt.Fprintf(b, " Server      %s\n", server)
 	b.WriteString("\n [ Back ]")
-	m.addHit(1, lipgloss.Width(" [ Back ]")+1, startY+7, "back", 0)
+	m.addHit(1, lipgloss.Width(" [ Back ]")+1, startY+8, "back", 0)
 	b.WriteString("\n")
 }
 

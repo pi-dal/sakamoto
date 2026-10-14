@@ -130,6 +130,7 @@ final class ConfigStore: ObservableObject {
         let sources = try decodeSources(profile)
         if let old = selectedProfileID { UserDefaults(suiteName: SystemSurfaceStore.groupIdentifier)?.set(true, forKey: "sakamoto.experiment.pause." + old) }
         var profile = profile
+        if let groups = sources.groups { profile.proxyGroups = AutomaticGroupSources.adopting(groups, edits: profile.proxyGroups ?? [], content: profile.config, overrides: profile.nodeOverrides ?? [:]) }
         profile.pendingApply = true
         profiles.append(profile)
         releaseOtherRuleFiles(keeping: profile.id)
@@ -183,6 +184,7 @@ final class ConfigStore: ObservableObject {
         var nodes: NodesSourcesBook
         var policy: PolicyBook
         var imported: ImportedSource?
+        var groups: [String: [String]]? = nil
     }
 
     private func decodeSources(_ profile: TunnelProfile) throws -> ProfileSources {
@@ -210,11 +212,14 @@ final class ConfigStore: ObservableObject {
             if let error { throw error }
             imported = ImportedSource(displaySource: bundle.mainConf, content: content)
         }
-        return ProfileSources(nodes: NodesSourcesBook(nodes: nodes, subscriptions: subscriptions.map { StagedSubscription(name: $0.name, url: $0.url, format: $0.format) }), policy: PolicyBook(rules: rules.map { StagedPolicyRule(match: $0.match, action: $0.action) }), imported: imported)
+        let groups = try bundle.files[AutomaticGroupSources.fileName].map { try AutomaticGroupSources.decode(Data($0.utf8)) }
+        return ProfileSources(nodes: NodesSourcesBook(nodes: nodes, subscriptions: subscriptions.map { StagedSubscription(name: $0.name, url: $0.url, format: $0.format) }), policy: PolicyBook(rules: rules.map { StagedPolicyRule(match: $0.match, action: $0.action) }), imported: imported, groups: groups)
     }
 
     nonisolated static func validateStructuredSource(name: String, data: Data) throws {
-        if name == "policy.json" {
+        if name == AutomaticGroupSources.fileName {
+            _ = try AutomaticGroupSources.decode(data)
+        } else if name == "policy.json" {
             let rows = try JSONDecoder().decode([SyncPolicy].self, from: data)
             for row in rows {
                 var error: NSError?
@@ -248,7 +253,7 @@ final class ConfigStore: ObservableObject {
         let root = try AppPaths.sharedDirectory().appendingPathComponent(profile.ruleRevisionID.map { "RuleSnapshots/\($0)" } ?? "Profiles/\(profile.id)", isDirectory: true)
         var runtimeProfile = profile
         runtimeProfile.config = try profile.proxyChain?.applying(to: profile.config) ?? profile.config
-        let config = try runtimeProfile.preparedConfig(ruleDirectory: root)
+        let config = try protectServers(in: runtimeProfile.preparedConfig(ruleDirectory: root))
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         for (name, data) in profile.files {
             guard TunnelProfile.validFileName(name) else { throw TunnelProfile.InvalidProfile("Invalid rule file path") }
@@ -309,6 +314,19 @@ final class ConfigStore: ObservableObject {
         lastAction = "Tailscale transport saved. Apply & reconnect to use it."
     }
 
+    private func protectServers(in content: String) throws -> String {
+        var error: NSError?
+        let protected = MobilecorePrepareTailscaleConnectivityJSON(content, &error)
+        if let error { throw error }
+        return protected
+    }
+
+    private func recordGroupSources(in profile: inout TunnelProfile) throws {
+        let bundle = try AutomaticGroupSources.updating(sourceBundle, edits: profile.proxyGroups ?? [], content: profile.config, overrides: profile.nodeOverrides ?? [:])
+        let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
+        profile.sourceBundleJSON = String(decoding: try encoder.encode(bundle), as: UTF8.self)
+    }
+
     func saveProxyGroup(_ edit: ProxyGroupEdit, expectedProfile: String?, expectedContent: String) throws {
         guard !generating && !applying, selectedProfileID == expectedProfile, content == expectedContent,
               let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) else { throw TunnelProfile.InvalidProfile("Configuration changed while editing. Reopen the group and try again.") }
@@ -316,6 +334,7 @@ final class ConfigStore: ObservableObject {
         let saved = ProxyGroupEditing.recording(edit, in: content, previous: candidate.proxyGroups?.first { $0.tag == edit.tag })
         candidate.config = try ProxyGroupEditing.applying([saved], to: content)
         candidate.proxyGroups = (candidate.proxyGroups ?? []).filter { $0.tag != edit.tag } + [saved]
+        try recordGroupSources(in: &candidate)
         _ = try prepare(candidate)
         profiles[index] = candidate
         profiles[index].pendingApply = true
@@ -355,7 +374,7 @@ final class ConfigStore: ObservableObject {
         guard !generating && !applying, selectedProfileID == expectedProfile, content == expectedContent,
               let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) else { throw TunnelProfile.InvalidProfile("Configuration changed while editing. Reopen the node and try again.") }
         var candidate = profiles[index]
-        candidate.config = try ProxyGroupEditing.replacingNode(tag: tag, with: nodeJSON, in: content)
+        candidate.config = try protectServers(in: ProxyGroupEditing.replacingNode(tag: tag, with: nodeJSON, in: content))
         let node = try JSONSerialization.jsonObject(with: Data(nodeJSON.utf8)) as! [String: Any]
         let name = node["tag"] as! String
         let source = (candidate.nodeOverrides ?? [:]).keys.sorted().first { key in
@@ -364,6 +383,7 @@ final class ConfigStore: ObservableObject {
         } ?? tag
         try renameNodeReferences(from: tag, to: name, profile: &candidate)
         var overrides = candidate.nodeOverrides ?? [:]; overrides[source] = nodeJSON; candidate.nodeOverrides = overrides
+        try recordGroupSources(in: &candidate)
         _ = try prepare(candidate)
         profiles[index] = candidate; profiles[index].pendingApply = true
         content = candidate.config
@@ -399,6 +419,7 @@ final class ConfigStore: ObservableObject {
                 }
             }
             candidate.nodeOverrides?.removeValue(forKey: node.tag)
+            try recordGroupSources(in: &candidate)
             profiles[index] = candidate
             if changed { content = candidate.config; persistence.set(content, forKey: Self.storageKey) }
         }
@@ -495,7 +516,11 @@ final class ConfigStore: ObservableObject {
         candidate.experiment = settingsBefore
         candidate.forceTailscaleDERP = selectedProfile?.forceTailscaleDERP
         candidate.proxyChain = selectedProfile?.proxyChain ?? ProxyChainSettings.importedChain(in: contentBefore)
-        candidate.proxyGroups = selectedProfile?.proxyGroups?.map { edit in
+        var groupEdits = selectedProfile?.proxyGroups ?? []
+        if let rawGroups = sourceBefore.files[AutomaticGroupSources.fileName] {
+            groupEdits = AutomaticGroupSources.adopting(try AutomaticGroupSources.decode(Data(rawGroups.utf8)), edits: groupEdits, content: contentBefore, overrides: selectedProfile?.nodeOverrides ?? [:])
+        }
+        candidate.proxyGroups = groupEdits.map { edit in
             edit.excludedMembers == nil ? ProxyGroupEditing.recording(edit, in: contentBefore) : edit
         }
         candidate.nodeOverrides = selectedProfile?.nodeOverrides
@@ -518,7 +543,7 @@ final class ConfigStore: ObservableObject {
                 candidate.config = try SettingsOverrides.setBlockSTUN(semantics.blockSTUN, in: candidate.config)
             }
         }
-        candidate.config = try ProxyGroupEditing.applyingNodes(candidate.nodeOverrides ?? [:], to: candidate.config)
+        candidate.config = try protectServers(in: ProxyGroupEditing.applyingNodes(candidate.nodeOverrides ?? [:], to: candidate.config))
         candidate.config = try ProxyGroupEditing.applying(candidate.proxyGroups ?? [], to: candidate.config)
         candidate.proxyGroups = candidate.proxyGroups?.map { saved in
             var next = saved
@@ -545,12 +570,17 @@ final class ConfigStore: ObservableObject {
 
     /// Includes and their paths belong to the selected profile, never to
     /// whichever profile happened to run the previous sync pass.
+    private func includingLegacyGroupSources(_ bundle: SourceBundle) -> SourceBundle {
+        guard bundle.files[AutomaticGroupSources.fileName] == nil else { return bundle }
+        return (try? AutomaticGroupSources.updating(bundle, edits: selectedProfile?.proxyGroups ?? [], content: content, overrides: selectedProfile?.nodeOverrides ?? [:])) ?? bundle
+    }
+
     var sourceBundle: SourceBundle {
         if let raw = selectedProfile?.sourceBundleJSON {
-            if cachedSourceJSON == raw, let cachedSourceBundle { return cachedSourceBundle }
+            if cachedSourceJSON == raw, let cachedSourceBundle { return includingLegacyGroupSources(cachedSourceBundle) }
             if let bundle = try? JSONDecoder().decode(SourceBundle.self, from: Data(raw.utf8)) {
                 cachedSourceJSON = raw; cachedSourceBundle = bundle
-                return bundle
+                return includingLegacyGroupSources(bundle)
             }
         }
         cachedSourceJSON = nil; cachedSourceBundle = nil
@@ -563,7 +593,7 @@ final class ConfigStore: ObservableObject {
             let name = ICloudSyncPaths.isValidSourceName(source.displaySource) && source.displaySource.lowercased().hasSuffix(".conf") ? source.displaySource : "conf/imported.conf"
             bundle.mainConf = name; bundle.files[name] = source.content
         }
-        return bundle
+        return includingLegacyGroupSources(bundle)
     }
 
     var confSources: [String] { sourceBundle.files.keys.filter { $0.lowercased().hasSuffix(".conf") }.sorted() }
@@ -581,8 +611,19 @@ final class ConfigStore: ObservableObject {
     func adoptSourceBundle(_ bundle: SourceBundle) throws {
         let raw = String(decoding: try JSONEncoder().encode(bundle), as: UTF8.self)
         let decoded = try decodeSources(TunnelProfile(name: "Sources", config: "", sourceBundleJSON: raw))
+        ensureSourceProfile()
+        var groupsChanged = false
+        if let groups = decoded.groups, let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) {
+            let edits = AutomaticGroupSources.adopting(groups, edits: profiles[index].proxyGroups ?? [], content: content, overrides: profiles[index].nodeOverrides ?? [:])
+            groupsChanged = profiles[index].proxyGroups != edits
+            profiles[index].proxyGroups = edits
+        }
         commitSourceBundle(bundle)
         adoptProfileSources(decoded)
+        if groupsChanged, let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) {
+            profiles[index].sourcesChanged = true
+            persistProfiles(); transition(.modified)
+        }
     }
 
     func commitSourceBundle(_ bundle: SourceBundle) {
@@ -621,6 +662,7 @@ final class ConfigStore: ObservableObject {
             let name = ICloudSyncPaths.isValidSourceName(source.displaySource) && source.displaySource.lowercased().hasSuffix(".conf") ? source.displaySource : "conf/imported.conf"
             bundle.mainConf = name; bundle.files[name] = source.content
         }
+        bundle = (try? AutomaticGroupSources.updating(bundle, edits: profiles[index].proxyGroups ?? [], content: content, overrides: profiles[index].nodeOverrides ?? [:])) ?? bundle
         if let data = try? encoder.encode(bundle) { profiles[index].sourceBundleJSON = String(decoding: data, as: UTF8.self) }
         profiles[index].sourcesChanged = true
         persistProfiles()

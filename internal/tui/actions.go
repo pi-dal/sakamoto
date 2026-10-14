@@ -13,6 +13,7 @@ import (
 	"github.com/pi-dal/sakamoto/internal/core"
 	"github.com/pi-dal/sakamoto/internal/gen"
 	"github.com/pi-dal/sakamoto/internal/s3sync"
+	"github.com/pi-dal/sakamoto/internal/sbclient"
 	"github.com/pi-dal/sakamoto/internal/security"
 	"github.com/pi-dal/sakamoto/internal/svc"
 )
@@ -568,7 +569,9 @@ func (m *model) testCurrent() tea.Cmd {
 	}
 	c, t := m.conn, r.item.Tag
 	return func() tea.Msg {
-		err := c.URLTest(context.Background(), t)
+		ctx, cancel := context.WithTimeout(context.Background(), sbclient.URLTestRequestTimeout)
+		defer cancel()
+		err := c.URLTest(ctx, t)
 		return actionMsg{text: "Testing latency: " + t, err: err}
 	}
 }
@@ -578,6 +581,7 @@ func (m *model) refreshTestProgress() {
 	}
 	m.notice = m.batch.message()
 	if m.batch.done() {
+		m.lastTestStarted = m.batch.start.Unix()
 		m.lastTest = make(map[string]int32, len(m.batch.results))
 		for tag, result := range m.batch.results {
 			m.lastTest[tag] = result
@@ -604,8 +608,11 @@ func (m *model) testAll() tea.Cmd {
 	c := m.conn
 	return func() tea.Msg {
 		errors := map[string]error{}
+		if delay := time.Until(batch.start); delay > 0 {
+			time.Sleep(delay)
+		}
 		for _, tag := range batch.tags {
-			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), sbclient.URLTestRequestTimeout)
 			err := c.URLTest(ctx, tag)
 			cancel()
 			if err != nil {
@@ -613,7 +620,7 @@ func (m *model) testAll() tea.Cmd {
 			}
 			time.Sleep(40 * time.Millisecond) // Avoid hitting every node and test URL simultaneously.
 		}
-		return testDispatchMsg{batch: batch, errors: errors}
+		return testDispatchMsg{batch: batch, errors: errors, completedAt: time.Now()}
 	}
 }
 

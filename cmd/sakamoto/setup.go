@@ -240,7 +240,7 @@ func checkSetupConfig(paths setupPaths) error {
 	if err := cfg.ValidateDNSGuard(); err != nil {
 		return err
 	}
-	check := exec.Command("sing-box", "check", "-c", core)
+	check := exec.Command("sing-box", "check", "-D", paths.runtimeDir, "-c", core)
 	if out, err := check.CombinedOutput(); err != nil {
 		return fmt.Errorf("sing-box config check failed: %w: %s", err, strings.TrimSpace(string(out)))
 	}

@@ -108,7 +108,7 @@ func applyGeneratedConfig(cfgPath string, cfg *config.Config, saveSource bool) e
 		AllowHosts: strings.Join(cfg.AllowHosts, ","), Cfg: cfg, OutDir: dir, Quiet: true}); err != nil {
 		return err
 	}
-	cmd := exec.Command("sing-box", "check", "-c", filepath.Join(dir, "config.json"))
+	cmd := exec.Command("sing-box", "check", "-D", dir, "-c", filepath.Join(dir, "config.json"))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("sing-box validation failed: %w: %s", err, strings.TrimSpace(string(out)))
 	}

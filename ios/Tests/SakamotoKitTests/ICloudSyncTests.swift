@@ -49,6 +49,42 @@ final class ICloudSyncTests: XCTestCase {
         }
     }
 
+    final class PendingReadFilesystem: ICloudFilesystem, @unchecked Sendable {
+        let inner = InMemoryFilesystem()
+        var pending: String?
+        func contents(atPath path: String) throws -> Data? { if path == pending { throw ICloudSyncError.sourceDownloading(path) }; return try inner.contents(atPath: path) }
+        func sourceNames(under root: String) throws -> [String] { try inner.sourceNames(under: root) }
+        func fileExists(atPath path: String) -> Bool { inner.fileExists(atPath: path) }
+        func isSymbolicLink(atPath path: String) throws -> Bool { try inner.isSymbolicLink(atPath: path) }
+        func ensureDirectory(atPath path: String) throws { try inner.ensureDirectory(atPath: path) }
+        func writeAtomic(_ data: Data, toPath path: String) throws { try inner.writeAtomic(data, toPath: path) }
+    }
+
+    func testPendingConfDoesNotBlockNodesOrAdvanceAnyRuleBaseline() async throws {
+        let local = InMemoryFilesystem(), cloud = PendingReadFilesystem()
+        let store = makeStore(settings: enabled(), local: local, cloud: cloud)
+        let main = "[General]\ninclude = child.conf\n[Rule]\nFINAL,PROXY\n", child = "[Rule]\nDOMAIN,example.com,DIRECT\n"
+        let staging = [entry("nodes.txt", "old"), entry("main.conf", main), entry("child.conf", child)]
+        _ = await store.syncNow(staging: staging, directoryURL: URL(fileURLWithPath: "/tui"), mainConf: "main.conf")
+        try cloud.inner.writeAtomic(Data("new".utf8), toPath: "/tui/nodes.txt")
+        cloud.pending = "/tui/child.conf"
+        let edited = [entry("nodes.txt", "old"), entry("main.conf", main + "# local edit\n"), entry("child.conf", child)]
+        let outcome = await store.syncNow(staging: edited, directoryURL: URL(fileURLWithPath: "/tui"), mainConf: "main.conf")
+        XCTAssertEqual(outcome.downloads.map(\.name), ["nodes.txt"])
+        XCTAssertEqual(try cloud.inner.contents(atPath: "/tui/main.conf"), Data(main.utf8))
+        XCTAssertEqual(Set(outcome.skipped), ["main.conf", "child.conf"])
+        guard case .failed(_, let message) = outcome.status else { return XCTFail("pending download was reported as fully synchronized") }
+        XCTAssertTrue(message.contains("Waiting for iCloud downloads"))
+        let statePath = "/local/directories/" + ICloudSyncStore.digest(Data("/tui".utf8)) + "/icloud-state.json"
+        let baseline = try ICloudSyncStore.loadState(from: statePath, filesystem: local)
+        XCTAssertEqual(baseline["main.conf"], ICloudSyncStore.digest(Data(main.utf8)))
+        XCTAssertEqual(baseline["child.conf"], ICloudSyncStore.digest(Data(child.utf8)))
+        cloud.pending = nil
+        let retry = await store.syncNow(staging: [entry("nodes.txt", "new"), entry("main.conf", main + "# local edit\n"), entry("child.conf", child)], directoryURL: URL(fileURLWithPath: "/tui"), mainConf: "main.conf")
+        guard case .synced = retry.status else { return XCTFail("retry failed: \(retry.status)") }
+        XCTAssertEqual(try cloud.inner.contents(atPath: "/tui/main.conf"), Data((main + "# local edit\n").utf8))
+    }
+
     private let cloudRoot = URL(fileURLWithPath: "/cloud", isDirectory: true)
 
     private func makeStore(

@@ -54,7 +54,7 @@ func GenerateProfileWithFetcherJSON(bundleJSON, settingsJSON string, fetcher Sou
 	// iCloud preserves runtime-relative conf names; the host generator accepts
 	// them. The S3-only conf/ prefix restriction is intentionally not applied.
 	check := sourcesync.Bundle{Version: 1, Files: map[string]string{}}
-	for _, name := range []string{"nodes.txt", "policy.json", "subscriptions.json"} {
+	for _, name := range []string{"nodes.txt", "policy.json", "subscriptions.json", sourcesync.GroupsFile} {
 		if value, ok := bundle.Files[name]; ok {
 			check.Files[name] = value
 		}
@@ -82,7 +82,7 @@ func GenerateProfileWithFetcherJSON(bundleJSON, settingsJSON string, fetcher Sou
 		if !icloud.ValidSourceName(name) || total > sourcesync.MaxBytes {
 			return "", fmt.Errorf("invalid source snapshot path or size")
 		}
-		if name != "nodes.txt" && name != "policy.json" && name != "subscriptions.json" && !strings.HasSuffix(strings.ToLower(name), ".conf") {
+		if name != "nodes.txt" && name != "policy.json" && name != "subscriptions.json" && name != sourcesync.GroupsFile && !strings.HasSuffix(strings.ToLower(name), ".conf") {
 			return "", fmt.Errorf("unsupported source file")
 		}
 	}
@@ -93,6 +93,13 @@ func GenerateProfileWithFetcherJSON(bundleJSON, settingsJSON string, fetcher Sou
 	cfg.SystemProxy.Enabled = false
 	cfg.SRJSONPath = ""
 	cfg.AllowHosts = nil
+	if raw, ok := bundle.Files[sourcesync.GroupsFile]; ok {
+		groups, err := sourcesync.DecodeGroups(raw)
+		if err != nil {
+			return "", err
+		}
+		cfg.AutomaticGroupExclusions = groups
+	}
 	cfg.ChainEnabled = false
 	var settings struct {
 		Mode          string `json:"mode"`
@@ -201,7 +208,7 @@ func GenerateProfileWithFetcherJSON(bundleJSON, settingsJSON string, fetcher Sou
 		if closeErr != nil {
 			return "", closeErr
 		}
-		sets = append(sets, map[string]any{"type": "local", "tag": "rs-" + name, "format": "binary", "path": p})
+		sets = append(sets, map[string]any{"type": "local", "tag": "rs-" + name, "format": "binary", "path": "rules/" + name + ".srs"})
 	}
 	route["rule_set"] = sets
 	var rules []any

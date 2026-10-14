@@ -157,6 +157,8 @@ public actor ICloudSyncStore {
         // preserve all and require the UI to select; never choose arbitrarily.
         var confNames: [String] = []
         var discoveredMain: String?
+        var deferredConf = false
+        var downloading = Set<String>()
         if discoverConf {
             do {
                 confNames = try cloudFilesystem.sourceNames(under: cloudRoot).filter { $0.lowercased().hasSuffix(".conf") }
@@ -164,12 +166,18 @@ public actor ICloudSyncStore {
                 var children = Set<String>()
                 for name in confNames {
                     try Self.checkPath(root: cloudRoot, path: cloudRoot + "/" + name, filesystem: cloudFilesystem)
-                    guard let data = try cloudFilesystem.contents(atPath: cloudRoot + "/" + name) else { continue }
+                    let data: Data?
+                    do { data = try cloudFilesystem.contents(atPath: cloudRoot + "/" + name) }
+                    catch {
+                        if isICloudSourceDownloading(error) { downloading.insert(name); deferredConf = true; continue }
+                        throw error
+                    }
+                    guard let data else { continue }
                     let parent = (name as NSString).deletingLastPathComponent
                     for child in try ICloudSyncConf.localIncludes(ofConfContent: data) { children.insert(parent.isEmpty ? child : parent + "/" + child) }
                 }
                 let roots = confNames.filter { !children.contains($0) }
-                if mainConf.isEmpty && roots.count == 1 { discoveredMain = roots.first }
+                if !deferredConf && mainConf.isEmpty && roots.count == 1 { discoveredMain = roots.first }
             } catch { return fail(error) }
         }
         let effectiveMain = mainConf.isEmpty ? discoveredMain ?? "" : mainConf
@@ -233,20 +241,24 @@ public actor ICloudSyncStore {
         var sourceFiles: [String: Data] = [:]
         var conflictNames: [String] = []
 
+        var remoteCopies: [String: Data] = [:]
         for pair in pairs {
-            // Symlink/traversal discipline on the cloud side (checkPath).
+            do { try Self.checkPath(root: cloudRoot, path: pair.cloudPath, filesystem: cloudFilesystem) }
+            catch { return fail(error) }
             do {
-                try Self.checkPath(root: cloudRoot, path: pair.cloudPath, filesystem: cloudFilesystem)
+                if let remote = try cloudFilesystem.contents(atPath: pair.cloudPath) { remoteCopies[pair.name] = remote }
             } catch {
-                return fail(error)
-            }
-
-            let remote: Data?
-            do {
-                remote = try cloudFilesystem.contents(atPath: pair.cloudPath)
-            } catch {
+                if isICloudSourceDownloading(error) {
+                    downloading.insert(pair.name)
+                    if pair.name.lowercased().hasSuffix(".conf") { deferredConf = true }
+                    continue
+                }
                 return fail(ICloudSyncError.filesystem("cannot read cloud copy of \(pair.name): \(error)"))
             }
+        }
+        for pair in pairs {
+            if downloading.contains(pair.name) || (deferredConf && pair.name.lowercased().hasSuffix(".conf")) { continue }
+            let remote = remoteCopies[pair.name]
 
             if let remote {
                 guard remote.count <= ICloudSyncLimits.maxSourceBytes else { return fail(ICloudSyncError.sourceTooLarge(pair.name)) }
@@ -301,6 +313,16 @@ public actor ICloudSyncStore {
             conflictNames.append(pair.name)
         }
 
+        if deferredConf {
+            let isConf: (String) -> Bool = { $0.lowercased().hasSuffix(".conf") }
+            plan.uploads.removeAll { isConf($0.name) }
+            plan.downloads.removeAll { isConf($0.name) }
+            plan.baselines = plan.baselines.filter { !isConf($0.key) }
+            conflictNames.removeAll(where: isConf)
+            skipped.append(contentsOf: pairs.map(\.name).filter(isConf))
+            discoveredMain = nil
+        }
+        skipped = Array(Set(skipped).union(downloading)).sorted()
         if !conflictNames.isEmpty {
             let status = ICloudSyncStatus.conflict(clock.now(), conflictNames)
             lastStatus = status
@@ -313,8 +335,10 @@ public actor ICloudSyncStore {
         }
 
         for action in plan.downloads { sourceFiles[action.name] = action.data }
-        do { try ICloudSyncPaths.validateConfGraph(main: effectiveMain, files: sourceFiles) }
-        catch { return fail(error) }
+        if !deferredConf {
+            do { try ICloudSyncPaths.validateConfGraph(main: effectiveMain, files: sourceFiles) }
+            catch { return fail(error) }
+        }
 
         guard await sourcesAreCurrent() else {
             return fail(ICloudSyncError.filesystem("local sources changed during sync; no copies or baselines were written"))
@@ -374,7 +398,10 @@ public actor ICloudSyncStore {
         }
 
         let now = clock.now()
-        let status: ICloudSyncStatus = updates.isEmpty ? .upToDate(now) : .synced(now, updates)
+        let status: ICloudSyncStatus
+        if !downloading.isEmpty {
+            status = .failed(now, "Waiting for iCloud downloads: " + downloading.sorted().joined(separator: ", ") + ". Available sources synchronized; retry after download.")
+        } else { status = updates.isEmpty ? .upToDate(now) : .synced(now, updates) }
         lastStatus = status
         return ICloudSyncOutcome(status: status, updates: updates, downloads: downloads, skipped: skipped, discoveredMainConf: discoveredMain)
     }
@@ -417,6 +444,7 @@ public actor ICloudSyncStore {
         case .deletedLocally(let name): return "\(name) was deleted locally; no automatic overwrite, resolve manually"
         case .deletedInCloud(let name): return "\(name) was deleted in iCloud; no automatic overwrite, resolve manually"
         case .conflict(let name): return "\(name) changed on both sides; neither copy was overwritten, merge manually"
+        case .sourceDownloading(let path): return "iCloud source is awaiting download: \(path)"
         case .filesystem(let message): return message
         case nil: return error.localizedDescription
         }

@@ -169,7 +169,7 @@ func TestMacOSConfIncludesAdRulesAndHosts(t *testing.T) {
 		t.Fatal("host mapping not used")
 	}
 	if _, err := exec.LookPath("sing-box"); err == nil {
-		if output, err := exec.Command("sing-box", "check", "-c", filepath.Join(out, "config.json")).CombinedOutput(); err != nil {
+		if output, err := exec.Command("sing-box", "check", "-D", out, "-c", filepath.Join(out, "config.json")).CombinedOutput(); err != nil {
 			t.Fatalf("sing-box invalid: %v %s", err, output)
 		}
 	}

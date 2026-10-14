@@ -28,6 +28,8 @@ class S3SyncRepository(private val context: Context) {
         if (config.subscriptions.isNotEmpty() || files.has("subscriptions.json")) files.put("subscriptions.json", JSONArray().apply {
             config.subscriptions.forEach { put(JSONObject().put("name", it.first).put("url", it.second).put("format", it.third)) }
         }.toString())
+        val groups = ProxyGroupEditing.sourceExclusions(config.generatedContent, config.automaticGroups, config.nodeAliases)
+        if (groups != null || files.has("groups.json")) files.put("groups.json", (groups ?: JSONObject()).toString())
         if (config.sourceConfContent.isNotEmpty() && !config.sourceConfIsUrl) {
             val name = "conf/" + File(config.sourceConfName).name
             bundle.put("main_conf", name)
@@ -61,6 +63,10 @@ class S3SyncRepository(private val context: Context) {
                 val s = list.getJSONObject(i)
                 Triple(s.getString("name"), s.getString("url"), s.optString("format", "auto"))
             })
+        }
+        if ("groups.json" in downloads) {
+            val groups = ProxyGroupEditing.adoptingSource(JSONObject(files.getString("groups.json")), next.automaticGroups, next.generatedContent, next.nodeAliases)
+            next = next.copy(automaticGroups = groups, sourceNeedsGenerate = true)
         }
         val main = bundle.optString("main_conf")
         if (main.isNotEmpty()) {

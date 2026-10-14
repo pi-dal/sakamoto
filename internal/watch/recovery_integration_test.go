@@ -142,7 +142,7 @@ func TestTriggerRunsFreshTestsAndWatcherOwnsSelection(t *testing.T) {
 		if chosen != "OthersAuto" {
 			t.Fatalf("unexpected selection %q", chosen)
 		}
-	case <-time.After(12 * time.Second):
+	case <-time.After(sbclient.URLTestGroupWait(fake.snapshot(false).GetGroup(), []string{"RealityAuto", "OthersAuto"}) + 3*time.Second):
 		t.Fatal("watcher did not switch to freshly healthy alternate")
 	}
 }

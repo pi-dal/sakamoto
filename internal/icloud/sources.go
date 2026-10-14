@@ -9,9 +9,13 @@ import (
 	"strings"
 
 	"github.com/pi-dal/sakamoto/internal/config"
+	"github.com/pi-dal/sakamoto/pkg/sourcesync"
 )
 
-type sourcePair struct{ name, local, remote string }
+type sourcePair struct {
+	name, local, remote string
+	deferred            bool
+}
 
 var inlineConfComment = regexp.MustCompile(`\s//`)
 var ruleConfSection = regexp.MustCompile(`(?im)^[ \t]*\[(general|rule)\][ \t]*(//[^\r\n]*)?\r?$`)
@@ -77,7 +81,8 @@ func checkPath(root, path string) error {
 	return nil
 }
 
-func sourcePairs(localDir string, cfg *config.Config) ([]sourcePair, error) {
+func sourcePairsWithRead(localDir string, cfg *config.Config, readSource func(string) ([]byte, bool, error)) ([]sourcePair, error) {
+	confDeferred := false
 	pairs := map[string]sourcePair{}
 	locals := map[string]string{}
 	add := func(name, local string) error {
@@ -92,9 +97,16 @@ func sourcePairs(localDir string, cfg *config.Config) ([]sourcePair, error) {
 		if old, ok := pairs[name]; ok && old.local != local {
 			return fmt.Errorf("cloud path %s maps to different local sources", name)
 		}
-		pairs[name] = sourcePair{name, local, filepath.Join(cfg.ICloud.Directory, filepath.FromSlash(name))}
+		pairs[name] = sourcePair{name: name, local: local, remote: filepath.Join(cfg.ICloud.Directory, filepath.FromSlash(name))}
 		locals[local] = name
 		return nil
+	}
+	_, localGroups := os.Lstat(filepath.Join(localDir, sourcesync.GroupsFile))
+	_, remoteGroups := os.Lstat(filepath.Join(cfg.ICloud.Directory, sourcesync.GroupsFile))
+	if cfg.AutomaticGroupExclusions != nil || !os.IsNotExist(localGroups) || !os.IsNotExist(remoteGroups) {
+		if err := add(sourcesync.GroupsFile, filepath.Join(localDir, sourcesync.GroupsFile)); err != nil {
+			return nil, err
+		}
 	}
 	for _, name := range cfg.ICloud.Files {
 		if err := add(name, filepath.Join(localDir, filepath.FromSlash(name))); err != nil {
@@ -147,7 +159,12 @@ func sourcePairs(localDir string, cfg *config.Config) ([]sourcePair, error) {
 			defer func() { visiting[local] = false }()
 			found := false
 			for _, path := range []string{pair.local, pair.remote} {
-				data, exists, err := read(path)
+				data, exists, err := readSource(path)
+				if sourceUnavailable(err) {
+					confDeferred = true
+					found = true
+					continue
+				}
 				if err != nil {
 					return err
 				}
@@ -198,6 +215,7 @@ func sourcePairs(localDir string, cfg *config.Config) ([]sourcePair, error) {
 		if err := checkPath(cfg.ICloud.Directory, pair.remote); err != nil {
 			return nil, err
 		}
+		pair.deferred = confDeferred && strings.EqualFold(filepath.Ext(pair.name), ".conf")
 		result = append(result, pair)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].name < result[j].name })
