@@ -10,7 +10,9 @@ The pinned native core v1.14.2 `daemon/started_service.go` starts URL tests in g
 
 The previous watcher waited at least ten seconds before evaluating fresh history. That could evaluate while a native 15-second probe was still running. The result window now covers `ceil(unique leaf members / 10) × 15 seconds + 5 seconds` for the largest tested group. The RPC acknowledgement has its own ten-second limit. A failed request invalidates the round and retains the current selection rather than interpreting an RPC failure as node unhealthiness. Native histories have whole-second timestamps, so a new round starts after the next second boundary.
 
-TUI `t` uses a bounded acknowledgement. `u` waits until all leaf requests have been dispatched before starting its result-expiry window. Individual leaf requests lack the group's surrounding timeout and can include dial, HTTP and multiplex warm-up phases, so the leaf-result window is 65 seconds. Repeated identical latency with a new timestamp counts as fresh; unchanged cached history does not. No current result and request failures are displayed separately. Node rows show age or stale status; details show the last test's local timestamp.
+TUI `t` uses a bounded acknowledgement. `u` waits until all leaf requests have been dispatched before starting its result-expiry window. Individual leaf requests lack the group's surrounding timeout and can include dial, HTTP and multiplex warm-up phases, so the leaf-result window is 65 seconds. Repeated identical latency with a new timestamp counts as fresh; unchanged cached history does not. A later successful history supersedes an earlier failed or expired manual test instead of leaving the node marked as failed. No current result and request failures are displayed separately. Node rows show age or stale status; details show the last test's local timestamp.
+
+Live checks on October 14, 2026 used native core 1.14.3. JP Lite returned fresh native latency results of 722 ms and 387 ms. Independent proxies tested gstatic, Google and Apple five times each for JP Lite and JP Pro; all 30 requests succeeded. JP Lite's request times varied more, including one 4.41-second gstatic response. These short samples confirm current connectivity and latency variation; they do not establish the cause of a previous transport timeout.
 
 ## Supervisor diagnostics
 
@@ -41,7 +43,7 @@ Homebrew normally links the formula automatically. `sakamoto link --check` compa
 |---|---|---|
 | 1 | Whole sidecar crosses machines | Source bundle uses an explicit whitelist. Shared nodes, policy, subscriptions, conf and automatic-group exclusions travel; machine paths, API/endpoint identities and cloud credentials stay local. |
 | 2 | Proxy endpoint enters TUN | Generation collects outbound IPs and bounded-resolves domains; mobile IP edits also repair exclusions. DNS snapshots need regeneration after address changes. |
-| 3 | URL-test timing | Native RPC is asynchronous, and seven members share one ten-worker batch. Watcher now waits for the native measurement budget and retains selection on acknowledgement failure. Actual JP Lite failures still require live evidence. |
+| 3 | URL-test timing | Native RPC is asynchronous, and seven members share one ten-worker batch. Watcher now waits for the native measurement budget and retains selection on acknowledgement failure. Live JP Lite checks succeeded; the cause of prior intermittent timeouts remains unverified. |
 | 4 | Old Homebrew command | Read-only `link --check`, backed-up `link` repair and automatic repair in Homebrew setup. Host link was already current; sandbox repairs cover stale/missing/file cases. |
 | 5 | Android S3 not configured | Client support exists. Provider endpoint, region, private bucket/prefix and scoped credentials are still needed for live activation. |
 | 6 | iCloud dataless preflight | Request download and defer unavailable files; pending conf defers its rule graph while independent nodes can sync. |
