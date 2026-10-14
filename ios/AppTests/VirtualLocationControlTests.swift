@@ -10,14 +10,16 @@ final class VirtualLocationControlTests: XCTestCase {
         guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else { throw XCTSkip("No scene for rendering") }
         let window = UIWindow(windowScene: scene)
         let preferences = UserDefaults.standard
-        let keys = ["sakamoto.location.setupWizardSeen", "sakamoto.location.setupWizardStep", "sakamoto.location.cacheRecoveryActive", "sakamoto.location.cacheRecoveryStep"]
+        let keys = ["sakamoto.location.setupWizardSeen", "sakamoto.location.setupWizardStep", "sakamoto.location.cacheRecoveryActive", "sakamoto.location.cacheRecoveryStep", "sakamoto.location.guideFlow", "sakamoto.location.networkGuideStep"]
         let previous = keys.reduce(into: [String: Any]()) { values, key in values[key] = preferences.object(forKey: key) }
         let step = Int(ProcessInfo.processInfo.environment["SAKAMOTO_LOCATION_REVIEW_STEP"] ?? "0") ?? 0
         preferences.set(false, forKey: keys[0])
         preferences.set(step, forKey: keys[1])
         let recovery = ProcessInfo.processInfo.environment["SAKAMOTO_LOCATION_REVIEW_RECOVERY"] == "true"
-        preferences.set(recovery, forKey: keys[2])
+        let flow = ProcessInfo.processInfo.environment["SAKAMOTO_LOCATION_REVIEW_FLOW"] ?? (recovery ? "activation" : "setup")
+        preferences.set(false, forKey: keys[2])
         preferences.set(step, forKey: keys[3])
+        preferences.set(flow, forKey: keys[4]); preferences.set(step, forKey: keys[5])
         defer {
             for key in keys {
                 if let value = previous[key] { preferences.set(value, forKey: key) }
@@ -43,7 +45,7 @@ final class VirtualLocationControlTests: XCTestCase {
         XCTAssertGreaterThan(data.count, 20_000)
         let folder = URL(fileURLWithPath: directory); try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let device = UIDevice.current.userInterfaceIdiom == .pad ? "tablet" : "phone"
-        let name = "\(device)-ios-\(recovery ? "recovery" : "setup")-step-\(step + 1)\(variant.isEmpty ? "" : "-" + variant).png"
+        let name = "\(device)-ios-\(flow)-step-\(step + 1)\(variant.isEmpty ? "" : "-" + variant).png"
         try data.write(to: folder.appendingPathComponent(name))
         window.isHidden = true
     }
@@ -160,6 +162,56 @@ final class VirtualLocationControlTests: XCTestCase {
         await model.startRoute(); XCTAssertNil(model.settings.route); XCTAssertNil(model.snapshot.route); XCTAssertNotNil(model.message)
     }
 
+    func testStopPersistsRestorationGuideOnlyAfterConfirmedControl() async throws {
+        let name = "LocationGuide-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set(LocationGuideFlow.activation.rawValue, forKey: "sakamoto.location.guideFlow")
+        defaults.set(3, forKey: "sakamoto.location.networkGuideStep")
+        let tunnel = LocationControlTunnel()
+        let model = VirtualLocationModel(tunnel: tunnel, supportsSimulation: true, guideDefaults: defaults)
+        model.settings = VirtualLocationSettings(enabled: true, latitude: 22.5, longitude: 114)
+        model.latitude = "invalid unapplied edit"
+        model.locationServicesEnabled = false
+        tunnel.fail = true
+        await model.stopForRestoration()
+        XCTAssertFalse(model.restorationGuideRequested)
+        XCTAssertEqual(defaults.string(forKey: "sakamoto.location.guideFlow"), "activation")
+        XCTAssertTrue(model.settings.enabled)
+        tunnel.fail = false
+        await model.stopForRestoration()
+        XCTAssertTrue(model.restorationGuideRequested)
+        XCTAssertFalse(model.settings.enabled)
+        XCTAssertEqual(defaults.string(forKey: "sakamoto.location.guideFlow"), "restoration")
+        XCTAssertEqual(defaults.integer(forKey: "sakamoto.location.networkGuideStep"), 0)
+        XCTAssertEqual(model.locationServicesEnabled, false)
+        XCTAssertEqual(tunnel.reloads, 0)
+        let reopened = try XCTUnwrap(UserDefaults(suiteName: name))
+        XCTAssertEqual(reopened.string(forKey: "sakamoto.location.guideFlow"), "restoration")
+    }
+    func testUnexpectedEnabledReplyDoesNotOpenRestorationGuide() async {
+        let tunnel = LocationControlTunnel(); tunnel.refuseStop = true
+        let model = VirtualLocationModel(tunnel: tunnel, supportsSimulation: true)
+        model.settings.enabled = true
+        await model.stopForRestoration()
+        XCTAssertFalse(model.restorationGuideRequested)
+        XCTAssertTrue(model.settings.enabled)
+        XCTAssertFalse(model.snapshotAvailable)
+        XCTAssertTrue(model.message?.contains("not confirmed") == true)
+    }
+    func testEarlierRewritesDoNotConfirmCurrentVerification() {
+        let model = VirtualLocationModel(tunnel: LocationControlTunnel(), supportsSimulation: true)
+        model.vpnRunning = true; model.snapshotAvailable = true; model.locationServicesEnabled = true
+        model.snapshot.enabled = true; model.snapshot.requests = 12; model.snapshot.patched = 10
+        XCTAssertTrue(model.verificationHint(since: 10).contains("No new rewrite"))
+        model.snapshot.patched = 11
+        XCTAssertTrue(model.verificationHint(since: 10).contains("during this check"))
+        model.snapshot.requests = 0; model.snapshot.patched = 0
+        XCTAssertTrue(model.verificationHint(since: 0).contains("No location request"))
+        model.locationServicesEnabled = false
+        XCTAssertTrue(model.verificationHint(since: 0).contains("Enable Location Services"))
+    }
+
     func testFailedControlDoesNotReportSuccess() async {
         let tunnel = LocationControlTunnel(); tunnel.fail = true
         let model = VirtualLocationModel(tunnel: tunnel)
@@ -175,6 +227,7 @@ private final class LocationControlTunnel: TunnelControlling, @unchecked Sendabl
     var settings: VirtualLocationSettings?
     var reloads = 0
     var fail = false
+    var refuseStop = false
     var evidence = VirtualLocationSnapshot()
     func connect(options: TunnelStartOptions) async throws {}
     func disconnect() async throws {}
@@ -185,7 +238,7 @@ private final class LocationControlTunnel: TunnelControlling, @unchecked Sendabl
     func location(settings: VirtualLocationSettings?) async throws -> VirtualLocationSnapshot {
         if fail { throw TunnelProfile.InvalidProfile("provider unavailable") }
         if let settings {
-            self.settings = settings; evidence.enabled = settings.enabled; evidence.route = settings.route
+            self.settings = settings; evidence.enabled = refuseStop ? true : settings.enabled; evidence.route = settings.route
             evidence.latitude = settings.latitude; evidence.longitude = settings.longitude
             evidence.routeState = settings.route == nil ? nil : settings.route!.paused ? "Paused" : "Moving"
         }

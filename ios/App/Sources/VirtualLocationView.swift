@@ -27,14 +27,17 @@ final class VirtualLocationModel: NSObject, ObservableObject, @preconcurrency CL
     @Published var message: String?
     @Published var observed: String?
     @Published var observing = false
+    @Published var restorationGuideRequested = false
+    private let guideDefaults: UserDefaults
+    private var observingRealLocation = false
     private let locationManager = CLLocationManager()
     private var observationTimeout: Task<Void, Never>?
     private var certificateServer: MobilelocationCertificateServer?
     private var certificateTimeout: Task<Void, Never>?
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
 
-    init(tunnel: TunnelControlling, supportsSimulation: Bool = VirtualLocationStore.supportsNetworkSimulation) {
-        self.tunnel = tunnel; self.supportsSimulation = supportsSimulation
+    init(tunnel: TunnelControlling, supportsSimulation: Bool = VirtualLocationStore.supportsNetworkSimulation, guideDefaults: UserDefaults = .standard) {
+        self.tunnel = tunnel; self.supportsSimulation = supportsSimulation; self.guideDefaults = guideDefaults
         super.init()
         latitude = String(settings.latitude); longitude = String(settings.longitude); accuracy = String(settings.accuracy)
         if let route = VirtualLocationStore.routeDraft() {
@@ -55,8 +58,9 @@ final class VirtualLocationModel: NSObject, ObservableObject, @preconcurrency CL
         let value = VirtualLocationSettings(enabled: enabled, latitude: lat, longitude: lon, accuracy: meters)
         try value.validate(); return value
     }
-    func apply(enabled: Bool, useEditedCoordinates: Bool = true) async {
-        guard !busy else { return }; busy = true; defer { busy = false }
+    @discardableResult
+    func apply(enabled: Bool, useEditedCoordinates: Bool = true) async -> Bool {
+        guard !busy else { return false }; busy = true; defer { busy = false }
         do {
             var value = settings
             if useEditedCoordinates { value = try proposed(enabled: enabled) }
@@ -70,8 +74,9 @@ final class VirtualLocationModel: NSObject, ObservableObject, @preconcurrency CL
             vpnRunning = state == .running
             if state == .running {
                 snapshot = try await tunnel.location(settings: value)
+                guard snapshot.enabled == enabled else { throw TunnelProfile.InvalidProfile("Location proxy state was not confirmed. Refresh diagnostics and retry.") }
                 snapshotAvailable = true
-                message = enabled ? "Enabled. Request a new location in the target app, then check the evidence below." : "Simulation stopped. Apps may keep their last location until they request a fresh fix."
+                message = enabled ? "Location proxy enabled. Follow the activation steps, then request a fresh location in your target app." : "Simulation stopped. Restore Wi-Fi, turn Airplane Mode off, and re-enable Location Services to obtain a fresh real location."
             } else if state == .starting || state == .stopping {
                 throw TunnelProfile.InvalidProfile("Wait for the VPN to finish changing state")
             } else {
@@ -82,7 +87,28 @@ final class VirtualLocationModel: NSObject, ObservableObject, @preconcurrency CL
             }
             settings = value
             vpnRunning = state == .running
-        } catch { snapshotAvailable = false; message = error.localizedDescription }
+            return true
+        } catch { snapshotAvailable = false; message = error.localizedDescription; return false }
+    }
+    func stopForRestoration() async {
+        guard await apply(enabled: false, useEditedCoordinates: false) else { return }
+        guideDefaults.set(LocationGuideFlow.restoration.rawValue, forKey: "sakamoto.location.guideFlow")
+        guideDefaults.set(0, forKey: "sakamoto.location.networkGuideStep")
+        guideDefaults.set(false, forKey: "sakamoto.location.cacheRecoveryActive")
+        restorationGuideRequested = true
+    }
+    func verificationHint(since baseline: Int64?) -> String {
+        guard vpnRunning else { return "Connect Sakamoto VPN before checking simulation." }
+        guard snapshotAvailable else { return "Proxy diagnostics are unavailable. Refresh diagnostics or reconnect the VPN." }
+        guard snapshot.enabled else { return "The location proxy is off. Return to Connect Wi-Fi and start, then tap Start simulation at selected place." }
+        guard locationServicesEnabled == true else { return "Enable Location Services before requesting a fresh position." }
+        if let baseline, snapshot.patched > baseline {
+            return "A new response was rewritten during this check. Verify the reported position separately; GPS or app caches can still take precedence."
+        }
+        if snapshot.requests == 0 {
+            return "No location request has reached the proxy. Ask Maps for a fresh fix and refresh diagnostics. If the count stays zero, the system may be using a cached/GPS fix or bypassing the proxy."
+        }
+        return "No new rewrite during this check. Request a fresh fix and refresh diagnostics. Check TLS failures and pass-through counts; earlier rewrites do not confirm this attempt."
     }
     func startRoute() async {
         do { try await applyRoute(VirtualLocationRoute.parse(routeText, duration: routeDuration.trimmingCharacters(in: .whitespaces), interval: routeInterval.trimmingCharacters(in: .whitespaces))) }
@@ -240,12 +266,13 @@ final class VirtualLocationModel: NSObject, ObservableObject, @preconcurrency CL
         } catch { message = error.localizedDescription }
     }
     func deleteFavorites(_ offsets: IndexSet) { favorites.remove(atOffsets: offsets); try? VirtualLocationStore.saveFavorites(favorites) }
-    func observeLocation() {
+    func observeLocation(restoringRealLocation: Bool = false) {
         guard locationServicesEnabled != false else {
             observed = "Fresh measurement paused: Location Services is off. Enable it in Settings → Privacy & Security → Location Services when you want to measure a new system location."
             return
         }
         guard !observing else { return }; observing = true; observed = nil
+        observingRealLocation = restoringRealLocation
         observationTimeout?.cancel()
         observationTimeout = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 10_000_000_000)
@@ -263,14 +290,15 @@ final class VirtualLocationModel: NSObject, ObservableObject, @preconcurrency CL
     }
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard observing, let fix = locations.last, abs(fix.timestamp.timeIntervalSinceNow) < 30, fix.horizontalAccuracy >= 0 else { return }
+        let restoring = observingRealLocation
         cancelObservation()
         let target = CLLocation(latitude: snapshot.latitude ?? settings.latitude, longitude: snapshot.longitude ?? settings.longitude)
         let distance = fix.distance(from: target)
         let point = String(format: "%.6f, %.6f · ±%.0f m", fix.coordinate.latitude, fix.coordinate.longitude, fix.horizontalAccuracy)
-        observed = point + "\n" + (distance <= max(100, Double(settings.accuracy) * 3) ? "Reported position is near the selected point." : "Reported position differs by \(Int(distance)) m. GPS or cached positioning may take precedence.")
+        observed = point + "\n" + (restoring ? "Fresh system location received. Compare these coordinates with your real surroundings to confirm restoration." : distance <= max(100, Double(settings.accuracy) * 3) ? "Reported position is near the selected point." : "Reported position differs by \(Int(distance)) m. GPS or cached positioning may take precedence.")
     }
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) { cancelObservation(); observed = "Could not obtain a fresh location. Check Location Services and retry." }
-    func cancelObservation() { observationTimeout?.cancel(); observationTimeout = nil; locationManager.stopUpdatingLocation(); observing = false }
+    func cancelObservation() { observationTimeout?.cancel(); observationTimeout = nil; locationManager.stopUpdatingLocation(); observing = false; observingRealLocation = false }
     var routeSummary: String {
         guard let route = snapshot.route else { return "No route running" }
         return "\(snapshot.routeState ?? "Unknown") · \(Int(snapshot.routeElapsed ?? 0)) / \(route.durationSeconds) s · \(route.points.count) points · \(String(format: "%.1f", route.distance / Double(route.durationSeconds) * 3.6)) km/h"
@@ -288,6 +316,8 @@ struct VirtualLocationView: View {
     @State private var mapMode: MapMode?
     @State private var showGuide = false
     @AppStorage("sakamoto.location.setupWizardSeen") private var guideSeen = false
+    @AppStorage("sakamoto.location.guideFlow") private var storedFlow = LocationGuideFlow.setup.rawValue
+    @AppStorage("sakamoto.location.networkGuideStep") private var networkStep = 0
     @Environment(\.scenePhase) private var scenePhase
     private enum MapMode: String, Identifiable { case position, route; var id: String { rawValue } }
     init(tunnel: TunnelControlling, supportsSimulation: Bool = VirtualLocationStore.supportsNetworkSimulation) {
@@ -297,9 +327,12 @@ struct VirtualLocationView: View {
         ScrollViewReader { proxy in
         List {
             Section("Setup guide") {
-                Button("Continue setup") { showGuide = true }
-                Text("One step per page, with shortcuts to Settings, the map and moving routes. Your place in the guide is remembered.")
+                Button("Continue guide") { showGuide = true }
+                Text("Follow certificate setup, activation, or real-location restoration one page at a time. Your current guide and page are saved.")
                     .font(.footnote).foregroundStyle(.secondary)
+                Button("Begin activation steps") { networkStep = 0; storedFlow = LocationGuideFlow.activation.rawValue; showGuide = true }
+                    .disabled(!model.supportsSimulation)
+                Button("Restore real location") { Task { await model.stopForRestoration() } }.disabled(model.busy)
                 if model.locationServicesEnabled == false {
                     Label("Location Services is off. Fresh system-location measurements are paused.", systemImage: "location.slash")
                     Button("Try opening Location Services") { model.openSetupSettings(.locationServices) }
@@ -307,9 +340,9 @@ struct VirtualLocationView: View {
                 }
             }
             Section {
-                Toggle("Simulate network location", isOn: Binding(get: { model.settings.enabled }, set: { enabled in Task { await model.apply(enabled: enabled, useEditedCoordinates: enabled) } }))
+                Toggle("Simulate network location", isOn: Binding(get: { model.settings.enabled }, set: { enabled in Task { if enabled { await model.apply(enabled: true) } else { await model.stopForRestoration() } } }))
                     .disabled(model.busy || !model.supportsSimulation)
-                LabeledContent("Status", value: model.vpnRunning && !model.snapshotAvailable ? "Unknown" : model.snapshot.enabled ? "Active" : model.settings.enabled ? (model.vpnRunning ? "Not active" : "Waiting for VPN") : "Off")
+                LabeledContent("Status", value: model.vpnRunning && !model.snapshotAvailable ? "Unknown" : model.snapshot.enabled ? "Proxy enabled — verify position" : model.settings.enabled ? (model.vpnRunning ? "Not active" : "Waiting for VPN") : "Off")
                 if !model.supportsSimulation { Text("Network-location simulation is unavailable on iOS 27 and later.").font(.footnote).foregroundStyle(.secondary) }
                 if model.busy { ProgressView("Updating…") }
                 if let message = model.message { Text(message).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled) }
@@ -387,6 +420,9 @@ struct VirtualLocationView: View {
         .navigationTitle("Virtual location")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { if !guideSeen { guideSeen = true; showGuide = true } }
+        .onChange(of: model.restorationGuideRequested) { requested in
+            if requested { showGuide = true; model.restorationGuideRequested = false }
+        }
         .fullScreenCover(isPresented: $showGuide) {
             LocationSetupGuide(model: model, showRoute: { jump(to: "route", using: proxy) })
         }

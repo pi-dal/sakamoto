@@ -6,28 +6,50 @@ Available from **Settings → Virtual location**. Choose places and route stops 
 
 ## In-app setup guide
 
-Open **Settings → Virtual location → Continue setup**. The guide opens as a separate screen with **one step per page**, a fixed **Previous / Next** footer, and a **Jump to step** menu. It opens automatically the first time this version's guide is visited, remembers the current page, and can be closed or resumed at any time. Returning from the map or system settings retains the page. Next and Done only navigate or close the guide; they do not start simulation or claim that setup is complete.
+Open **Settings → Virtual location → Continue guide** on iOS (**Continue setup** on Android). The guide opens as a separate screen with **one step per page**, a fixed **Previous / Next step** footer, and a **Jump to step** menu. It remembers both the current flow and page, including after Settings or a restart. Next only navigates; **Close guide** does not certify setup, activation, or restoration.
 
-- **iOS:** download the device certificate → install the profile → enable and check full trust → choose a place → connect VPN and explicitly start → check the reported position. There is no mandatory off/on toggle. **Refresh a stale location** opens a separate, optional four-page recovery guide: pause Location Services → restart the phone → reconnect VPN and explicitly resume simulation while location remains off → enable location and verify. Recovery mode and page survive closing the guide and restarting. Old guide pages 6–8 resume at verification. The Home link closes the guide and switches to Home; after connecting, return to Virtual location and tap Continue setup. Settings shortcuts use `App-Prefs:root=…`, with the manual path always visible. iOS may accept a URL while opening a different page; acceptance is not destination verification. A rejected shortcut falls back to Sakamoto app settings with a manual recovery message. Opening Settings does not establish profile installation or trust. Returning refreshes system Location Services and VPN/runtime status; run **Check certificate trust** after changing trust.
+- **iOS:** certificate download → profile install → full-trust check → choose a place → **Begin activation steps**. Activation walks through Airplane Mode on → Wi-Fi fully off in Settings → Location Services off → Wi-Fi on and connected, then connect Sakamoto VPN and tap **Start simulation at selected place** → Airplane Mode off → Location Services on and verify. A separate **Verify current setup** action supports checking an already configured session. Successful stop opens the three-page **Restore real location** guide automatically; **Still old? Refresh real location** opens the full radio/location refresh sequence. Restart is optional while location is off. Legacy cache-recovery mode restarts at the complete activation sequence. Settings shortcuts keep manual paths visible because accepted URLs can still open the wrong page. Returning refreshes Location Services and runtime status; trust requires its own explicit check.
 - **Android:** enable Developer options → choose Sakamoto as the mock location app → keep device Location on and allow app access → choose a place → explicitly start → check the reported position. Buttons open About phone, Developer options, device Location and app settings. The reported location and simulation errors appear inside the verification page. If a settings destination cannot open, the app tries main Settings and shows a manual recovery message. Authorization, location-service and permission states refresh on return. Android must **keep Location on** throughout simulation; it does not use the iOS reset step, certificate or VPN requirement.
 
 The route shortcut closes the guide and opens the existing moving-route controls. Map selection edits only the draft; active simulation changes only on an explicit Apply/Start action. The final page includes an explicit Stop action and restoration instructions.
 
 ## iOS 26
 
-1. Tap **Install location certificate**. Safari downloads the public configuration profile. Install it in Settings. If the download cannot reach localhost through your current proxy, use **Export certificate profile**, save it to Files and open the file to install.
-2. Open **Settings → General → About → Certificate Trust Settings** and enable full trust for **Sakamoto Location CA**.
-3. Return to Sakamoto and tap **Check certificate trust**. This uses default iOS TLS validation against a temporary local HTTPS server; it does not bypass certificate validation.
-4. Tap **Choose on map**, select a place and tap **Done**. Set accuracy, enable **Simulate network location**, and connect Sakamoto VPN. Saved intent waits for the VPN if it is disconnected.
-5. Request a new location in the app being tested. **Location Services must be on to obtain a fresh system location.** The global switch at **Settings → Privacy & Security → Location Services** disables app access to GPS, Wi-Fi and cellular location together; leaving it off does not force network-only positioning. Sakamoto respects an off switch, pauses its own measurement, and does not change it automatically.
-6. In Sakamoto, **Refresh proxy diagnostics** shows TLS connections, location requests, rewrites, pass-through counts and failures. **Check reported location** asks iOS for a separate location observation.
-7. If the old position persists, choose **Refresh a stale location**. Turn Location Services off, restart the phone, reconnect Sakamoto VPN and explicitly resume simulation while location remains off, then enable Location Services and verify. This optional procedure is based on reference-project cache troubleshooting; it is not an Apple-supported cache-clearing API or a guarantee of success. An immediate off/on toggle is not established as sufficient. See [the settings and recovery research](ios-location-settings-research.md) for evidence and validation limits.
+First install the certificate profile and enable full trust in **Settings → General → About → Certificate Trust Settings**. Return and run **Check certificate trust**, then choose a place on the map. Profile download alone does not install or trust it. If Safari cannot download from localhost through the current proxy, export the profile to Files and open it to install.
 
-The feature runs in the existing VPN extension on Wi-Fi/cellular when the OS routes the location service through the configured proxy. It rewrites recognized Apple network-positioning responses; it does not directly write GPS data. A successful rewrite is evidence of interception, not proof that every app uses that point. GPS, caches, service pinning and proxy behavior can take precedence. iOS 27+ is disabled based on the reference project's reported compatibility block.
+Tap **Begin activation steps** and follow these pages in order:
 
-Turn off the switch to stop rewriting and restore the original system proxy settings. Stop works even when an unsaved coordinate field is invalid. Coordinate updates do not reload the VPN core; enabling/disabling requires a system proxy settings update. Apps may retain the last location until a fresh fix arrives.
+1. Turn **Airplane Mode ON** in Control Center. Cellular connectivity pauses; Wi-Fi may remain enabled.
+2. Open **Settings → Wi-Fi** and turn the switch **OFF**. The Control Center button usually disconnects a network while leaving Wi-Fi available for Location Services; it is not the full-off action required by this procedure.
+3. Open **Settings → Privacy & Security → Location Services** and turn the top switch **OFF**. Keep it off through the next page. If a previous attempt stayed stale, an optional restart belongs here; after unlocking, resume the guide, recheck radio settings and continue.
+4. Keep Airplane Mode on. Turn Wi-Fi **ON** in Settings, join a network with internet access, connect **Sakamoto VPN** from Home, return to **Virtual location → Continue guide**, and tap **Start simulation at selected place**. Confirm **Network-location proxy enabled** before continuing. If trust is missing, recheck it. Opening Home or tapping Next does not start simulation.
+5. Turn **Airplane Mode OFF**. Wait for the VPN to reconnect if the network change interrupted it; return to the preceding page if simulation is no longer confirmed.
+6. Turn **Location Services ON**, then request a fresh location in Maps or the target app. Tap **Check reported location** and compare against the selected place.
 
-The CA is unique to the device. Its private key stays in the existing App Group's device-only Keychain and is never included in profiles, IPC or reports. The public profile may be removed from Settings after disabling this feature if it is no longer needed.
+This sequence adapts the reference project's activation instructions to Sakamoto's PacketTunnel. It does not establish that a two-second delay clears caches, that restarting always works, or that GPS is overridden. A working Wi-Fi connection is needed for the Airplane Mode stage. An already configured/cellular session can use **Verify current setup**; it is not claimed to have completed this refresh procedure.
+
+**Diagnose the result:**
+
+- VPN disconnected or proxy unconfirmed: restore the connection and explicitly start simulation first.
+- **Location requests** remains zero after requesting a new fix: the system may be returning GPS/cached data or bypassing the proxy. Repeating certificate installation does not prove the request path works.
+- Requests arrive but no new rewrites: inspect **TLS failures**, **Passed through unchanged**, and the diagnostic detail; check trust and upstream reachability. A format or OS incompatibility may also prevent processing.
+- A new rewrite appears but the reported location differs: interception worked for that response; GPS, caches or the app's own location behavior may still take precedence. The guide shows **new rewrites during this check**, rather than treating a historical total as current success.
+
+**Stop and restore real location:**
+
+Turning the simulation switch off or tapping **Stop and restore real location** requests a stop. Only a successful, confirmed stop opens restoration guidance; failures keep their error and do not claim restoration.
+
+1. Restore Wi-Fi if you turned it off; rejoin your usual network.
+2. Turn Airplane Mode **OFF** to restore cellular connectivity.
+3. Turn Location Services **ON** when you want fresh positioning. Request a new fix in Maps/the target app and use **Check reported location** to compare coordinates with your real surroundings. Sakamoto cannot know the true physical coordinate, so it does not declare restoration based on proximity to the former simulated point.
+
+If it remains stale, **Still old? Refresh real location** provides Airplane Mode on → Wi-Fi fully off → Location Services off → Wi-Fi restored with simulation remaining off → Airplane Mode off → Location Services on and verify. An optional restart belongs at the location-off page. Stop does not automatically re-enable system Location Services, and the app respects a user who chooses to leave it off.
+
+Sakamoto restores its own previous NE proxy settings when simulation stops. It does **not** install the reference App Mode's manual Wi-Fi HTTP proxy, so its guide does not ask you to remove that proxy. The VPN can remain connected for normal proxy/Tailscale use. Coordinate updates do not reload the VPN core; enabling/disabling changes the system proxy settings. Apps may retain a last fix until they request another one.
+
+The feature rewrites recognized Apple network-positioning responses; it does not directly write GPS data. iOS 27+ remains disabled based on the reference compatibility report. The device-specific CA private key stays in device-only Keychain and is absent from profiles, IPC and reports. After stopping, you may remove its public profile if no longer needed.
+
+See [the settings and activation/restoration research](ios-location-settings-research.md) for exact source references and physical-device validation limits.
 
 ## Android
 

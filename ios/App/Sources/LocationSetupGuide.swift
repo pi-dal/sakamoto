@@ -1,6 +1,26 @@
 import SwiftUI
 
-/// One task per screen. Setup and optional cache recovery survive Settings and reopening.
+/// Separate setup, activation, and restoration; every page names its next action.
+enum LocationGuideFlow: String {
+    case setup, activation, restoration, restorationRefresh
+    var isRestoring: Bool { self == .restoration || self == .restorationRefresh }
+    var title: String {
+        switch self {
+        case .setup: return "Location setup"
+        case .activation: return "Activate network location"
+        case .restoration, .restorationRefresh: return "Restore real location"
+        }
+    }
+    var titles: [String] {
+        if self == .setup { return ["Download your certificate", "Install the profile", "Enable full trust", "Choose a place", "Prepare and start simulation", "Verify the result"] }
+        let restore = ["Restore Wi-Fi", "Turn off Airplane Mode", "Enable location and verify"]
+        if self == .restoration { return restore }
+        return ["Turn on Airplane Mode", "Turn Wi-Fi off", "Pause Location Services", isRestoring ? restore[0] : "Connect Wi-Fi and start", restore[1], restore[2]]
+    }
+    func clampedStep(_ value: Int) -> Int { min(max(value, 0), titles.count - 1) }
+    func networkStep(_ value: Int) -> Int { self == .restoration ? value + 3 : value }
+}
+
 struct LocationSetupGuide: View {
     @ObservedObject var model: VirtualLocationModel
     var showRoute: () -> Void
@@ -8,15 +28,16 @@ struct LocationSetupGuide: View {
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("sakamoto.location.setupWizardStep") private var storedStep = 0
-    @AppStorage("sakamoto.location.cacheRecoveryActive") private var recovering = false
-    @AppStorage("sakamoto.location.cacheRecoveryStep") private var recoveryStep = 0
+    @AppStorage("sakamoto.location.guideFlow") private var storedFlow = LocationGuideFlow.setup.rawValue
+    @AppStorage("sakamoto.location.networkGuideStep") private var networkStep = 0
+    @AppStorage("sakamoto.location.cacheRecoveryActive") private var legacyRecovery = false
     @State private var choosingPosition = false
-    private let setupTitles = ["Download your certificate", "Install the profile", "Enable full trust", "Choose a place", "Connect and start", "Verify the result"]
-    private let recoveryTitles = ["Pause Location Services", "Restart your device", "Reconnect and resume simulation", "Enable location and verify"]
-    private var titles: [String] { recovering ? recoveryTitles : setupTitles }
-    // Old guide pages 6–8 all resume at verification, without prescribing another toggle.
-    private var step: Int { min(max(recovering ? recoveryStep : storedStep, 0), titles.count - 1) }
-    private var pageID: String { "\(recovering)-\(step)" }
+    @State private var verificationBaseline: Int64?
+    private var flow: LocationGuideFlow { LocationGuideFlow(rawValue: storedFlow) ?? .setup }
+    private var titles: [String] { flow.titles }
+    private var step: Int { flow.clampedStep(flow == .setup ? storedStep : networkStep) }
+    private var pageID: String { "\(flow.rawValue)-\(step)" }
+    private var verifying: Bool { step == titles.count - 1 }
 
     var body: some View {
         NavigationStack {
@@ -29,17 +50,22 @@ struct LocationSetupGuide: View {
                             ForEach(titles.indices, id: \.self) { index in
                                 Button("\(index + 1). \(titles[index])") { go(to: index) }
                             }
+                            Section("Other guides") {
+                                Button("Certificate and place setup") { storedStep = 0; begin(.setup) }
+                                Button("Activation steps") { begin(.activation) }.disabled(!model.supportsSimulation)
+                                Button("Stop and restore real location") { Task { await model.stopForRestoration() } }.disabled(model.busy)
+                            }
                         } label: { Text("Jump to step").frame(minHeight: 44) }
                     }
                     ProgressView(value: Double(step + 1), total: Double(titles.count))
-                        .accessibilityLabel(recovering ? "Cache recovery progress" : "Setup progress")
+                        .accessibilityLabel("Location guide progress")
                 }.padding()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 20) {
                         Text(titles[step]).font(.title2.bold()).accessibilityAddTraits(.isHeader)
-                        if model.supportsSimulation {
-                            if recovering { recoveryContent } else { content }
-                        } else { Text("Network-location simulation is unavailable on iOS 27 and later. You can close this guide and use the other settings.") }
+                        if model.supportsSimulation || flow.isRestoring {
+                            if flow == .setup { setupContent } else { networkContent }
+                        } else { Text("Network-location simulation is unavailable on iOS 27 and later. You can still restore real location from Virtual location.") }
                         if model.busy { ProgressView("Checking or updating…") }
                         if let message = model.message { Text(message).font(.callout).textSelection(.enabled) }
                     }
@@ -52,16 +78,14 @@ struct LocationSetupGuide: View {
                     Button { go(to: step - 1) } label: { Text("Previous").frame(minWidth: 72, minHeight: 44) }
                         .disabled(step == 0)
                     Spacer()
-                    Button(step == titles.count - 1 ? (recovering ? "Verify" : "Done") : "Next") {
-                        if step == titles.count - 1 {
-                            if recovering { finishRecovery() } else { dismiss() }
-                        } else { go(to: step + 1) }
+                    Button(verifying ? "Close guide" : "Next step") {
+                        if verifying { dismiss() } else { go(to: step + 1) }
                     }.buttonStyle(.borderedProminent).frame(minHeight: 44)
                 }.padding().background(Color(uiColor: .systemBackground))
             }
             .controlSize(.large)
             .background(Color(uiColor: .systemGroupedBackground))
-            .navigationTitle(recovering ? "Refresh a stale location" : "Location setup")
+            .navigationTitle(flow.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
             .sheet(isPresented: $choosingPosition) {
@@ -70,20 +94,27 @@ struct LocationSetupGuide: View {
                 }
             }
             .task(id: pageID) {
+                if legacyRecovery {
+                    legacyRecovery = false
+                    begin(.activation)
+                    return
+                }
+                verificationBaseline = nil
+                model.cancelObservation()
                 await model.refresh()
-                guard !recovering, step == setupTitles.count - 1 else { return }
+                guard verifying else { return }
+                verificationBaseline = model.snapshot.patched
                 while !Task.isCancelled {
                     do { try await Task.sleep(nanoseconds: 2_000_000_000) } catch { return }
                     await model.refresh()
                 }
             }
-            .onChange(of: pageID) { _ in model.cancelObservation(); model.message = nil }
             .onChange(of: scenePhase) { phase in if phase == .active { Task { await model.refresh() } } }
             .onDisappear { model.cancelObservation(); model.closeCertificateServer() }
         }
     }
 
-    @ViewBuilder private var content: some View {
+    @ViewBuilder private var setupContent: some View {
         switch step {
         case 0:
             Text("Download the certificate profile in Safari and allow the download. Return here when it finishes.")
@@ -107,59 +138,85 @@ struct LocationSetupGuide: View {
             Text(String(format: "Selected: %.6f, %.6f", model.mapPoint.latitude, model.mapPoint.longitude)).font(.callout)
             Text("Keep the default 25-meter accuracy to start. You can adjust it later in Virtual location.").font(.footnote).foregroundStyle(.secondary)
         case 4:
-            Text("Connect Sakamoto VPN using your configured profile. Then return to Virtual location and tap Continue setup to come back to this page.")
-            openHomeAction
-            startAction
-            if !model.trustChecked { Button("Review certificate trust") { storedStep = 2 } }
-            Text("Starting is explicit. Next only changes the guide page. If you have no VPN profile, add one in Config first.").font(.footnote).foregroundStyle(.secondary)
+            Text("Use a Wi-Fi network for the activation steps. The guide will show when to pause system location, connect the VPN, and tap Start simulation.")
+            Button("Begin activation steps") { begin(.activation) }.buttonStyle(.borderedProminent)
+            Text("If you have no VPN profile, add one in Config first. Next step only opens verification; it does not start simulation.").font(.footnote).foregroundStyle(.secondary)
+            Button("Verify current setup") { go(to: titles.count - 1) }
             Button("Open moving-route controls", action: showRoute)
         default:
-            Text("Ask your target app for a new location, then compare it with the place you selected.")
-            Label(locationServicesStatus, systemImage: model.locationServicesEnabled == true ? "location" : "location.slash")
-            if model.locationServicesEnabled == false {
-                Text("The global switch pauses GPS, Wi-Fi and cellular location for apps. Enable it when you want a fresh system-location measurement.")
-                settingsAction("Try opening Location Services", destination: .locationServices)
-            }
-            Button("Check reported location") { model.observeLocation() }
-                .disabled(model.observing || model.locationServicesEnabled == false).buttonStyle(.borderedProminent)
-            if model.observing { ProgressView("Waiting for a fresh location…") }
-            if let observed = model.observed { Text(observed).textSelection(.enabled) }
-            Text("Rewritten responses: \(model.snapshot.patched)").font(.callout)
-            Text("A rewrite proves interception; the reported position is the separate result. GPS and caches can still win.").font(.footnote).foregroundStyle(.secondary)
-            Button("Refresh a stale location") { recoveryStep = 0; recovering = true }
-            Text("Use the optional recovery guide if the target app keeps its old position. An immediate off/on toggle is not a reliable cache reset.").font(.footnote).foregroundStyle(.secondary)
-            Button("Open Sakamoto location permissions") { model.openAppSettings() }
-            Button("Stop simulation", role: .destructive) { Task { await model.apply(enabled: false, useEditedCoordinates: false) } }.disabled(model.busy)
-            Text("Stopping restores normal responses. Apps may keep their last fix until they request another location; persistent stale results may need a device restart.").font(.footnote).foregroundStyle(.secondary)
+            verificationContent
         }
     }
 
-    @ViewBuilder private var recoveryContent: some View {
-        switch step {
+    @ViewBuilder private var networkContent: some View {
+        switch flow.networkStep(step) {
         case 0:
-            Text("If the position stays stale, open Settings and turn the global Location Services switch OFF. Keep it off through the restart and VPN recovery pages.")
-            settingsAction("Try opening Location Services", destination: .locationServices)
-            Label(locationServicesStatus, systemImage: model.locationServicesEnabled == true ? "location" : "location.slash")
-            Text("This pauses system location for all apps, including GPS and network positioning. It does not force apps to use the simulated point.").font(.callout)
-            Button("Return to verification", action: finishRecovery)
+            Text("In Control Center, turn Airplane Mode ON. Keep it on until the guide tells you to turn it off.")
+            Text("Cellular service will pause. Wi-Fi may remain enabled, so turn it off separately on the next page.").font(.callout)
+            Text("These steps follow the reference project's location-refresh procedure. They do not guarantee that iOS will use the selected point.").font(.footnote).foregroundStyle(.secondary)
         case 1:
-            Text("With Location Services off, restart this device using its power controls. After unlocking, open Sakamoto → Settings → Virtual location → Continue setup. Tap Next to restore the VPN.")
-            Text("Restarting can help when iOS keeps an old position. Verify the result after reconnecting; GPS and other location sources may still take precedence.").font(.callout)
-            Text("Your place in this guide is saved. Sakamoto cannot restart the phone or change the system location switch for you.").font(.footnote).foregroundStyle(.secondary)
+            Text("Open Settings → Wi-Fi and turn the Wi-Fi switch OFF. Keep Airplane Mode on.")
+            settingsAction("Try opening Wi-Fi settings", destination: .wifi)
+            Text("The Control Center Wi-Fi button usually only disconnects from a network; Wi-Fi can remain available for Location Services.").font(.callout)
         case 2:
-            Text("Keep Location Services off while you reconnect Sakamoto VPN. Return here and explicitly resume simulation before enabling system location.")
-            openHomeAction
-            startAction
-            Text("The VPN and location proxy must be ready before apps request their next fix. Recheck certificate trust if it is no longer verified.").font(.footnote).foregroundStyle(.secondary)
-            if !model.trustChecked { Button("Review certificate trust") { recovering = false; storedStep = 2 } }
+            Text("Open Settings → Privacy & Security → Location Services and turn the top switch OFF. Leave it off while you restore Wi-Fi on the next page.")
+            settingsAction("Try opening Location Services", destination: .locationServices)
+            locationStatus
+            DisclosureGroup("If the previous attempt kept the old location") {
+                Text("You can restart now while Location Services is off. After unlocking, return to Sakamoto → Settings → Virtual location → Continue guide, then tap Next step. Recheck Airplane Mode and Wi-Fi before continuing. Restarting is optional and does not guarantee a cache reset.").font(.callout)
+            }
+        case 3:
+            Text(flow.isRestoring ? "If you turned Wi-Fi off, open Settings → Wi-Fi and turn it back ON. Rejoin your usual network." : "Keep Airplane Mode ON and Location Services OFF. Open Settings → Wi-Fi, turn Wi-Fi ON, and join a network with internet access.")
+            settingsAction("Try opening Wi-Fi settings", destination: .wifi)
+            if flow.isRestoring {
+                Label(model.snapshotAvailable && model.snapshot.enabled ? "Simulation still enabled — stop it first" : model.settings.enabled ? "Simulation still requested — stop it first" : "Simulation stopped", systemImage: model.settings.enabled || model.snapshot.enabled ? "exclamationmark.triangle" : "checkmark.circle")
+                if model.settings.enabled || model.snapshot.enabled { stopAction }
+                Text("Sakamoto restores its previous proxy settings when simulation stops. Keep the VPN connected if you still need it; you do not need to change your Wi-Fi HTTP proxy for Sakamoto.").font(.footnote).foregroundStyle(.secondary)
+            } else {
+                Text("Connect Sakamoto VPN from Home, then return to Virtual location → Continue guide. On this page, tap Start simulation at selected place. Wait for Network-location proxy enabled before continuing.")
+                openHomeAction
+                startAction
+                Text("Next step only moves to the next page. It does not connect the VPN or start simulation.").font(.footnote).foregroundStyle(.secondary)
+                if !model.trustChecked { Button("Review certificate trust") { storedFlow = LocationGuideFlow.setup.rawValue; storedStep = 2 } }
+            }
+        case 4:
+            Text("Turn Airplane Mode OFF in Control Center. Keep Location Services off until the next page.")
+            Text(flow.isRestoring ? "This restores normal cellular connectivity. Simulation must remain off." : "Wait for the VPN to reconnect if changing the network interrupted it. Return to the previous page if the location proxy is no longer enabled.").font(.callout)
         default:
+            Text("Open Settings → Privacy & Security → Location Services and turn the top switch ON when you want apps to obtain a fresh location.")
+            settingsAction("Try opening Location Services", destination: .locationServices)
+            verificationContent
+        }
+    }
+
+    @ViewBuilder private var verificationContent: some View {
+        locationStatus
+        if model.locationServicesEnabled == false {
+            Text("Location Services is still off. Re-enable it before checking a new position; stopping Sakamoto does not turn this system switch back on.")
+            if flow == .setup { settingsAction("Try opening Location Services", destination: .locationServices) }
+        }
+        Text(flow.isRestoring ? "Open your target app or Maps and request a fresh location. Compare the result with your real surroundings." : "Open your target app or Maps and request a fresh location. Compare the result with your selected place.")
+        if flow.isRestoring && (model.settings.enabled || model.snapshot.enabled) {
+            Text("Simulation is still enabled. Stop it before checking restoration.")
+            stopAction
+        }
+        Button("Check reported location") { model.observeLocation(restoringRealLocation: flow.isRestoring) }
+            .disabled(model.observing || model.locationServicesEnabled != true || (flow.isRestoring && (model.settings.enabled || model.snapshot.enabled))).buttonStyle(.borderedProminent)
+        if model.observing { ProgressView("Waiting for a fresh location…") }
+        if let observed = model.observed { Text(observed).textSelection(.enabled) }
+        if flow.isRestoring {
+            Button("Still old? Refresh real location") { begin(.restorationRefresh) }
+            Text("The refresh guide includes the full radio/location sequence and an optional restart while location is off.").font(.footnote).foregroundStyle(.secondary)
+        } else {
             Label(model.vpnRunning ? "VPN connected" : "VPN not connected", systemImage: model.vpnRunning ? "checkmark.circle" : "circle")
             Label(model.snapshotAvailable && model.snapshot.enabled ? "Network-location proxy enabled" : "Network-location proxy not confirmed", systemImage: model.snapshotAvailable && model.snapshot.enabled ? "checkmark.circle" : "circle")
-            Text("Once the VPN and simulation are running, open Settings and enable Location Services. Then tap Verify and request a fresh location in the target app.")
-            settingsAction("Try opening Location Services", destination: .locationServices)
-            Label(locationServicesStatus, systemImage: model.locationServicesEnabled == true ? "location" : "location.slash")
-            Text("Leaving the global switch off prevents apps from obtaining new system locations. If the result still differs, GPS, caches or the OS may be taking precedence.").font(.callout)
+            Text("New rewrites during this check: \(verificationBaseline.map { max(0, model.snapshot.patched - $0) } ?? 0)").font(.callout)
+            Text(model.verificationHint(since: verificationBaseline)).font(.callout)
+            Button("Retry activation steps") { begin(.activation) }
+            stopAction
         }
+        Button("Open Sakamoto location permissions") { model.openAppSettings() }
+        ShareLink("Share diagnostic report", item: model.report)
     }
     private var openHomeAction: some View {
         Button("Open Home to connect VPN") { dismiss(); openURL(URL(string: "sakamoto://home")!) }
@@ -167,17 +224,25 @@ struct LocationSetupGuide: View {
     private var startAction: some View {
         VStack(alignment: .leading, spacing: 12) {
             Label(model.vpnRunning ? "VPN connected" : "VPN not connected", systemImage: model.vpnRunning ? "checkmark.circle" : "circle")
-            Button(model.snapshot.enabled ? "Apply selected place" : "Start at selected place") { Task { await model.apply(enabled: true) } }
+            Button(model.snapshot.enabled ? "Apply selected place" : "Start simulation at selected place") { Task { await model.apply(enabled: true) } }
                 .disabled(model.busy || !model.trustChecked || !model.vpnRunning).buttonStyle(.borderedProminent)
+            if !model.trustChecked {
+                Button("Check certificate trust to enable Start") { Task { await model.checkTrust() } }.disabled(model.busy)
+            } else if !model.vpnRunning {
+                Text("Connect the VPN from Home to enable Start.").font(.callout)
+            }
+            Label(model.snapshotAvailable && model.snapshot.enabled ? "Network-location proxy enabled" : "Network-location proxy not confirmed", systemImage: model.snapshotAvailable && model.snapshot.enabled ? "checkmark.circle" : "circle")
         }
     }
-    private func go(to value: Int) {
-        if recovering { recoveryStep = value } else { storedStep = value }
+    private var stopAction: some View {
+        Button("Stop and restore real location", role: .destructive) { Task { await model.stopForRestoration() } }.disabled(model.busy)
     }
-    private func finishRecovery() { storedStep = setupTitles.count - 1; recovering = false }
-    private var locationServicesStatus: String {
-        guard let enabled = model.locationServicesEnabled else { return "Checking system Location Services…" }
-        return enabled ? "Location Services: ON" : "Location Services: OFF — fresh measurements paused"
+    private func go(to value: Int) {
+        if flow == .setup { storedStep = value } else { networkStep = value }
+    }
+    private func begin(_ value: LocationGuideFlow) { networkStep = 0; storedFlow = value.rawValue }
+    private var locationStatus: some View {
+        Label(model.locationServicesEnabled.map { $0 ? "Location Services: ON" : "Location Services: OFF — fresh measurements paused" } ?? "Checking system Location Services…", systemImage: model.locationServicesEnabled == true ? "location" : "location.slash")
     }
     private func settingsAction(_ title: String, destination: LocationSetupSettingsDestination) -> some View {
         VStack(alignment: .leading, spacing: 10) {
