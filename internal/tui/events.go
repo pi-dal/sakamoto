@@ -266,11 +266,12 @@ func (m *model) onKey(v tea.KeyMsg) tea.Cmd {
 			m.settingsScroll++
 			m.cfgCursor = min(len(m.cfgRows)-1, m.cfgCursor+1)
 		case configPage:
-			if m.configDetail == 2 {
+			switch m.configDetail {
+			case 2:
 				m.groupCursor = min(len(automaticGroupTags)-1, m.groupCursor+1)
-			} else if m.configDetail == policySection {
+			case policySection:
 				m.policyCursor = min(max(0, len(m.cfg.PolicyRules)-1), m.policyCursor+1)
-			} else {
+			default:
 				m.move(1)
 			}
 		default:
@@ -283,11 +284,12 @@ func (m *model) onKey(v tea.KeyMsg) tea.Cmd {
 		case settingsPage:
 			m.cfgCursor = max(0, m.cfgCursor-1)
 		case configPage:
-			if m.configDetail == 2 {
+			switch m.configDetail {
+			case 2:
 				m.groupCursor = max(0, m.groupCursor-1)
-			} else if m.configDetail == policySection {
+			case policySection:
 				m.policyCursor = max(0, m.policyCursor-1)
-			} else {
+			default:
 				m.move(-1)
 			}
 		default:
@@ -300,11 +302,12 @@ func (m *model) onKey(v tea.KeyMsg) tea.Cmd {
 		case homePage:
 			return m.selectCurrent()
 		case configPage:
-			if m.configDetail == 2 {
+			switch m.configDetail {
+			case 2:
 				m.editAutomaticGroup(m.groupCursor)
-			} else if m.configDetail == policySection {
+			case policySection:
 				m.beginPolicyEdit(m.policyCursor)
-			} else {
+			default:
 				m.configDetail = 0
 			}
 		case aboutPage:
