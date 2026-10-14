@@ -266,7 +266,9 @@ func (m *model) onKey(v tea.KeyMsg) tea.Cmd {
 			m.settingsScroll++
 			m.cfgCursor = min(len(m.cfgRows)-1, m.cfgCursor+1)
 		case configPage:
-			if m.configDetail == policySection {
+			if m.configDetail == 2 {
+				m.groupCursor = min(len(automaticGroupTags)-1, m.groupCursor+1)
+			} else if m.configDetail == policySection {
 				m.policyCursor = min(max(0, len(m.cfg.PolicyRules)-1), m.policyCursor+1)
 			} else {
 				m.move(1)
@@ -281,7 +283,9 @@ func (m *model) onKey(v tea.KeyMsg) tea.Cmd {
 		case settingsPage:
 			m.cfgCursor = max(0, m.cfgCursor-1)
 		case configPage:
-			if m.configDetail == policySection {
+			if m.configDetail == 2 {
+				m.groupCursor = max(0, m.groupCursor-1)
+			} else if m.configDetail == policySection {
 				m.policyCursor = max(0, m.policyCursor-1)
 			} else {
 				m.move(-1)
@@ -296,7 +300,9 @@ func (m *model) onKey(v tea.KeyMsg) tea.Cmd {
 		case homePage:
 			return m.selectCurrent()
 		case configPage:
-			if m.configDetail == policySection {
+			if m.configDetail == 2 {
+				m.editAutomaticGroup(m.groupCursor)
+			} else if m.configDetail == policySection {
 				m.beginPolicyEdit(m.policyCursor)
 			} else {
 				m.configDetail = 0
@@ -304,6 +310,10 @@ func (m *model) onKey(v tea.KeyMsg) tea.Cmd {
 		case aboutPage:
 			m.aboutCopyright = !m.aboutCopyright
 			m.aboutScroll = 0
+		}
+	case "p":
+		if m.page == configPage {
+			m.configDetail, m.groupCursor = 2, 0
 		}
 	case "c", " ":
 		return m.toggleConnection()

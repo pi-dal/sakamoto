@@ -595,6 +595,10 @@ func (m *model) renderConfig(b *strings.Builder, startY int) {
 		m.renderPolicyEditor(b, startY)
 		return
 	}
+	if m.configDetail == 2 {
+		m.renderAutomaticGroups(b, startY)
+		return
+	}
 	if m.configDetail == 3 {
 		m.renderSources(b, startY)
 		return
@@ -682,8 +686,16 @@ func (m *model) renderConfigForm(b *strings.Builder, startY int) {
 		return
 	}
 	p := newPaneWriter(m, b, startY, 82)
-	p.line(accent.Render("Edit sakamoto.yaml"))
-	p.line("↑↓ choose · Enter selects / edits · Ctrl+S save · Esc cancel")
+	title := "Edit sakamoto.yaml"
+	if m.formGroup != "" {
+		title = m.formGroup + " members"
+	}
+	p.line(accent.Render(title))
+	hint := "↑↓ choose · Enter selects / edits · Ctrl+S save · Esc cancel"
+	if m.formGroup != "" {
+		hint = "↑↓ choose · Enter/Space toggles · Ctrl+S saves · Esc cancel"
+	}
+	p.line(hint)
 	available := max(1, m.height-p.y()-5)
 	if m.formCursor < m.formScroll {
 		m.formScroll = m.formCursor
@@ -709,7 +721,11 @@ func (m *model) renderConfigForm(b *strings.Builder, startY int) {
 		} else {
 			value = "= " + value
 		}
-		p.field(fmt.Sprintf("%-31s %s", r.label, value), "form-field", i, i == m.formCursor)
+		text := fmt.Sprintf("%-31s %s", r.label, value)
+		if m.formGroup != "" {
+			text = value + " " + r.label
+		}
+		p.field(text, "form-field", i, i == m.formCursor)
 	}
 	p.line(m.formNotice)
 	p.buttons(control{text: "[ Save ]", action: "form-save"}, control{text: "[ Cancel ]", action: "form-cancel"})

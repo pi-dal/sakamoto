@@ -27,8 +27,9 @@ type Config struct {
 	// Fallbacks maps selector tags to ordered chains of their outbound members.
 	// Prefer the first healthy member; fail over when selected member dies and
 	// switch back after recover_after consecutive successful health checks.
-	Fallbacks       map[string][]string `yaml:"fallbacks"`
-	FallbackEnabled bool                `yaml:"fallback_enabled"` // automatic RealityAuto → OthersAuto failover
+	AutomaticGroupExclusions map[string][]string `yaml:"automatic_group_exclusions,omitempty"` // persistent node tags excluded from URL testing
+	Fallbacks                map[string][]string `yaml:"fallbacks"`
+	FallbackEnabled          bool                `yaml:"fallback_enabled"` // automatic RealityAuto → OthersAuto failover
 
 	CheckInterval time.Duration `yaml:"check_interval"` // default 30s
 	RecoverAfter  int           `yaml:"recover_after"`  // default 2
@@ -226,6 +227,9 @@ func Load(path string) (*Config, error) {
 	if err := c.ValidatePolicy(); err != nil {
 		return nil, err
 	}
+	if err := c.ValidateAutomaticGroups(); err != nil {
+		return nil, err
+	}
 	if c.S3.Enabled {
 		if _, err := c.S3.ObjectURL(); err != nil {
 			return nil, err
@@ -339,12 +343,32 @@ func (c *Config) ValidateExperiment() error {
 	return nil
 }
 
+// ValidateAutomaticGroups rejects misspelled groups and invalid node tags.
+func (c *Config) ValidateAutomaticGroups() error {
+	for group, tags := range c.AutomaticGroupExclusions {
+		if group != "RealityAuto" && group != "OthersAuto" {
+			return fmt.Errorf("automatic_group_exclusions: unknown group %q", group)
+		}
+		seen := map[string]bool{}
+		for _, tag := range tags {
+			if strings.TrimSpace(tag) == "" || strings.ContainsAny(tag, "\x00\r\n") || seen[tag] {
+				return fmt.Errorf("automatic_group_exclusions.%s must contain distinct non-empty node tags", group)
+			}
+			seen[tag] = true
+		}
+	}
+	return nil
+}
+
 // MarshalYAML serializes the sidecar without writing secrets to stdout.
 func (c *Config) MarshalYAML() ([]byte, error) { return yaml.Marshal(c) }
 
 // Save writes settings without allowing a TUI opened before a credential
 // rotation to silently put the old API key back on disk.
 func (c *Config) Save(path string) error {
+	if err := c.ValidateAutomaticGroups(); err != nil {
+		return err
+	}
 	if c.S3.Enabled {
 		if _, err := c.S3.ObjectURL(); err != nil {
 			return err

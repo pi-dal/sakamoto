@@ -7,6 +7,11 @@ test_settle: 5s
 fallback_enabled: true
 fallbacks:
   MainProxy: [RealityAuto, OthersAuto]
+# Config → Proxy groups edits these persistent node-tag exclusion lists.
+# New matching nodes join automatically after regeneration.
+automatic_group_exclusions:
+  RealityAuto: []
+  OthersAuto: []
 
 chain_enabled: true
 block_quic: true

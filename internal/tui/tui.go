@@ -139,6 +139,10 @@ type model struct {
 	formEditIndex                                   int
 	formCursor, formScroll                          int
 	formNotice                                      string
+	formGroup                                       string
+	formConfigSnapshot                              string
+	formRuntimeSnapshot                             string
+	groupCursor                                     int
 	formCfg                                         *config.Config
 	formRows                                        []cfgRow
 	policyCursor                                    int

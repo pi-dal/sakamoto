@@ -21,6 +21,10 @@ func (m *model) scrollBy(n int) {
 	if m.policyEditing || m.importing || m.editIndex >= 0 || m.formEditing {
 		return
 	}
+	if m.page == configPage && m.configDetail == 2 {
+		m.groupCursor = max(0, min(len(automaticGroupTags)-1, m.groupCursor+n))
+		return
+	}
 	if m.page == configPage && m.configDetail == policySection {
 		m.policyCursor = max(0, min(max(0, len(m.cfg.PolicyRules)-1), m.policyCursor+n))
 		return
@@ -121,6 +125,9 @@ func (m *model) click(x, y int) tea.Cmd {
 		case "section":
 			m.configDetail = h.index
 			m.detailScroll = 0
+		case "edit-auto-group":
+			m.groupCursor = h.index
+			m.editAutomaticGroup(h.index)
 		case "policy-rule":
 			m.policyCursor = h.index
 			m.pendingDelete = ""
@@ -744,6 +751,7 @@ func (m *model) closeConfigForm() {
 	m.formCfg = nil
 	m.formRows = nil
 	m.formNotice = ""
+	m.formGroup, m.formConfigSnapshot, m.formRuntimeSnapshot = "", "", ""
 }
 
 func (m *model) formMove(delta int) {
@@ -803,7 +811,7 @@ func (m *model) handleConfigFormInput(k tea.KeyMsg) tea.Cmd {
 			m.formMove(-1)
 		case "down", "j":
 			m.formMove(1)
-		case "left", "h", "right", "l", "enter", "space":
+		case "left", "h", "right", "l", "enter", "space", " ":
 			m.formSelect(m.formCursor)
 		case "ctrl+s":
 			return m.saveConfigForm()
@@ -842,6 +850,12 @@ func (m *model) handleConfigFormInput(k tea.KeyMsg) tea.Cmd {
 func (m *model) saveConfigForm() tea.Cmd {
 	if m.formEditing {
 		return nil
+	}
+	if m.formGroup != "" {
+		if err := m.validateGroupForm(); err != nil {
+			m.formNotice = err.Error()
+			return nil
+		}
 	}
 	if err := m.formCfg.Save(m.cfgPath); err != nil {
 		m.formNotice = "Save failed: " + err.Error()

@@ -8,9 +8,43 @@ import (
 	"github.com/pi-dal/sakamoto/internal/config"
 )
 
+// AutomaticGroupTag uses the generator's node category for membership editors.
+func AutomaticGroupTag(node map[string]any) string {
+	typeName, _ := node["type"].(string)
+	switch typeName {
+	case "", "selector", "urltest", "direct", "block", "dns", "socks":
+		return ""
+	}
+	tag, _ := node["tag"].(string)
+	if isReality(node) || strings.Contains(strings.ToLower(tag), "reality") {
+		return "RealityAuto"
+	}
+	return "OthersAuto"
+}
+
+func automaticMembers(group string, tags, excluded []string) ([]string, error) {
+	omitted := map[string]bool{}
+	for _, tag := range excluded {
+		omitted[tag] = true
+	}
+	members := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		if !omitted[tag] {
+			members = append(members, tag)
+		}
+	}
+	if len(tags) > 0 && len(members) == 0 {
+		return nil, fmt.Errorf("%s would have no available members; include at least one node in Proxy groups", group)
+	}
+	return members, nil
+}
+
 // buildOutbounds merges manual nodes before subscriptions, classifies automatic groups,
 // and keeps the SOCKS exit separate from the selectable entry nodes.
 func buildOutbounds(o Options, cfg *config.Config, hc *http.Client) ([]map[string]any, []map[string]any, string, []string, error) {
+	if err := cfg.ValidateAutomaticGroups(); err != nil {
+		return nil, nil, "", nil, err
+	}
 	// 3) Nodes.
 	allow := map[string]bool{}
 	for _, h := range strings.Split(o.AllowHosts, ",") {
@@ -72,11 +106,20 @@ func buildOutbounds(o Options, cfg *config.Config, hc *http.Client) ([]map[strin
 	}
 	var realityTags, otherTags []string
 	for _, n := range dataNodes {
-		if isReality(n) || strings.Contains(strings.ToLower(n["tag"].(string)), "reality") {
+		if AutomaticGroupTag(n) == "RealityAuto" {
 			realityTags = append(realityTags, n["tag"].(string)) // Reality protocol or a tag containing "reality".
 		} else {
 			otherTags = append(otherTags, n["tag"].(string))
 		}
+	}
+	var err error
+	realityTags, err = automaticMembers("RealityAuto", realityTags, cfg.AutomaticGroupExclusions["RealityAuto"])
+	if err != nil {
+		return nil, nil, "", nil, err
+	}
+	otherTags, err = automaticMembers("OthersAuto", otherTags, cfg.AutomaticGroupExclusions["OthersAuto"])
+	if err != nil {
+		return nil, nil, "", nil, err
 	}
 	urltest := func(tag string, members []string) map[string]any {
 		return map[string]any{"type": "urltest", "tag": tag, "outbounds": members,

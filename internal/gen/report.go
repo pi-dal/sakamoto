@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/pi-dal/sakamoto/internal/config"
+	"gopkg.in/yaml.v3"
 )
 
 // writeTemplate leaves an existing user-managed sidecar untouched.
@@ -25,6 +26,15 @@ func writeTemplate(out string, cfg *config.Config, mainMembers []string) ([]stri
 			"check_interval: 30s\nrecover_after: 2\ntest_settle: 5s\nfallback_enabled: true\n"
 		if len(chain) > 1 {
 			yamlText += "fallbacks:\n  MainProxy: [" + strings.Join(chain, ", ") + "]\n"
+		}
+		if len(cfg.AutomaticGroupExclusions) > 0 {
+			exclusions, err := yaml.Marshal(struct {
+				Groups map[string][]string `yaml:"automatic_group_exclusions"`
+			}{cfg.AutomaticGroupExclusions})
+			if err != nil {
+				return nil, fmt.Errorf("write automatic group settings: %w", err)
+			}
+			yamlText += string(exclusions)
 		}
 		yamlText += "# Add subscriptions in Config; put manual share links in nodes.txt.\nsubscriptions: []\n"
 		if err := os.WriteFile(sidecarPath, []byte(yamlText), 0600); err != nil {
