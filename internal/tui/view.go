@@ -215,7 +215,7 @@ func (m *model) homeAside() []string {
 	return []string{
 		accent.Render("CURRENT PROXY"), "", "Entry  " + trunc(m.activeNode(), 26), "Selection  " + selection, "Latency  " + latency,
 		"", accent.Render("CHAIN EXIT"), "", trunc(m.exitLabel, 30), "",
-		accent.Render("NETWORK"), "", "Mode  " + mode, "Fallback  " + fallback, "Tailscale  " + map[bool]string{true: "Optimized", false: "Off"}[m.cfg.TailscaleOptimize],
+		accent.Render("NETWORK"), "", "Mode  " + mode, "Fallback  " + fallback,
 	}
 }
 func (m *model) View() string {

@@ -348,7 +348,6 @@ func (m *model) settingsRows(c *config.Config) []cfgRow {
 	return []cfgRow{
 		{label: "TUN · Network"},
 		toggle("Chain SOCKS exit", &c.ChainEnabled),
-		toggle("Optimize Tailscale", &c.TailscaleOptimize),
 		toggle("Sync sources to iCloud", &c.ICloud.Enabled),
 		toggle("Include conf and rule includes", &c.ICloud.IncludeConf),
 		{label: "iCloud directory", value: func() string { return c.ICloud.Directory }, edit: func(s string) error {

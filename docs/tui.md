@@ -1,6 +1,8 @@
 # TUI guide
 
-Launch with `sakamoto`. The status bar distinguishes *TUN started* from *network probe passed*. The probe checks two independent small HTTPS endpoints through macOS routing and, when configured, the local browser proxy entry; it retries with backoff after a failure. A single probe failure is **Unverified**, not a verdict that the network is down. A successful probe confirms only the displayed path, not every domain, TUN capture of excluded routes, DNS privacy, or the proxy's public exit IP. A node's latency likewise does not prove the whole system route works.
+Launch with `sakamoto`. The CLI/TUI does not embed a Tailscale client or require Tailscale to be installed. Its Home and Settings pages focus on proxy operation; Tailscale account, device, and exit-node management belong to the mobile apps or a separate Tailscale app.
+
+The status bar distinguishes *TUN started* from *network probe passed*. The probe checks two independent small HTTPS endpoints through macOS routing and, when configured, the local browser proxy entry; it retries with backoff after a failure. A single probe failure is **Unverified**, not a verdict that the network is down. A successful probe confirms only the displayed path, not every domain, TUN capture of excluded routes, DNS privacy, or the proxy's public exit IP. A node's latency likewise does not prove the whole system route works.
 
 ## Home
 
