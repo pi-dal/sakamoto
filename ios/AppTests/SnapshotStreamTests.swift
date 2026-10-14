@@ -3,6 +3,14 @@ import XCTest
 
 @MainActor
 final class SnapshotStreamTests: XCTestCase {
+    func testReturningConsumerReceivesCachedSnapshot() async {
+        let broadcaster = Broadcaster<[Int]>()
+        broadcaster.yield([42])
+        var iterator = broadcaster.stream().makeAsyncIterator()
+        let snapshot = await iterator.next()
+        XCTAssertEqual(snapshot, [42])
+    }
+
     func testSlowConsumerGetsOnlyLatestFullSnapshot() async {
         let broadcaster = Broadcaster<[Int]>()
         let stream = broadcaster.stream(startingWith: [0])

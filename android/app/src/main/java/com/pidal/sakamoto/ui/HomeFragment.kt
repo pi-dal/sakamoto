@@ -22,7 +22,6 @@ import com.pidal.sakamoto.databinding.FragmentHomeBinding
 import com.pidal.sakamoto.runtime.MobilecoreRuntime
 import com.pidal.sakamoto.runtime.RuntimeState
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.isActive
 
 /** Native grouped settings rows. All phase/reachability semantics stay in Go. */
 class HomeFragment : Fragment() {
@@ -30,6 +29,7 @@ class HomeFragment : Fragment() {
     private var renderingConnection = false
     private var renderedGroups: List<com.pidal.sakamoto.runtime.ConfigRepository.Group>? = null
     private var groupsWereLive = false
+    private var savedGroups: List<com.pidal.sakamoto.runtime.ConfigRepository.Group>? = null
 
     private val vpnPermission =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -84,10 +84,11 @@ class HomeFragment : Fragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
         viewLifecycleOwner.lifecycleScope.launch {
-            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
                 launch { MobilecoreRuntime.state.collect { render(it); renderGroups(CommandClientRuntime.groups.value) } }
                 launch { CommandClientRuntime.groups.collect { renderGroups(it) } }
-                launch { while (kotlinx.coroutines.currentCoroutineContext().isActive) { render(MobilecoreRuntime.state.value); kotlinx.coroutines.delay(1000) } }
+                launch { com.pidal.sakamoto.runtime.VpnDiagnostics.observe(requireContext()).collect { render(MobilecoreRuntime.state.value, it) } }
+                launch { com.pidal.sakamoto.runtime.ConfigRepository.changes.collect { savedGroups = null; renderGroups(CommandClientRuntime.groups.value) } }
             }
         }
     }
@@ -95,6 +96,7 @@ class HomeFragment : Fragment() {
     override fun onDestroyView() {
         binding = null
         renderedGroups = null
+        savedGroups = null
         super.onDestroyView()
     }
 
@@ -162,7 +164,7 @@ class HomeFragment : Fragment() {
         val b = binding ?: return
         val running = MobilecoreRuntime.state.value.serviceState == "Running"
         val isLive = live.isNotEmpty() && running
-        val groups = if (isLive) live else com.pidal.sakamoto.runtime.ConfigRepository.savedGroups(requireContext())
+        val groups = if (isLive) live else savedGroups ?: com.pidal.sakamoto.runtime.ConfigRepository.savedGroups(requireContext()).also { savedGroups = it }
         if (groups == renderedGroups && isLive == groupsWereLive) return
         renderedGroups = groups; groupsWereLive = isLive
         b.groupsContainer.removeAllViews()
@@ -179,7 +181,7 @@ class HomeFragment : Fragment() {
         b.groupsContainer.addView(content)
     }
 
-    private fun render(state: RuntimeState) {
+    private fun render(state: RuntimeState, diagnostics: com.pidal.sakamoto.runtime.VpnDiagnostics.Snapshot = com.pidal.sakamoto.runtime.VpnDiagnostics.snapshot(requireContext())) {
         val b = binding ?: return
         val (title, hint) = when (state.phase) {
             "Starting" -> R.string.phase_starting to R.string.phase_hint_starting
@@ -192,7 +194,6 @@ class HomeFragment : Fragment() {
             else -> R.string.phase_disconnected to R.string.phase_hint_disconnected
         }
         b.phaseValue.setText(title)
-        val diagnostics = com.pidal.sakamoto.runtime.VpnDiagnostics.snapshot(requireContext())
         b.phaseDescription.text = when {
             state.serviceState == "Running" && !diagnostics.vpn -> getString(R.string.vpn_absent)
             state.serviceState == "Running" && diagnostics.physical.isEmpty() -> getString(R.string.vpn_no_network)

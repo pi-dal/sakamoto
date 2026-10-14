@@ -29,6 +29,9 @@ import java.io.File
 object ConfigRepository {
 
     private const val FILE_NAME = "sakamoto-config.json"
+    private val _changes = kotlinx.coroutines.flow.MutableStateFlow(0L)
+    val changes: kotlinx.coroutines.flow.StateFlow<Long> = _changes
+    private val revision = java.util.concurrent.atomic.AtomicLong()
 
     data class PolicyRule(val match: String, val action: String)
 
@@ -120,6 +123,7 @@ object ConfigRepository {
             file(context).writeText(root.toString())
             tmp.delete()
         }
+        _changes.value = revision.incrementAndGet()
     }
 
     fun saveNodeEdit(context: Context, content: String, old: String, name: String) {

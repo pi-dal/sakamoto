@@ -14,9 +14,9 @@ import SakamotoKit
 // that find the channel down THROW — callers turn every failure into a
 // Notice; nothing is a silent no-op.
 //
-// One client carries the streams Home and Data need (Status | Group |
-// Connections | Log | ClashMode). Rules carried over from docs/tui.md
-// (enforced in Go, honored here):
+// The action channel carries only Groups and ClashMode. A separate observer
+// carries Status, Connections and Log while Data is visible; changing pages
+// leaves the action client and the running VPN/Tailscale core in place.
 //   - mode strings travel lowercase (RoutingMode.clashModeValue);
 //   - "Testing" is a local intent flag until the group stream reports a new
 //     URLTestTime (mobilecore.NodeStatus owns the delay -> status mapping);
@@ -42,15 +42,14 @@ final class LibboxCoreCommanding: CoreCommanding, @unchecked Sendable {
     /// waits the server out (handler-bound clients retry internally ~3s);
     /// this covers "tunnel not up at all yet".
     private static let reconnectDelayNanos: UInt64 = 2 * NSEC_PER_SEC
-    /// How often the parked supervisor observes the channel state while
-    /// connected. handleDisconnected clears `active`; the next tick dials
-    /// again — no flag race between loop teardown and a drop.
-    private static let parkedPollNanos: UInt64 = 500 * NSEC_PER_MSEC
-
     private let lock = NSLock()
     private var client: LibboxCommandClient?
     private var clientHandler: GroupStreamHandler?
     private var desiredRunning = false
+    private var foreground = true
+    private var dataVisible = false
+    private var detailClient: LibboxCommandClient?
+    private var detailHandler: GroupStreamHandler?
     private var loopActive = false
     private var active = false
     private var lastConnectError: String?
@@ -74,41 +73,107 @@ final class LibboxCoreCommanding: CoreCommanding, @unchecked Sendable {
     func start() {
         lock.lock()
         desiredRunning = true
-        let shouldKick = !loopActive
-        loopActive = true
+        let shouldKick = foreground && !loopActive
+        if shouldKick { loopActive = true }
         lock.unlock()
         guard shouldKick else { return }
         Task { [weak self] in
             await self?.runConnectLoop()
-            self?.lock.lock()
-            self?.loopActive = false
-            self?.lock.unlock()
+            guard let self else { return }
+            self.lock.lock()
+            self.loopActive = false
+            let restart = self.desiredRunning && self.foreground
+            self.lock.unlock()
+            if restart { self.start() }
         }
     }
 
     func stop() {
+        disconnectClient(preserveDesired: false)
+    }
+
+    func setForeground(_ value: Bool) {
         lock.lock()
-        desiredRunning = false
+        guard foreground != value else { lock.unlock(); return }
+        foreground = value
+        let wanted = desiredRunning
+        lock.unlock()
+        if !value { disconnectClient(preserveDesired: true) }
+        else if wanted { start() }
+    }
+
+    func setDataVisible(_ value: Bool) {
+        lock.lock()
+        dataVisible = value
+        let old = value ? nil : detachDetailsLocked()
+        lock.unlock()
+        if value { startDetails() }
+        else { Task.detached(priority: .utility) { try? old?.disconnect() } }
+    }
+
+    private func disconnectClient(preserveDesired: Bool) {
+        lock.lock()
+        if !preserveDesired { desiredRunning = false }
         let client = self.client
         self.client = nil
-        let wasActive = active
+        clientHandler = nil
+        let details = detachDetailsLocked()
         active = false
         pendingTests.removeAll()
-        failedTests.removeAll()
-        measurementTimes.removeAll()
-        // An intentional stop is not an error; the generic "connect the
-        // tunnel" hint renders until the next start.
-        lastConnectError = nil
-        lock.unlock()
-        if wasActive {
-            availabilityBroadcaster.yield(false)
+        if !preserveDesired {
+            failedTests.removeAll()
+            measurementTimes.removeAll()
+            groupBroadcaster.yield([])
         }
-        guard client != nil || clientHandler != nil else { return }
+        lastConnectError = nil
+        availabilityBroadcaster.yield(false)
+        lock.unlock()
+        Task.detached(priority: .utility) { try? client?.disconnect(); try? details?.disconnect() }
+    }
+
+    private func startDetails() {
+        lock.lock()
+        guard desiredRunning, foreground, active, dataVisible, detailClient == nil else { lock.unlock(); return }
+        let options = LibboxCommandClientOptions()
+        options.addCommand(LibboxCommandStatus)
+        options.addCommand(LibboxCommandConnections)
+        options.addCommand(LibboxCommandLog)
+        options.statusInterval = Int64(NSEC_PER_SEC)
+        let handler = GroupStreamHandler(commanding: self, details: true)
+        let candidate = LibboxNewCommandClient(handler, options)
+        detailHandler = handler
+        detailClient = candidate
+        lock.unlock()
         Task.detached(priority: .utility) { [weak self] in
-            try? client?.disconnect()
-            self?.lock.lock()
-            self?.clientHandler = nil
-            self?.lock.unlock()
+            do { try candidate?.connect() }
+            catch { self?.handleDetailDisconnected(handler) }
+            guard self?.accepts(handler) == true else { try? candidate?.disconnect(); return }
+        }
+    }
+
+    private func detachDetailsLocked() -> LibboxCommandClient? {
+        let old = detailClient
+        detailClient = nil; detailHandler = nil
+        connectionTable = ConnectionTable()
+        connectionsBroadcaster.yield([])
+        return old
+    }
+
+    fileprivate func accepts(_ handler: GroupStreamHandler) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return desiredRunning && foreground && (handler.details ? active && dataVisible && detailHandler === handler : clientHandler === handler)
+    }
+
+    fileprivate func handleDetailDisconnected(_ handler: GroupStreamHandler) {
+        lock.lock()
+        guard detailHandler === handler else { lock.unlock(); return }
+        let old = detailClient
+        detailClient = nil; detailHandler = nil
+        lock.unlock()
+        Task.detached(priority: .utility) { [weak self] in
+            try? old?.disconnect()
+            do { try await Task.sleep(nanoseconds: Self.reconnectDelayNanos) } catch { return }
+            self?.startDetails()
         }
     }
 
@@ -141,18 +206,17 @@ final class LibboxCoreCommanding: CoreCommanding, @unchecked Sendable {
     }
 
     private func runConnectLoop() async {
-        // Supervisor loop: dial until connected, then park and watch for a
-        // drop; every transition is observed from shared state under the
-        // lock, so stop() and handleDisconnected cannot race the loop into
-        // a missed reconnect.
+        // Register before reading state: a disconnect between the state
+        // check and the suspension stays buffered instead of being lost.
+        var changes = availability().makeAsyncIterator()
         while true {
             lock.lock()
-            let shouldRun = desiredRunning
+            let shouldRun = desiredRunning && foreground
             let isActive = active
             lock.unlock()
             guard shouldRun else { return }
             if isActive {
-                try? await Task.sleep(nanoseconds: Self.parkedPollNanos)
+                _ = await changes.next()
                 continue
             }
             do {
@@ -177,10 +241,7 @@ final class LibboxCoreCommanding: CoreCommanding, @unchecked Sendable {
             return
         }
         let options = LibboxCommandClientOptions()
-        options.addCommand(LibboxCommandStatus)
         options.addCommand(LibboxCommandGroup)
-        options.addCommand(LibboxCommandConnections)
-        options.addCommand(LibboxCommandLog)
         options.addCommand(LibboxCommandClashMode)
         // ObjC setter=setStatusInterval: imports as the statusInterval
         // property; the daemon reads it as time.Duration (nanoseconds).
@@ -188,7 +249,7 @@ final class LibboxCoreCommanding: CoreCommanding, @unchecked Sendable {
         let handler = GroupStreamHandler(commanding: self)
         let client = LibboxNewCommandClient(handler, options)
         lock.lock()
-        if self.client == nil {
+        if self.client == nil && desiredRunning && foreground {
             self.client = client
             self.clientHandler = handler
         }
@@ -297,9 +358,10 @@ final class LibboxCoreCommanding: CoreCommanding, @unchecked Sendable {
 
     // MARK: Stream intake (called from the Libbox handler thread)
 
-    fileprivate func handleConnected() {
+    fileprivate func handleConnected(_ source: GroupStreamHandler) {
         lock.lock()
-        guard desiredRunning else {
+        guard clientHandler === source else { lock.unlock(); return }
+        guard desiredRunning, foreground else {
             // stop() won the race with the dial; drop the connection.
             let client = self.client
             lock.unlock()
@@ -309,29 +371,32 @@ final class LibboxCoreCommanding: CoreCommanding, @unchecked Sendable {
         }
         active = true
         lastConnectError = nil
-        lock.unlock()
         availabilityBroadcaster.yield(true)
+        lock.unlock()
+        startDetails()
     }
 
-    fileprivate func handleDisconnected(message: String?) {
+    fileprivate func handleDisconnected(message: String?, source: GroupStreamHandler) {
         lock.lock()
+        guard clientHandler === source else { lock.unlock(); return }
         let wasActive = active
+        let old = client
+        client = nil; clientHandler = nil
+        let details = detachDetailsLocked()
         active = false
         // A drop while the tunnel should be running is an error worth
         // showing; an intentional-stop drop is not.
         if desiredRunning {
             lastConnectError = message
         }
+        if wasActive { availabilityBroadcaster.yield(false) }
         lock.unlock()
-        if wasActive {
-            // "No groups/traffic" is not "no nodes/zero traffic"; surfaces
-            // subscribe to availability to render a real unavailable state.
-            // The supervisor loop observes `active == false` and dials again.
-            availabilityBroadcaster.yield(false)
-        }
+        // Each dial gets a new handler: canceled streams from the previous
+        // connection cannot report a drop against the new connection.
+        Task.detached(priority: .utility) { try? old?.disconnect(); try? details?.disconnect() }
     }
 
-    fileprivate func handleStatus(_ message: LibboxStatusMessage?) {
+    fileprivate func handleStatus(_ message: LibboxStatusMessage?, source: GroupStreamHandler) {
         guard let message else { return }
         let snapshot = TrafficSnapshot(
             uplink: message.uplink,
@@ -342,10 +407,12 @@ final class LibboxCoreCommanding: CoreCommanding, @unchecked Sendable {
             connectionsOut: message.connectionsOut,
             trafficAvailable: message.trafficAvailable
         )
+        lock.lock(); defer { lock.unlock() }
+        guard detailHandler === source, dataVisible, active, foreground else { return }
         trafficBroadcaster.yield(snapshot)
     }
 
-    fileprivate func handleConnectionEvents(_ events: LibboxConnectionEvents?) {
+    fileprivate func handleConnectionEvents(_ events: LibboxConnectionEvents?, source: GroupStreamHandler) {
         guard let events else { return }
         var mapped: [ConnectionEvent] = []
         if let iterator = events.iterator() {
@@ -363,13 +430,14 @@ final class LibboxCoreCommanding: CoreCommanding, @unchecked Sendable {
         }
         guard !mapped.isEmpty || events.reset else { return }
         lock.lock()
+        guard detailHandler === source, dataVisible, active, foreground else { lock.unlock(); return }
         connectionTable.apply(mapped, reset: events.reset)
         let records = connectionTable.sortedByRecent()
-        lock.unlock()
         connectionsBroadcaster.yield(records)
+        lock.unlock()
     }
 
-    fileprivate func handleLogs(_ messageList: LibboxLogIteratorProtocol?) {
+    fileprivate func handleLogs(_ messageList: LibboxLogIteratorProtocol?, source: GroupStreamHandler) {
         guard let messageList else { return }
         var lines: [String] = []
         while messageList.hasNext() {
@@ -378,13 +446,14 @@ final class LibboxCoreCommanding: CoreCommanding, @unchecked Sendable {
         }
         guard !lines.isEmpty else { return }
         lock.lock()
+        guard detailHandler === source, dataVisible, active, foreground else { lock.unlock(); return }
         logBuffer.append(contentsOf: lines)
         let snapshot = logBuffer.allLines
-        lock.unlock()
         logsBroadcaster.yield(snapshot)
+        lock.unlock()
     }
 
-    fileprivate func handleGroups(_ groups: LibboxOutboundGroupIteratorProtocol?) {
+    fileprivate func handleGroups(_ groups: LibboxOutboundGroupIteratorProtocol?, source: GroupStreamHandler) {
         var snapshots: [GroupSnapshot] = []
         if let groups {
             while groups.hasNext() {
@@ -394,6 +463,7 @@ final class LibboxCoreCommanding: CoreCommanding, @unchecked Sendable {
                     while itemIterator.hasNext() {
                         guard let item = itemIterator.next() else { break }
                         lock.lock()
+                        guard clientHandler === source, desiredRunning, foreground else { lock.unlock(); return }
                         // A fresh delay result retires the pending test: the
                         // stream is authoritative once it reports.
                         if let previous = pendingTests[item.tag], item.urlTestTime > previous {
@@ -425,19 +495,23 @@ final class LibboxCoreCommanding: CoreCommanding, @unchecked Sendable {
                 ))
             }
         }
+        lock.lock(); defer { lock.unlock() }
+        guard clientHandler === source, desiredRunning, foreground else { return }
         groupBroadcaster.yield(snapshots)
     }
 
-    fileprivate func handleClashModeInitialize(_ modeList: LibboxStringIteratorProtocol?, currentMode: String?) {
+    fileprivate func handleClashModeInitialize(_ modeList: LibboxStringIteratorProtocol?, currentMode: String?, source: GroupStreamHandler) {
         lock.lock()
-        clashModeValue = RoutingMode(rawValue: currentMode ?? "")
+        guard clientHandler === source, desiredRunning, foreground else { lock.unlock(); return }
+        clashModeValue = RoutingMode.allCases.first { $0.clashModeValue == (currentMode ?? "").lowercased() }
         clashModesSeen = true
         lock.unlock()
     }
 
-    fileprivate func handleClashModeUpdate(_ newMode: String?) {
+    fileprivate func handleClashModeUpdate(_ newMode: String?, source: GroupStreamHandler) {
         lock.lock()
-        clashModeValue = RoutingMode(rawValue: newMode ?? "")
+        guard clientHandler === source, desiredRunning, foreground else { lock.unlock(); return }
+        clashModeValue = RoutingMode.allCases.first { $0.clashModeValue == (newMode ?? "").lowercased() }
         lock.unlock()
     }
 
@@ -486,19 +560,27 @@ final class LibboxCoreCommanding: CoreCommanding, @unchecked Sendable {
 /// LibboxCommandClientHandler funneling stream callbacks into the commanding
 /// object. Libbox invokes these on its own threads; snapshot mapping is pure
 /// and lock-guarded, SwiftUI consumes the yielded values on the main actor.
-private final class GroupStreamHandler: NSObject, LibboxCommandClientHandlerProtocol, @unchecked Sendable {
+fileprivate final class GroupStreamHandler: NSObject, LibboxCommandClientHandlerProtocol, @unchecked Sendable {
     private weak var commanding: LibboxCoreCommanding?
+    let details: Bool
 
-    init(commanding: LibboxCoreCommanding) {
+    init(commanding: LibboxCoreCommanding, details: Bool = false) {
         self.commanding = commanding
+        self.details = details
+    }
+
+    private var owner: LibboxCoreCommanding? {
+        guard commanding?.accepts(self) == true else { return nil }
+        return commanding
     }
 
     func connected() {
-        commanding?.handleConnected()
+        if !details { owner?.handleConnected(self) }
     }
 
     func disconnected(_ message: String?) {
-        commanding?.handleDisconnected(message: message)
+        if details { owner?.handleDetailDisconnected(self) }
+        else { owner?.handleDisconnected(message: message, source: self) }
     }
 
     func setDefaultLogLevel(_ level: Int32) {}
@@ -510,32 +592,32 @@ private final class GroupStreamHandler: NSObject, LibboxCommandClientHandlerProt
     }
 
     func writeLogs(_ messageList: LibboxLogIteratorProtocol?) {
-        commanding?.handleLogs(messageList)
+        owner?.handleLogs(messageList, source: self)
     }
 
     func writeStatus(_ message: LibboxStatusMessage?) {
-        commanding?.handleStatus(message)
+        owner?.handleStatus(message, source: self)
     }
 
     func writeGroups(_ message: LibboxOutboundGroupIteratorProtocol?) {
-        commanding?.handleGroups(message)
+        owner?.handleGroups(message, source: self)
     }
 
     func writeOutbounds(_ message: LibboxOutboundGroupItemIteratorProtocol?) {}
 
     func initializeClashMode(_ modeList: LibboxStringIteratorProtocol?, currentMode: String?) {
-        commanding?.handleClashModeInitialize(modeList, currentMode: currentMode)
+        owner?.handleClashModeInitialize(modeList, currentMode: currentMode, source: self)
     }
 
     func updateClashMode(_ newMode: String?) {
-        commanding?.handleClashModeUpdate(newMode)
+        owner?.handleClashModeUpdate(newMode, source: self)
     }
 
     // The Swift importer renames writeConnectionEvents: to write(_:) in this
     // gomobile generation (same generation that suffixes protocols with
     // `Protocol`; see NOTICE.md).
     func write(_ events: LibboxConnectionEvents?) {
-        commanding?.handleConnectionEvents(events)
+        owner?.handleConnectionEvents(events, source: self)
     }
 }
 
@@ -545,16 +627,17 @@ private final class GroupStreamHandler: NSObject, LibboxCommandClientHandlerProt
 final class Broadcaster<T>: @unchecked Sendable {
     private let lock = NSLock()
     private var continuations: [UUID: AsyncStream<T>.Continuation] = [:]
+    private var latest: T?
 
     /// - Parameter startingWith: yielded first (after registration, so no
-    ///   subsequent change is missed); nil starts the stream empty.
+    ///   subsequent change is missed); nil replays the latest snapshot.
     func stream(startingWith initial: T? = nil) -> AsyncStream<T> {
         let broadcaster = self
         return AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
             let id = UUID()
             broadcaster.lock.lock()
             broadcaster.continuations[id] = continuation
-            if let initial { continuation.yield(initial) }
+            if let value = initial ?? broadcaster.latest { continuation.yield(value) }
             broadcaster.lock.unlock()
             continuation.onTermination = { _ in
                 broadcaster.lock.lock()
@@ -566,10 +649,8 @@ final class Broadcaster<T>: @unchecked Sendable {
 
     func yield(_ value: T) {
         lock.lock()
-        let targets = Array(continuations.values)
+        latest = value
+        for continuation in continuations.values { continuation.yield(value) }
         lock.unlock()
-        for continuation in targets {
-            continuation.yield(value)
-        }
     }
 }

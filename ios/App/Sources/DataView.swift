@@ -89,8 +89,9 @@ final class DataModel: ObservableObject {
     }
 
     func deactivate() {
-        // Keep consuming while the tab exists; streams are cheap and the
-        // TUI keeps its counters across page switches too. Nothing to do.
+        activated = false
+        for task in tasks { task.cancel() }
+        tasks.removeAll()
     }
 
     func closeSelectedConnection() async {
@@ -115,8 +116,18 @@ struct DataView: View {
     @State private var showAllConnections = false
     @State private var showAvailability = false
 
-    init(commanding: CoreCommanding?) {
+    private let commanding: CoreCommanding?
+    private let observing: Bool
+
+    init(commanding: CoreCommanding?, observing: Bool = true) {
+        self.commanding = commanding
+        self.observing = observing
         _model = StateObject(wrappedValue: DataModel(commanding: commanding))
+    }
+
+    private func updateObservation() {
+        (commanding as? LibboxCoreCommanding)?.setDataVisible(observing)
+        if observing { model.activate() } else { model.deactivate() }
     }
 
     var body: some View {
@@ -133,7 +144,12 @@ struct DataView: View {
         } message: {
             Text(model.unavailableReason ?? "Waiting for traffic measurements")
         }
-        .task { model.activate() }
+        .onAppear { updateObservation() }
+        .onChange(of: observing) { _ in updateObservation() }
+        .onDisappear {
+            model.deactivate()
+            (commanding as? LibboxCoreCommanding)?.setDataVisible(false)
+        }
         .sheet(isPresented: $showConnectionDetails, onDismiss: { model.selectedConnID = nil }) {
             NavigationStack {
                 List { detailSection }

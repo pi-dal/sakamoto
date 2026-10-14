@@ -26,6 +26,7 @@ struct SakamotoApp: App {
     @StateObject private var s3SyncModel: S3SyncModel
 
     @State private var selectedTab = 0
+    @Environment(\.scenePhase) private var scenePhase
 
     private let tunnel: NETunnelController
     private let commanding: LibboxCoreCommanding
@@ -86,7 +87,7 @@ struct SakamotoApp: App {
                 .tabItem { Label("Config", systemImage: "slider.horizontal.3") }
                 .tag(1)
                 NavigationStack {
-                    DataView(commanding: commanding)
+                    DataView(commanding: commanding, observing: selectedTab == 2 && scenePhase == .active)
                         .sakamotoInspectTag("DataView")
                 }
                 .tabItem { Label("Data", systemImage: "chart.bar") }
@@ -101,6 +102,8 @@ struct SakamotoApp: App {
             .sakamotoInspector()
             .tint(.primary)
             .toggleStyle(SakamotoSwitchStyle())
+            .onAppear { commanding.setForeground(scenePhase != .background) }
+            .onChange(of: scenePhase) { phase in commanding.setForeground(phase != .background) }
             .onOpenURL { url in
                 if url.scheme == "sakamoto", url.host == "home" { selectedTab = 0 }
             }

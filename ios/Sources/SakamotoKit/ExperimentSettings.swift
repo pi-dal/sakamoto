@@ -11,6 +11,8 @@ public struct ExperimentSettings: Codable, Equatable, Sendable {
     public var recoverAfter = 2
     public var fallbacks: [String: [String]] = [:]
     public init() {}
+    public var learningEnabled: Bool { mode == .auto || cfRegionBlock }
+    public var requiresMonitoring: Bool { learningEnabled || fallbackEnabled }
     public func validate() throws {
         guard (1...20).contains(threshold), (1...20).contains(recoverAfter), fallbacks.count <= 32,
               fallbacks.allSatisfy({ !$0.key.isEmpty && !$0.key.contains("\0") && (1...32).contains($0.value.count) && Set($0.value).count == $0.value.count && $0.value.allSatisfy { !$0.isEmpty && !$0.contains("\0") } }) else {
@@ -55,16 +57,36 @@ public struct ExperimentGroup: Equatable, Sendable {
         public init(tag: String, delay: Int32, testedAt: Int64) { self.tag = tag; self.delay = delay; self.testedAt = testedAt }
     }
     public init(tag: String, selected: String, items: [Item]) { self.tag = tag; self.selected = selected; self.items = items }
+    /// Native URL tests run at most ten leaves per batch, with a 15s
+    /// per-leaf deadline. Count unique leaves through nested groups.
+    public static func resultWaitSeconds(tags: [String], groups: [ExperimentGroup]) -> Int {
+        func leaves(_ tag: String, visiting: Set<String>) -> Set<String> {
+            guard !visiting.contains(tag), let group = groups.first(where: { $0.tag == tag }), !group.items.isEmpty else { return [tag] }
+            return group.items.reduce(into: Set<String>()) { result, item in
+                result.formUnion(leaves(item.tag, visiting: visiting.union([tag])))
+            }
+        }
+        let members = tags.map { leaves($0, visiting: []).count }.max() ?? 1
+        return 5 + max(1, (members + 9) / 10) * 15
+    }
     public static func healthy(_ tag: String, groups: [ExperimentGroup], since: Int64) -> Bool {
         let candidates = groups.first(where: { $0.tag == tag })?.items ?? groups.flatMap(\.items).filter { $0.tag == tag }
         return candidates.contains { $0.delay > 0 && $0.testedAt >= since }
     }
-    public static func selectedProxyHealthy(groups: [ExperimentGroup], since: Int64) -> Bool {
-        guard let main = groups.first(where: { $0.tag == "MainProxy" }), !main.selected.isEmpty else { return false }
-        if let selected = groups.first(where: { $0.tag == main.selected }) {
-            return selected.items.contains { $0.tag == selected.selected && $0.delay > 0 && $0.testedAt >= since }
+    public static func selectedObservation(groups: [ExperimentGroup]) -> Item? {
+        guard var tag = groups.first(where: { $0.tag == "MainProxy" })?.selected else { return nil }
+        var seen = Set<String>()
+        while !tag.isEmpty && seen.insert(tag).inserted {
+            guard let group = groups.first(where: { $0.tag == tag }) else {
+                return groups.lazy.flatMap(\.items).first(where: { $0.tag == tag })
+            }
+            tag = group.selected
         }
-        return main.items.contains { $0.tag == main.selected && $0.delay > 0 && $0.testedAt >= since }
+        return nil
+    }
+    public static func selectedProxyHealthy(groups: [ExperimentGroup], since: Int64) -> Bool {
+        guard let selected = selectedObservation(groups: groups) else { return false }
+        return selected.delay > 0 && selected.testedAt >= since
     }
     public static func candidate(selector: String, chain: [String], groups: [ExperimentGroup], since: Int64) -> String? {
         guard let selected = groups.first(where: { $0.tag == selector })?.selected, chain.contains(selected) else { return nil }
@@ -89,6 +111,19 @@ public struct ExperimentRecovery: Sendable {
         candidate[selector] = nil; counts[selector] = nil; return healthy
     }
     public mutating func reset() { candidate = [:]; counts = [:] }
+}
+
+/// Successful rounds back off; learning always refreshes within its 120s
+/// evidence lifetime, leaving room for the native measurement window.
+public struct ExperimentProbeSchedule: Sendable {
+    private var healthyRounds = 0
+    public init() {}
+    public mutating func record(healthy: Bool) { healthyRounds = healthy ? min(3, healthyRounds + 1) : 0 }
+    public mutating func reset() { healthyRounds = 0 }
+    public func delaySeconds(learning: Bool) -> Int {
+        let delay = [30, 60, 120, 300][healthyRounds]
+        return learning ? min(60, delay) : delay
+    }
 }
 
 /// Private, profile-scoped operational data. Never part of source sync.

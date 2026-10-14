@@ -316,6 +316,7 @@ final class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoco
 
     private var nwMonitor: NWPathMonitor?
     private var lastNetworkPath: String?
+    private var lastProbeNetwork: String?
 
     func startDefaultInterfaceMonitor(_ listener: LibboxInterfaceUpdateListenerProtocol?) throws {
         guard let listener else {
@@ -348,6 +349,16 @@ final class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoco
 
     private func onUpdateDefaultInterface(_ listener: LibboxInterfaceUpdateListenerProtocol, _ path: Network.NWPath) {
         let networkPath = describeNetworkPath(path)
+        let native = (try? NativeNetworkInterface.read()) ?? [:]
+        let addresses = path.availableInterfaces.map { interface in
+            guard let value = native[interface.name] else { return interface.name }
+            return "\(interface.name)#\(interface.index):\(value.flags):\(value.mtu):\(value.addresses.sorted().joined(separator: ","))"
+        }.sorted().joined(separator: "|")
+        let probeNetwork = networkPath + "|" + addresses
+        if probeNetwork != lastProbeNetwork {
+            if lastProbeNetwork != nil { tunnel.experimentNetworkChanged() }
+            lastProbeNetwork = probeNetwork
+        }
         if networkPath != lastNetworkPath {
             listener.updateNetworkPath(networkPath)
             if lastNetworkPath != nil {
@@ -407,6 +418,7 @@ final class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoco
         nwMonitor?.cancel()
         nwMonitor = nil
         lastNetworkPath = nil
+        lastProbeNetwork = nil
     }
 
     func getInterfaces() throws -> any LibboxNetworkInterfaceIteratorProtocol {
@@ -703,5 +715,6 @@ final class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoco
         nwMonitor?.cancel()
         nwMonitor = nil
         lastNetworkPath = nil
+        lastProbeNetwork = nil
     }
 }

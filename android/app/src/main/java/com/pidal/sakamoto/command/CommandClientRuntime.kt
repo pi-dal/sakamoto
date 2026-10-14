@@ -27,21 +27,115 @@ import io.nekohasekai.libbox.TailscaleStatusUpdate
  * over libbox's own local transport (same mechanism upstream SFA uses — the
  * channel is libbox-internal, there is no app-group/socket path to manage).
  *
- * Only the streams the Home/Data pages consume are subscribed:
- *   CommandStatus — traffic/connection counters (Data page).
- *   CommandGroup  — selectable groups; the selected item and its delay feed
- *                   Mobilecore.nodeStatus so the Home page can show
- *                   selected ≠ reachable with the TUI's own vocabulary.
+ * The action channel carries Groups and ClashMode while the VPN runs.
+ * An independent observer carries Status/Connections only for visible Data,
+ * plus Connections/Log when background learning needs flow evidence.
+ * Data uses one-second native updates; learning alone uses five seconds.
+ * Observation changes preserve the action client and the running core.
  *
  * Clash-mode words are the routing-mode words ("Rule"/"Global"/"Direct"):
  * cycling computes the NEXT word with Mobilecore.nextRoutingMode (the Go
  * bridge owns the cycle), then applies it with client.setClashMode.
  *
- * STATUS PENDING SDK BUILD VERIFICATION — see android/README.md.
+ * Verified through the native power observation instrumentation lane.
  */
 object CommandClientRuntime : CommandClientHandler {
 
-    private var client: CommandClient? = null
+    @Volatile private var client: CommandClient? = null
+    private val actionGeneration = java.util.concurrent.atomic.AtomicLong()
+
+    private class ActionHandler(private val generation: Long) : CommandClientHandler by CommandClientRuntime {
+        private fun lifecycle(action: () -> Unit) = synchronized(CommandClientRuntime) {
+            if (actionGeneration.get() == generation && client != null) action()
+        }
+        override fun connected() = lifecycle { CommandClientRuntime.connected() }
+        override fun disconnected(message: String?) = lifecycle { CommandClientRuntime.disconnected(message) }
+        override fun writeGroups(message: OutboundGroupIterator?) { writeGroupSnapshot(message, generation) }
+        override fun initializeClashMode(modeList: StringIterator?, currentMode: String?) = lifecycle { CommandClientRuntime.initializeClashMode(modeList, currentMode) }
+        override fun updateClashMode(newMode: String?) = lifecycle { CommandClientRuntime.updateClashMode(newMode) }
+    }
+    @Volatile private var dataVisible = false
+    @Volatile private var learningEnabled = false
+    private var observer: CommandClient? = null
+    private val observerGeneration = java.util.concurrent.atomic.AtomicLong()
+    private val observerExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val observerScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
+
+    @Synchronized fun setDataVisible(value: Boolean) {
+        if (dataVisible == value) return
+        dataVisible = value
+        lastStatus = null
+        connectionList = null; connections = emptyList()
+        reconfigureObserver()
+    }
+
+    @Synchronized fun setLearningEnabled(value: Boolean) {
+        if (learningEnabled == value) return
+        learningEnabled = value
+        reconfigureObserver()
+    }
+
+    /** Serial attachment and generation checks make rapid hide/stop safe.
+     * The action client is never replaced when observation demand changes. */
+    private fun reconfigureObserver() {
+        val generation = observerGeneration.incrementAndGet()
+        val data = dataVisible
+        val learning = learningEnabled
+        observerExecutor.execute {
+            if (observerGeneration.get() != generation) return@execute
+            runCatching { observer?.disconnect() }
+            observer = null
+            if (!channelConnected.value || (!data && !learning)) return@execute
+            val options = CommandClientOptions()
+            if (data) options.addCommand(Libbox.CommandStatus)
+            options.addCommand(Libbox.CommandConnections)
+            if (learning) options.addCommand(Libbox.CommandLog)
+            // Native time.Duration is nanoseconds. Learning ignores byte
+            // updates; new/closed evidence is still delivered immediately.
+            options.statusInterval = if (data) 1_000_000_000L else 5_000_000_000L
+            val candidate = Libbox.newCommandClient(ObservationHandler(generation, data, learning), options)
+            observer = candidate
+            try { candidate.connect() }
+            catch (_: Exception) { retryObserver(generation) }
+            if (observerGeneration.get() != generation || !channelConnected.value) {
+                runCatching { candidate.disconnect() }
+                if (observer === candidate) observer = null
+            }
+        }
+    }
+
+    private fun retryObserver(generation: Long) {
+        synchronized(this) {
+            if (observerGeneration.get() != generation) return
+            lastStatus = null
+            connectionList = null; connections = emptyList()
+        }
+        observerScope.launch {
+            kotlinx.coroutines.delay(2000)
+            if (observerGeneration.get() == generation && channelConnected.value) reconfigureObserver()
+        }
+    }
+
+    private class ObservationHandler(private val generation: Long, private val data: Boolean, private val learning: Boolean) : CommandClientHandler by CommandClientRuntime {
+        private var firstLogs = true
+        private fun intake(action: () -> Unit) = synchronized(CommandClientRuntime) {
+            if (observerGeneration.get() == generation && channelConnected.value) action()
+        }
+        override fun connected() {}
+        override fun disconnected(message: String?) { retryObserver(generation) }
+        override fun writeStatus(message: StatusMessage?) = intake { if (data) CommandClientRuntime.writeStatus(message) }
+        override fun writeConnectionEvents(events: ConnectionEvents?) = intake {
+            if (events != null) {
+                if (learning) com.pidal.sakamoto.runtime.ExperimentRuntime.connection(events)
+                if (data) CommandClientRuntime.writeConnectionEvents(events)
+            }
+        }
+        override fun writeLogs(messageList: LogIterator?) = intake {
+            if (firstLogs) { firstLogs = false }
+            else if (learning) CommandClientRuntime.writeLogs(messageList)
+        }
+    }
+
     private val _channelConnected = kotlinx.coroutines.flow.MutableStateFlow(false)
     val channelConnected: kotlinx.coroutines.flow.StateFlow<Boolean> = _channelConnected
 
@@ -55,33 +149,43 @@ object CommandClientRuntime : CommandClientHandler {
         private set
 
     fun start() {
-        if (client != null) return
-        val options = CommandClientOptions()
-        options.addCommand(Libbox.CommandStatus)
-        options.addCommand(Libbox.CommandGroup)
-        options.addCommand(Libbox.CommandClashMode)
-        options.addCommand(Libbox.CommandConnections)
-        options.addCommand(Libbox.CommandLog)
-        // The daemon reads this as a time.Duration (nanoseconds): 1s.
-        options.statusInterval = 1_000_000_000L
-        client = Libbox.newCommandClient(this, options)
-        try {
-            client?.connect()
-        } catch (e: Exception) {
-            client = null
-            MobilecoreRuntime.setNotice("command client: ${e.message}")
+        val candidate: CommandClient
+        val generation: Long
+        synchronized(this) {
+            if (client != null) return
+            generation = actionGeneration.incrementAndGet()
+            val options = CommandClientOptions()
+            options.addCommand(Libbox.CommandGroup)
+            options.addCommand(Libbox.CommandClashMode)
+            options.statusInterval = 1_000_000_000L
+            candidate = Libbox.newCommandClient(ActionHandler(generation), options)
+            client = candidate
         }
+        try { candidate.connect() }
+        catch (error: Exception) {
+            synchronized(this) {
+                if (actionGeneration.get() == generation) {
+                    client = null
+                    MobilecoreRuntime.setNotice("command client: ${error.message}")
+                }
+            }
+        }
+        if (actionGeneration.get() != generation || client !== candidate) runCatching { candidate.disconnect() }
     }
 
     fun stop() {
-        _channelConnected.value = false
-        val current = client
-        client = null
-        try {
-            current?.disconnect()
-        } catch (e: Exception) {
-            // Channel already down — stopping anyway.
+        val current = synchronized(this) {
+            actionGeneration.incrementAndGet()
+            _channelConnected.value = false
+            lastStatus = null; connectionList = null; connections = emptyList()
+            _groups.value = emptyList(); lastGroupsSummary = ""
+            val old = client
+            client = null
+            stopTailscaleSubscription()
+            old
         }
+        reconfigureObserver()
+        runCatching { current?.disconnect() }
     }
 
     fun setClashMode(mode: String) {
@@ -233,10 +337,13 @@ object CommandClientRuntime : CommandClientHandler {
 
     override fun connected() {
         _channelConnected.value = true
+        reconfigureObserver()
     }
 
     override fun disconnected(message: String?) {
         _channelConnected.value = false
+        lastStatus = null
+        reconfigureObserver()
         // Service gone: the tunnel service owns the service-state vocabulary;
         // nothing to fold here beyond clearing group-derived UI state.
         lastGroupsSummary = ""
@@ -263,7 +370,9 @@ object CommandClientRuntime : CommandClientHandler {
     private val _groups = kotlinx.coroutines.flow.MutableStateFlow<List<com.pidal.sakamoto.runtime.ConfigRepository.Group>>(emptyList())
     val groups: kotlinx.coroutines.flow.StateFlow<List<com.pidal.sakamoto.runtime.ConfigRepository.Group>> = _groups
 
-    override fun writeGroups(message: OutboundGroupIterator?) {
+    override fun writeGroups(message: OutboundGroupIterator?) = writeGroupSnapshot(message, actionGeneration.get())
+
+    private fun writeGroupSnapshot(message: OutboundGroupIterator?, generation: Long) {
         if (message == null) return
         val snapshots = mutableListOf<com.pidal.sakamoto.runtime.ConfigRepository.Group>()
         while (message.hasNext()) {
@@ -276,16 +385,20 @@ object CommandClientRuntime : CommandClientHandler {
             }
             snapshots.add(com.pidal.sakamoto.runtime.ConfigRepository.Group(group.tag, group.type, group.selectable, group.selected, items))
         }
-        _groups.value = snapshots
-        lastGroupsSummary = snapshots.joinToString(" · ") { it.tag }
-        // The primary group is stable; later selectors must not overwrite
-        // the Home selected value merely because they arrived last.
-        val primary = snapshots.firstOrNull { it.selectable }
-        val selected = primary?.items?.firstOrNull { it.tag == primary.selected }
-        if (selected != null) {
-            MobilecoreRuntime.setSelectedNode(selected.tag, selected.delay)
-            MobilecoreRuntime.setNodeTesting(false)
+        synchronized(this) {
+            if (actionGeneration.get() != generation || client == null) return
+            _groups.value = snapshots
+            lastGroupsSummary = snapshots.joinToString(" · ") { it.tag }
+            // The primary group is stable; later selectors must not overwrite
+            // the Home selected value merely because they arrived last.
+            val primary = snapshots.firstOrNull { it.selectable }
+            val selected = primary?.items?.firstOrNull { it.tag == primary.selected }
+            if (selected != null) {
+                MobilecoreRuntime.setSelectedNode(selected.tag, selected.delay)
+                MobilecoreRuntime.setNodeTesting(false)
+            }
         }
+        if (actionGeneration.get() == generation) com.pidal.sakamoto.runtime.ExperimentRuntime.groupsChanged(snapshots)
     }
 
     override fun writeOutbounds(message: OutboundGroupItemIterator?) {
@@ -295,11 +408,17 @@ object CommandClientRuntime : CommandClientHandler {
     override fun initializeClashMode(modeList: StringIterator?, currentMode: String?) {
         // Adopt the running core's mode verbatim; the cycle still goes
         // through Mobilecore.nextRoutingMode.
-        if (currentMode != null) MobilecoreRuntime.setRoutingMode(currentMode)
+        if (currentMode != null) {
+            MobilecoreRuntime.setRoutingMode(currentMode)
+            com.pidal.sakamoto.runtime.ExperimentRuntime.modeChanged()
+        }
     }
 
     override fun updateClashMode(newMode: String?) {
-        if (newMode != null) MobilecoreRuntime.setRoutingMode(newMode)
+        if (newMode != null) {
+            MobilecoreRuntime.setRoutingMode(newMode)
+            com.pidal.sakamoto.runtime.ExperimentRuntime.modeChanged()
+        }
     }
 
     data class ConnectionRow(val id: String, val name: String, val source: String, val destination: String, val outbound: String, val rule: String, val closed: Boolean)
@@ -310,7 +429,6 @@ object CommandClientRuntime : CommandClientHandler {
 
     @Synchronized override fun writeConnectionEvents(events: ConnectionEvents?) {
         if (events == null) return
-        com.pidal.sakamoto.runtime.ExperimentRuntime.connection(events)
         val list = connectionList ?: Libbox.newConnections().also { connectionList = it }
         list.applyEvents(events)
         list.sortByDate()

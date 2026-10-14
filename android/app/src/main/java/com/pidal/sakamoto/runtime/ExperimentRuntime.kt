@@ -15,7 +15,10 @@ import org.json.JSONObject
 
 /** Phone-owned experimentation while the VPN service runs. Host Tracker owns evidence. */
 object ExperimentRuntime {
-    data class Settings(val mode: String = "off", val threshold: Int = 3, val cfRegion: Boolean = false, val fallback: Boolean = false, val recoverAfter: Int = 2)
+    data class Settings(val mode: String = "off", val threshold: Int = 3, val cfRegion: Boolean = false, val fallback: Boolean = false, val recoverAfter: Int = 2) {
+        val learningEnabled: Boolean get() = mode == "auto" || cfRegion
+        val requiresMonitoring: Boolean get() = learningEnabled || fallback
+    }
     data class Status(val message: String = "Stopped", val learned: Int = 0, val pending: Boolean = false)
     private val _status = MutableStateFlow(Status())
     val status: StateFlow<Status> = _status
@@ -29,6 +32,39 @@ object ExperimentRuntime {
     private val recoveries = mutableMapOf<String, Int>()
     @Volatile private var updateDomains: ((String) -> Unit)? = null
     private var context: Context? = null
+    private val schedule = ExperimentProbeSchedule()
+    private var wakeups = Channel<Unit>(Channel.CONFLATED)
+    private var recoveryJob: Job? = null
+    private val networkGeneration = java.util.concurrent.atomic.AtomicLong()
+    @Volatile private var healthSince = 0L
+    private var observedGroups: List<ConfigRepository.Group> = emptyList()
+    private var monitoredSelectors = setOf("MainProxy")
+
+    fun networkChanged() {
+        if (!activeSettings.requiresMonitoring || scope == null) return
+        networkGeneration.incrementAndGet()
+        healthSince = System.currentTimeMillis() / 1000 + 1
+        schedule.reset()
+        scope?.launch {
+            recoveryJob?.cancelAndJoin()
+            wakeups.trySend(Unit)
+        }
+    }
+
+    fun modeChanged() { if (scope != null) wakeups.trySend(Unit) }
+
+    @Synchronized fun groupsChanged(groups: List<ConfigRepository.Group>) {
+        if (!activeSettings.requiresMonitoring || scope == null) return
+        val previous = FallbackDecision.selectedObservation(observedGroups)
+        val current = FallbackDecision.selectedObservation(groups)
+        val selectionChanged = groups.any { group -> group.tag in monitoredSelectors && (observedGroups.firstOrNull { it.tag == group.tag }?.selected ?: "") != group.selected }
+        observedGroups = groups
+        if (!settling && (selectionChanged || ((previous?.delay ?: 0) > 0 && (current?.delay ?: 0) <= 0))) {
+            schedule.reset(); wakeups.trySend(Unit)
+        } else if (!settling && !activeSettings.fallback && current != null && current.testedAt > (previous?.testedAt ?: 0)) {
+            schedule.record(current.delay > 0 && System.currentTimeMillis() / 1000 - current.testedAt in 0..120)
+        }
+    }
 
     fun settings(context: Context): Settings {
         val prefs = context.getSharedPreferences("experiments", Context.MODE_PRIVATE)
@@ -55,7 +91,7 @@ object ExperimentRuntime {
         ConfigRepository.saveGeneratedEdit(context, adjusted)
         val value = JSONObject().put("mode", next.mode).put("threshold", next.threshold).put("cf_region_block", next.cfRegion).put("fallback", next.fallback).put("recover_after", next.recoverAfter)
         check(context.getSharedPreferences("experiments", Context.MODE_PRIVATE).edit().putString("settings", value.toString()).commit())
-        activeSettings = next; tracker = Mobileexperiment.newExperimentTracker(next.threshold)
+        // Staged settings become runtime policy only after Apply/reconnect.
         _status.value = _status.value.copy(message = "Saved; apply configuration", learned = learned(context).size)
     }
     fun restorePending(context: Context) {
@@ -78,31 +114,54 @@ object ExperimentRuntime {
         return Mobileexperiment.prepareLiveRulesJSON(connected, domains, domains)
     }
 
-    fun start(context: Context, update: (String) -> Unit) {
+    @Synchronized fun start(context: Context, update: (String) -> Unit) {
         if (job != null) return
         updateDomains = update
         this.context = context.applicationContext
         activeSettings = settings(context)
-        tracker = Mobileexperiment.newExperimentTracker(activeSettings.threshold)
+        monitoredSelectors = setOf("MainProxy") + runCatching {
+            JSONObject(ConfigRepository.load(context).hostMetadata).optJSONObject("fallbacks")?.keys()?.asSequence()?.toSet().orEmpty()
+        }.getOrDefault(emptySet())
+        tracker = if (activeSettings.learningEnabled) Mobileexperiment.newExperimentTracker(activeSettings.threshold) else null
+        schedule.reset(); observedGroups = emptyList(); healthSince = System.currentTimeMillis() / 1000
+        CommandClientRuntime.setLearningEnabled(activeSettings.learningEnabled)
+        if (!activeSettings.requiresMonitoring) {
+            _status.value = Status("Monitoring disabled", learned(context).size)
+            return
+        }
         val owner = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         scope = owner
         attempts = Channel(Channel.RENDEZVOUS)
+        wakeups = Channel(Channel.CONFLATED)
         job = owner.launch {
             _status.value = Status("Monitoring while VPN runs", learned(context).size)
-            launch { for (domain in attempts) promote(context, domain) }
+            if (activeSettings.learningEnabled) launch { for (domain in attempts) promote(context, domain) }
             while (isActive) {
-                delay(30_000)
-                if (activeSettings.fallback && !settling && !_status.value.pending) recover(false)
+                var recoveryState = "unavailable"
+                if (!settling && !_status.value.pending && CommandClientRuntime.channelConnected.value) {
+                    recoveryState = if (activeSettings.fallback) recover(false) else "disabled"
+                    if (recoveryState == "queued") recoveryJob?.join()
+                    if (activeSettings.learningEnabled && recoveryState in setOf("disabled", "manual") && MobilecoreRuntime.state.value.configState == "Clean" && MobilecoreRuntime.state.value.routingMode.lowercase() == "rule") {
+                        val wait = healthSince * 1000 + 50 - System.currentTimeMillis()
+                        if (wait > 0) delay(wait)
+                        CommandClientRuntime.groups.value.firstOrNull { it.tag == "MainProxy" }?.selected?.let { CommandClientRuntime.urlTest(it) }
+                    }
+                }
+                val mode = MobilecoreRuntime.state.value.routingMode.lowercase()
+                if (recoveryState == "mode" || (mode.isNotEmpty() && mode != "rule") || (!activeSettings.learningEnabled && recoveryState in setOf("disabled", "manual"))) wakeups.receive()
+                else withTimeoutOrNull(schedule.delayMillis(activeSettings.learningEnabled)) { wakeups.receive() }
             }
         }
     }
     fun quiesce() {
-        val running = job
+        val running = scope?.coroutineContext?.get(Job)
         stop()
         runBlocking { running?.join() }
     }
-    fun stop() {
-        scope?.cancel(); scope = null; job = null
+    @Synchronized fun stop() {
+        scope?.cancel(); scope = null; job = null; recoveryJob = null
+        wakeups.close(); schedule.reset(); observedGroups = emptyList()
+        CommandClientRuntime.setLearningEnabled(false)
         attempts.close(); tracker = null; updateDomains = null; context = null; settling = false; recoveries.clear()
         _status.value = _status.value.copy(message = "Stopped", pending = false)
     }
@@ -120,10 +179,9 @@ object ExperimentRuntime {
     fun log(message: String) {
         if (_status.value.pending || MobilecoreRuntime.state.value.configState != "Clean" || MobilecoreRuntime.state.value.routingMode.lowercase() != "rule" || (activeSettings.mode != "auto" && !activeSettings.cfRegion)) return
         val groups = CommandClientRuntime.groups.value
-        val main = groups.firstOrNull { it.tag == "MainProxy" } ?: return
-        val fresh = System.currentTimeMillis() / 1000 - 120
-        val selected = groups.firstOrNull { it.tag == main.selected }
-        val healthy = (selected?.items ?: groups.flatMap { it.items }.filter { it.tag == main.selected }).any { it.delay > 0 && it.testedAt >= fresh }
+        val fresh = maxOf(healthSince, System.currentTimeMillis() / 1000 - 120)
+        val observation = FallbackDecision.selectedObservation(groups)
+        val healthy = observation != null && observation.delay > 0 && observation.testedAt >= fresh
         val domain = tracker?.observeLog(message, System.currentTimeMillis(), healthy, activeSettings.mode == "auto", activeSettings.cfRegion).orEmpty()
         if (domain.isNotEmpty()) {
             val sent = attempts.trySend(domain)
@@ -233,21 +291,32 @@ object ExperimentRuntime {
         }.toList()
         if (eligible.isEmpty()) return "manual"
         settling = true; recoveryAt = System.currentTimeMillis()
-        scope?.launch {
+        val selectedBefore = groups.associate { it.tag to it.selected }
+        val generation = networkGeneration.get()
+        val targets = eligible.flatMap { tag -> priorities.getJSONArray(tag).let { array -> (0 until array.length()).map { array.getString(it) } } }.toSet()
+        val waitMillis = FallbackDecision.resultWaitMillis(targets, groups)
+        recoveryJob = scope?.launch {
+            var healthyRound = true
             try {
+                // Native test timestamps have whole-second resolution.
+                delay(1000 - System.currentTimeMillis() % 1000 + 50)
                 val started = System.currentTimeMillis() / 1000
-                eligible.forEach { tag -> val chain = priorities.getJSONArray(tag); for (i in 0 until chain.length()) CommandClientRuntime.urlTest(chain.getString(i)) }
+                for (target in targets) { ensureActive(); CommandClientRuntime.urlTest(target) }
                 _status.value = _status.value.copy(message = "Recovery tests running")
-                delay(10_000)
+                delay(waitMillis)
+                ensureActive()
+                if (networkGeneration.get() != generation) return@launch
                 val fresh = CommandClientRuntime.groups.value
                 for (tag in eligible) {
                     val chain = priorities.getJSONArray(tag).let { array -> (0 until array.length()).map { array.getString(it) } }
-                    if (MobilecoreRuntime.state.value.routingMode.lowercase() != "rule" || MobilecoreRuntime.state.value.configState != "Clean") break
+                    if (MobilecoreRuntime.state.value.routingMode.lowercase() != "rule" || MobilecoreRuntime.state.value.configState != "Clean" || !CommandClientRuntime.channelConnected.value) { healthyRound = false; break }
                     val selected = fresh.firstOrNull { it.tag == tag }?.selected ?: continue
+                    if (selected != selectedBefore[tag]) { recoveries.clear(); healthyRound = false; continue }
                     val current = chain.indexOf(selected); if (current < 0) continue
                     val desired = chain.indexOf(FallbackDecision.candidate(fresh, tag, chain, started))
-                    if (desired < 0) { _status.value = _status.value.copy(message = "No freshly healthy fallback"); continue }
+                    if (desired < 0) { healthyRound = false; _status.value = _status.value.copy(message = "No freshly healthy fallback"); continue }
                     if (desired == current) { recoveries.clear(); continue }
+                    healthyRound = false
                     val candidate = chain[desired]
                     val count = (recoveries[candidate] ?: 0) + 1
                     recoveries[candidate] = count
@@ -256,6 +325,12 @@ object ExperimentRuntime {
                         recoveries[candidate] = 0
                     }
                 }
+                schedule.record(healthyRound)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                schedule.reset()
+                _status.value = _status.value.copy(message = "Recovery failed; selection retained")
             } finally { settling = false }
         }
         return "queued"

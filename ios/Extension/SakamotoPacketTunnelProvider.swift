@@ -242,6 +242,11 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
     override open func wake() {
         writeTunnelMessage("(packet-tunnel) ne-wake; core_running=\(commandServer?.isServiceRunning() == true)")
         commandServer?.wake()
+        experimentNetworkChanged()
+    }
+
+    func experimentNetworkChanged() {
+        Task { @MainActor [weak self] in self?.experimentRunner?.networkChanged() }
     }
 
     func canConfigureNetwork() -> Bool { operationGate.state != .stopping }

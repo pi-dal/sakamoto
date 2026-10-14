@@ -27,6 +27,7 @@ class NativeBindingSmokeTest : Instrumentation() {
     private var widgetToggle = false
     private var editors = false
     private var updates = false
+    private var power = false
 
     override fun onCreate(arguments: Bundle?) {
         super.onCreate(arguments)
@@ -42,6 +43,7 @@ class NativeBindingSmokeTest : Instrumentation() {
         locationSetup = arguments?.getString("locationSetup") == "true"
         editors = arguments?.getString("editors") == "true"
         updates = arguments?.getString("updates") == "true"
+        power = arguments?.getString("power") == "true"
         widgetToggle = arguments?.getString("toggle") == "true"
         if (widgetToggle) checkVpn = true
         holdMillis = arguments?.getString("holdMillis")?.toLongOrNull()?.coerceIn(0L, 30_000L) ?: 0L
@@ -382,6 +384,7 @@ class NativeBindingSmokeTest : Instrumentation() {
                 check(com.pidal.sakamoto.runtime.ConfigRepository.sourceFiles(targetContext).any { it.name == "policy.json" })
                 check(com.pidal.sakamoto.runtime.ConfigRepository.sourceFiles(targetContext).any { it.name == "chain.json" })
             }
+            if (power) PowerObservationScenario.run(this)
             if (navigation) checkNavigation()
             if (maps) LocationMapSmokeChecks(this).run()
             if (editors) NodeGroupSmokeChecks(this).run()

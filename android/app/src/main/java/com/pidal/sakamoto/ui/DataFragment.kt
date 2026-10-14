@@ -37,6 +37,8 @@ class DataFragment : androidx.fragment.app.Fragment() {
         (view as android.widget.FrameLayout).addView(page.root)
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.RESUMED) {
+            CommandClientRuntime.setDataVisible(true)
+            try {
             while (isActive) {
                 val status = CommandClientRuntime.lastStatus
                 if (status == null) {
@@ -72,6 +74,7 @@ class DataFragment : androidx.fragment.app.Fragment() {
                 }
                 delay(1000)
             }
+            } finally { CommandClientRuntime.setDataVisible(false) }
             }
         }
     }

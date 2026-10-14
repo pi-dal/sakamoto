@@ -8,6 +8,11 @@ import android.util.Log
 import com.pidal.sakamoto.command.CommandClientRuntime
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.distinctUntilChanged
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -31,8 +36,23 @@ object VpnDiagnostics {
             it.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) && it.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
         } == true }.mapNotNull { cm.getLinkProperties(it)?.interfaceName }
         return Snapshot(VpnService.prepare(context) == null, vpn != null, properties?.interfaceName.orEmpty(),
-            physical.joinToString(", "), properties?.dnsServers?.joinToString(", ") { it.hostAddress.orEmpty() }.orEmpty(), CommandClientRuntime.channelConnected.value, vpn)
+            physical.sorted().joinToString(", "), properties?.dnsServers?.joinToString(", ") { it.hostAddress.orEmpty() }.orEmpty(), CommandClientRuntime.channelConnected.value, vpn)
     }
+
+    fun observe(context: Context): Flow<Snapshot> = callbackFlow {
+        val app = context.applicationContext
+        val cm = app.getSystemService(ConnectivityManager::class.java)
+        fun publish() { trySend(snapshot(app)) }
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: android.net.Network) { publish() }
+            override fun onLost(network: android.net.Network) { publish() }
+            override fun onCapabilitiesChanged(network: android.net.Network, capabilities: NetworkCapabilities) { publish() }
+            override fun onLinkPropertiesChanged(network: android.net.Network, properties: android.net.LinkProperties) { publish() }
+        }
+        cm.registerNetworkCallback(android.net.NetworkRequest.Builder().removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN).build(), callback)
+        publish()
+        awaitClose { runCatching { cm.unregisterNetworkCallback(callback) } }
+    }.conflate().distinctUntilChanged()
 
     suspend fun probe(context: Context) {
         Log.d("SakamotoProbe", "probe requested")

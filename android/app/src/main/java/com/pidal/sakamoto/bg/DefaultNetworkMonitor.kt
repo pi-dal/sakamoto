@@ -21,6 +21,8 @@ object DefaultNetworkMonitor {
     private val links = mutableMapOf<Network, LinkProperties>()
     private data class Snapshot(val network: Network?, val linkSignature: String, val capabilitiesSignature: String, val index: Int)
     private var lastInterface: Snapshot? = null
+    private data class ProbePath(val network: Network?, val links: String)
+    private var lastProbePath: ProbePath? = null
     private var underlyingInitialized = false
     private var lastUnderlying: Network? = null
 
@@ -91,7 +93,7 @@ object DefaultNetworkMonitor {
         networks.clear(); links.clear()
         listener = null
         underlyingChanged = null
-        lastInterface = null; lastUnderlying = null; underlyingInitialized = false
+        lastInterface = null; lastProbePath = null; lastUnderlying = null; underlyingInitialized = false
     }
 
     private fun eligible(capabilities: NetworkCapabilities): Boolean =
@@ -119,6 +121,11 @@ object DefaultNetworkMonitor {
         val index = name?.let { runCatching { NetworkInterface.getByName(it)?.index ?: -1 }.getOrDefault(-1) } ?: -1
         val snapshot = Snapshot(network, network?.let { links[it]?.toString() ?: "" } ?: "",
             network?.let { networks[it]?.toString() ?: "" } ?: "", index)
+        val probePath = ProbePath(network, snapshot.linkSignature)
+        if (probePath != lastProbePath) {
+            if (lastProbePath != null) com.pidal.sakamoto.runtime.ExperimentRuntime.networkChanged()
+            lastProbePath = probePath
+        }
         if (listener == null || snapshot == lastInterface) return
         lastInterface = snapshot
         if (network == null || name == null) {
