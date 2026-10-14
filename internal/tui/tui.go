@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -14,6 +15,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/term"
 	"github.com/pi-dal/sakamoto/internal/config"
 	"github.com/pi-dal/sakamoto/internal/gen"
 	"github.com/pi-dal/sakamoto/internal/icloud"
@@ -156,7 +158,11 @@ type model struct {
 }
 
 func Run(ctx context.Context, cfg *config.Config, path string) error {
-	m := &model{cfg: cfg, cfgPath: path, conns: map[string]*daemon.Connection{}, height: 24, width: 80,
+	width, height := 80, 24
+	if w, h, err := term.GetSize(os.Stdout.Fd()); err == nil {
+		width, height = w, h
+	}
+	m := &model{cfg: cfg, cfgPath: path, conns: map[string]*daemon.Connection{}, height: height, width: width,
 		menuRow: -1, detailRow: -1, configDetail: -1, editIndex: -1, formEditIndex: -1, policyEditIndex: -1, hoverX: -1, hoverY: -1}
 	m.exitLabel = exitFromConfig(path)
 	m.groups = offlineGroups(path)
