@@ -21,8 +21,8 @@ android {
         // flavor split — see android/README.md "API levels".
         minSdk = 24
         targetSdk = 35
-        versionCode = 16
-        versionName = "0.1.14"
+        versionCode = 17
+        versionName = "0.1.15"
         testInstrumentationRunner = if (providers.gradleProperty("sakamotoTestBuildType").orNull == "release") {
             "com.pidal.sakamoto.ReleaseBindingSmokeTest"
         } else {
