@@ -3,6 +3,7 @@ package sbclient
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/sagernet/sing-box/daemon"
 	"google.golang.org/grpc"
@@ -155,13 +156,14 @@ func (c *Client) CloseConnection(ctx context.Context, id string) error {
 	return err
 }
 
-// SubscribeConnections streams connection events.
+// SubscribeConnections streams connection events at a millisecond interval.
+// The native wire interval is a time.Duration measured in nanoseconds.
 func (c *Client) SubscribeConnections(ctx context.Context, intervalMs int64) (<-chan *daemon.ConnectionEvents, <-chan error) {
 	ch := make(chan *daemon.ConnectionEvents, 8)
 	errCh := make(chan error, 1)
 	go func() {
 		defer close(ch)
-		stream, err := c.svc.SubscribeConnections(ctx, &daemon.SubscribeConnectionsRequest{Interval: intervalMs})
+		stream, err := c.svc.SubscribeConnections(ctx, &daemon.SubscribeConnectionsRequest{Interval: int64(time.Duration(intervalMs) * time.Millisecond)})
 		if err != nil {
 			errCh <- err
 			return
@@ -182,13 +184,14 @@ func (c *Client) SubscribeConnections(ctx context.Context, intervalMs int64) (<-
 	return ch, errCh
 }
 
-// SubscribeStatus streams traffic, memory, and service metrics.
+// SubscribeStatus streams traffic, memory, and service metrics at a millisecond
+// interval. The native wire interval is a time.Duration measured in nanoseconds.
 func (c *Client) SubscribeStatus(ctx context.Context, intervalMs int64) (<-chan *daemon.Status, <-chan error) {
 	ch := make(chan *daemon.Status, 8)
 	errCh := make(chan error, 1)
 	go func() {
 		defer close(ch)
-		stream, err := c.svc.SubscribeStatus(ctx, &daemon.SubscribeStatusRequest{Interval: intervalMs})
+		stream, err := c.svc.SubscribeStatus(ctx, &daemon.SubscribeStatusRequest{Interval: int64(time.Duration(intervalMs) * time.Millisecond)})
 		if err != nil {
 			errCh <- err
 			return
