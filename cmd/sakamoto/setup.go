@@ -56,15 +56,26 @@ func runSetup(path string, checkOnly bool) error {
 		if err := checkLoadedSetupServices(state); err != nil {
 			return err
 		}
-		fmt.Printf("Services already loaded (%s); supervisor %s. No changes made.\n", state.label, state.status)
+		if _, err := setupHomebrewBinary(binary, checkOnly); err != nil {
+			return err
+		}
+		fmt.Printf("Services already loaded (%s); supervisor %s.\n", state.label, state.status)
 		fmt.Println("Launchd starts the services, not the TUN or protected DNS; reconnect manually after reboot.")
 		return nil
 	}
-	script, err := setupScript(binary)
-	if err != nil {
+	if _, err := setupScript(binary); err != nil {
 		return err
 	}
 	if err := checkSetupConfig(paths); err != nil {
+		return err
+	}
+	binary, err = setupHomebrewBinary(binary, checkOnly)
+	if err != nil {
+		return err
+	}
+	// A repaired link may select a newer installed keg; use its resources.
+	script, err := setupScript(binary)
+	if err != nil {
 		return err
 	}
 	fmt.Println("Setup preflight passed. This installs launchd services only; it never starts or reconnects a VPN.")

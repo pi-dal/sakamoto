@@ -20,7 +20,7 @@ For a source build instead, clone this repository, run `go build -o sakamoto ./c
 Edit `~/.sakamoto/sakamoto.yaml` to point `conf:` at your own Shadowrocket `.conf`, or open `sakamoto` → **Config → Import config** and paste its URL. If `include=ad.conf` is relative, the importer fetches it from the same URL directory. Add manual node share links to `nodes.txt` through **Config → Nodes & sources → Add node**, then **Regenerate**. Check the result:
 
 ```bash
-sing-box check -c ~/.sakamoto/config.json
+sing-box check -D ~/.sakamoto -c ~/.sakamoto/config.json
 ```
 
 For root TUN control and automatic group fallback **while connected**, preflight and install the macOS services *once*:
@@ -30,7 +30,7 @@ sakamoto setup --check  # read-only: validate config or report existing service 
 sakamoto setup          # interactive: install daemon/watch only when absent
 ```
 
-For a source build in this repository, use `./sakamoto setup` instead. `setup` locates the packaged installer, asks for confirmation and administrator authorization on a fresh install, and **refuses to replace existing, partial or unavailable launchd services**. It does not start or reconnect the VPN; running it again on an installed machine only reports state. Do **not** connect Shadowrocket and sakamoto TUN simultaneously. Open `sakamoto` and click **Connect**. `daemon` and `watch` are launchd internals; `sakamoto help` lists shortcuts.
+For a source build in this repository, use `./sakamoto setup` instead. `setup` locates the packaged installer, asks for confirmation and administrator authorization on a fresh install, and **refuses to replace existing, partial or unavailable launchd services**. It does not start or reconnect the VPN; running it again reports service state and, for a Homebrew installation, repairs a stale command link. `setup --check` only reports a link mismatch. You can also run `sakamoto link --check` or `sakamoto link` separately; repair retains the previous executable beside the command and does not restart services. Do **not** connect Shadowrocket and sakamoto TUN simultaneously. Open `sakamoto` and click **Connect**. `daemon` and `watch` are launchd internals; `sakamoto help` lists shortcuts.
 
 **After a reboot, reconnect manually.** Launchd restarts the supervisor and starts the watcher at login, but neither starts sing-box's TUN. With protected DNS enabled, the supervisor attempts to restore the prior DHCP/static DNS from its private snapshot when no loopback DNS listener survives; it does **not** re-enable protection automatically. Do not assume proxy or DNS protection persists across a reboot. See [startup, failure and verification boundaries](docs/dns-protection.md#startup-and-reboot-behavior).
 

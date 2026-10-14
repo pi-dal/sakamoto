@@ -33,6 +33,22 @@ The watcher launchd template includes both Homebrew prefixes in PATH and the ins
 
 Cross-device synchronization shares source files plus `groups.json`, not the whole machine's `sakamoto.yaml`. Each device retains its own directories, API secrets, Tailscale identity, local overrides and cloud credentials. See [iCloud](icloud.md) and [S3](s3-sync.md) for conflict behavior and configuration. Dataless iCloud files are requested for download and deferred without blocking independent sources or advancing their baseline.
 
-Homebrew normally links the formula automatically. Check `command -v sakamoto`, `ls -l "$(brew --prefix)/bin/sakamoto"`, and `"$(brew --prefix sakamoto)/bin/sakamoto" version` if the active version differs. A link conflict should be inspected with `brew link --overwrite --dry-run pi-dal/tap/sakamoto` before deliberately replacing the conflicting file; setup does not overwrite an unrelated executable or change a running service.
+Homebrew normally links the formula automatically. `sakamoto link --check` compares the stable command against the installed Homebrew executable without changing files. `sakamoto link` repairs missing commands, stale symlinks and retained old regular executables with `brew unlink sakamoto` followed by `brew link sakamoto`. Existing executables are renamed to a unique `.sakamoto-link-backup-*` sibling before repair; failure restores them where possible, and a successful repair reports the retained backup. Directories and special files are refused. Homebrew-installed `setup` performs the same repair after service/config preflight; `setup --check` stays read-only and source builds retain their own executable. Neither operation restarts a running service. If the stale executable itself predates this command, invoke the new keg explicitly: `"$(brew --prefix sakamoto)/bin/sakamoto" link`.
+
+## Issue checklist
+
+| # | Issue | Implementation / remaining verification |
+|---|---|---|
+| 1 | Whole sidecar crosses machines | Source bundle uses an explicit whitelist. Shared nodes, policy, subscriptions, conf and automatic-group exclusions travel; machine paths, API/endpoint identities and cloud credentials stay local. |
+| 2 | Proxy endpoint enters TUN | Generation collects outbound IPs and bounded-resolves domains; mobile IP edits also repair exclusions. DNS snapshots need regeneration after address changes. |
+| 3 | URL-test timing | Native RPC is asynchronous, and seven members share one ten-worker batch. Watcher now waits for the native measurement budget and retains selection on acknowledgement failure. Actual JP Lite failures still require live evidence. |
+| 4 | Old Homebrew command | Read-only `link --check`, backed-up `link` repair and automatic repair in Homebrew setup. Host link was already current; sandbox repairs cover stale/missing/file cases. |
+| 5 | Android S3 not configured | Client support exists. Provider endpoint, region, private bucket/prefix and scoped credentials are still needed for live activation. |
+| 6 | iCloud dataless preflight | Request download and defer unavailable files; pending conf defers its rule graph while independent nodes can sync. |
+| 7 | Snapshot latency appears current | Node age/stale labels and detailed last-test timestamp; request failure is distinct from absent current history. |
+| 8 | DMIT transport loss | Watcher already defaults to a forced check every 30 seconds. Native URLTest offers one configured target per automatic group; multiple-target probing is not implemented. No live cause or successful mitigation is claimed. |
+| 9 | Limited supervisor diagnostics | `ctl state`, `urltest`, `select`, and validated `reload` are implemented. |
+| 10 | Watcher Homebrew PATH | Template contains both Homebrew prefixes and the installer-resolved core path; existing services need their environment reloaded. |
+| 11 | Absolute SRS paths | Generated paths are runtime-relative; check/run with the same `-D` directory and copy the rules folder with the config. |
 
 Android supports S3 source sync, but a private provider endpoint, region, bucket/prefix and scoped credentials must be configured before live sync can be verified. No bucket was created by this change. Intermittent DMIT transport loss requires actual connection evidence; longer result windows improve classification but do not repair the transport path, and no outage cause is inferred from URL-test history alone.

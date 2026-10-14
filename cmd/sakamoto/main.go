@@ -27,6 +27,8 @@ const usage = `sakamoto — a macOS sing-box controller inspired by Shadowrocket
 
 Usage:
   sakamoto              Open the TUI (groups, tests, VPN, config and logs)
+  sakamoto link         Repair the Homebrew command link; retain the old executable
+  sakamoto link --check  Read-only check against the installed Homebrew executable
   sakamoto setup        Interactively install macOS daemon/watch services (no VPN start)
   sakamoto setup --check  Read-only service/config preflight (no changes)
   sakamoto daemon       Root supervisor (LaunchDaemon); manages sing-box and
@@ -76,6 +78,13 @@ func main() {
 	case "tui":
 		if err := runTUI(ctx, *cfgPath); err != nil {
 			fatal("tui", err)
+		}
+	case "link":
+		if len(args) > 2 || (len(args) == 2 && args[1] != "--check") {
+			fatal("link", fmt.Errorf("only --check is supported"))
+		}
+		if err := runHomebrewLink(len(args) == 2); err != nil {
+			fatal("link", err)
 		}
 	case "setup":
 		if len(args) > 2 || (len(args) == 2 && args[1] != "--check") {
