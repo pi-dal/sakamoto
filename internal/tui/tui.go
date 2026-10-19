@@ -177,6 +177,7 @@ func Run(ctx context.Context, cfg *config.Config, path string) error {
 }
 
 func pump(ctx context.Context, path string, p *tea.Program) {
+	backoff := time.Second
 	for ctx.Err() == nil {
 		cfg, err := config.Load(path)
 		var c *sbclient.Client
@@ -186,10 +187,11 @@ func pump(ctx context.Context, path string, p *tea.Program) {
 		if err != nil {
 			p.Send(errMsg(err))
 		} else {
+			backoff = time.Second // connected: reset for the next failure
 			p.Send(connectedMsg{c})
 			g, ge := c.SubscribeGroups(ctx)
 			mode, modeErr := c.SubscribeClashMode(ctx)
-			s, se := c.SubscribeStatus(ctx, 1000)
+			s, se := c.SubscribeStatus(ctx, 2000)
 			cs, ce := c.SubscribeConnections(ctx, 2000)
 			ls, le := c.SubscribeLog(ctx)
 		stream:
@@ -235,12 +237,15 @@ func pump(ctx context.Context, path string, p *tea.Program) {
 				}
 			}
 			c.Close()
-			p.Send(errMsg(fmt.Errorf("core disconnected; reconnecting")))
+			p.Send(errMsg(fmt.Errorf("core disconnected; reconnecting in %s", backoff)))
 		}
 		select {
-		case <-time.After(2 * time.Second):
+		case <-time.After(backoff):
 		case <-ctx.Done():
 			return
+		}
+		if backoff < 30*time.Second {
+			backoff *= 2
 		}
 	}
 }

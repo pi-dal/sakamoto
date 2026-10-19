@@ -34,6 +34,7 @@ type Watcher struct {
 	events       chan Event
 	healthy      map[string]int // Candidate tag to consecutive healthy checks for recovery.
 	lastSnap     *daemon.Groups
+	lastSwitch   map[string]time.Time // Selector tag to most recent SelectOutbound we issued.
 	recoveryCh   chan recoveryRequest
 	lastRecovery time.Time
 }
@@ -45,6 +46,7 @@ func New(cfg *config.Config, dialFn func(ctx context.Context) (*sbclient.Client,
 		dialFn:     dialFn,
 		events:     make(chan Event, 64),
 		healthy:    map[string]int{},
+		lastSwitch: map[string]time.Time{},
 		recoveryCh: make(chan recoveryRequest, 1),
 	}
 }
@@ -94,7 +96,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 
 func (w *Watcher) proxyLoop(ctx context.Context) {
 	stateFile := filepath.Join(filepath.Dir(w.cfgPath), "proxy-restore.json")
-	ticker := time.NewTicker(3 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	var lastSync time.Time
 	var lastS3Sync time.Time
@@ -357,11 +359,22 @@ func (w *Watcher) evaluate(ctx context.Context, c *sbclient.Client, started int6
 			}
 			continue
 		}
+		// Rate-limit selects on the same selector: without a minimum interval,
+		// one bad URL-test round can flap the group every check cycle and
+		// keep sing-box recomputing state at high CPU cost.
+		if cooldown := w.cfg.SwitchMinInterval; cooldown > 0 {
+			if last, ok := w.lastSwitch[selTag]; ok && time.Since(last) < cooldown {
+				w.emit("info", "%s: %s -> %s suppressed (cooldown %s)", selTag, cur, desired, cooldown-time.Since(last))
+				continue
+			}
+		}
 		if desiredIdx > curIdx {
 			// Fail over immediately when the current choice is unhealthy.
 			w.emit("switch", "%s: %s unhealthy; switching to %s", selTag, cur, desired)
 			if err := c.SelectOutbound(ctx, selTag, desired); err != nil {
 				w.emit("error", "%s: switch failed: %v", selTag, err)
+			} else {
+				w.lastSwitch[selTag] = time.Now()
 			}
 		} else {
 			// Count consecutive healthy checks before restoring a preferred group.
@@ -370,6 +383,8 @@ func (w *Watcher) evaluate(ctx context.Context, c *sbclient.Client, started int6
 				w.emit("switch", "%s: %s recovered after %d healthy checks; switching back", selTag, desired, w.healthy[desired])
 				if err := c.SelectOutbound(ctx, selTag, desired); err != nil {
 					w.emit("error", "%s: switch-back failed: %v", selTag, err)
+				} else {
+					w.lastSwitch[selTag] = time.Now()
 				}
 				w.healthy[desired] = 0
 			} else {
