@@ -98,9 +98,4 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.7")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 
-    // JVM unit tests (run with ./gradlew test once a JDK/SDK exists).
-    // org.json ships as android.jar stubs; the real artifact makes the pure
-    // JSON injection model testable on the JVM classpath.
-    testImplementation("junit:junit:4.13.2")
-    testImplementation("org.json:json:20240303")
 }

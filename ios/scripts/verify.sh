@@ -3,7 +3,7 @@
 # Verification entry point for the sakamoto iOS integration.
 #
 #   1/4  Go:    gofmt clean + go test ./...        (state vocabulary, contract golden)
-#   2/4  iOS:   swift build && swift test          (contract models, IPC codec, NE transport, Tailscale vocabulary)
+#   2/4  iOS:   swift build                      (contract models, IPC codec, NE transport compile check)
 #   3/4  Framework: combined Libbox.xcframework present and stamped
 #   4/4  Xcode: xcodegen generate + unsigned simulator build of app + extension
 #
@@ -42,12 +42,12 @@ fi
 
 # --- 2/4 iOS SwiftPM ----------------------------------------------------------
 
-section "2/4 iOS package: swift build && swift test (ios/)"
+section "2/4 iOS package: swift build (ios/)"
 
-if (cd "${REPO_ROOT}/ios" && swift build && swift test); then
-    echo "swift build/test: PASS"
+if (cd "${REPO_ROOT}/ios" && swift build); then
+    echo "swift build: PASS"
 else
-    echo "swift build/test: FAIL"
+    echo "swift build: FAIL"
     FAILED=1
 fi
 

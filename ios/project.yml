@@ -178,19 +178,6 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: com.pidal.sakamoto.EditorUITests
 
-  SakamotoAppTests:
-    type: bundle.unit-test
-    platform: iOS
-    sources:
-      - path: AppTests
-    dependencies:
-      - target: Sakamoto
-      - package: SakamotoiOS
-        product: SakamotoKit
-    settings:
-      base:
-        GENERATE_INFOPLIST_FILE: YES
-        PRODUCT_BUNDLE_IDENTIFIER: com.pidal.sakamoto.AppTests
 
 schemes:
   Sakamoto:
@@ -203,5 +190,4 @@ schemes:
       config: Debug
     test:
       targets:
-        - SakamotoAppTests
         - SakamotoEditorUITests

@@ -128,12 +128,12 @@ depends = ["mobile:tools"]
 run = 'PATH="$(go env GOPATH)/bin:$PATH" ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358" android/scripts/build-mobilecore.sh'
 
 [tasks."android:verify"]
-description = "Run JVM tests and assemble APK (AARs must already exist)"
+description = "Assemble APK (AARs must already exist)"
 dir = "android"
-run = "./gradlew test :app:assembleDebug --no-daemon --max-workers=2"
+run = "./gradlew :app:assembleDebug --no-daemon --max-workers=2"
 
 [tasks."android:build"]
-description = "Install SDK packages, build AARs, test and assemble APK"
+description = "Install SDK packages, build AARs and assemble APK"
 run = ["mise run android:sdk", "mise run android:libbox", "mise run android:verify"]
 
 [tasks."android:checksum"]

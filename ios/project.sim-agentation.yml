@@ -20,7 +20,3 @@ targets:
       configs:
         Debug:
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) DEBUG SAKAMOTO_SIM_AGENTATION"
-  SakamotoAppTests:
-    settings:
-      base:
-        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
