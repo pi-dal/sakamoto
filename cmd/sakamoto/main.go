@@ -21,7 +21,7 @@ import (
 	"github.com/pi-dal/sakamoto/internal/watch"
 )
 
-const version = "0.2.15"
+const version = "0.2.16"
 
 const usage = `sakamoto — a macOS sing-box controller inspired by Shadowrocket
 
