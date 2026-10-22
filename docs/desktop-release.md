@@ -43,8 +43,8 @@ Upload secrets via stdin or protected files; do not put values in shell history:
 
 ```sh
 base64 < /secure/location/application.p12 | gh secret set MACOS_CERTIFICATE_P12_BASE64
- gh secret set MACOS_CERTIFICATE_PASSWORD < /secure/location/p12-passphrase.txt
- gh secret set ASC_PRIVATE_KEY < /secure/location/AuthKey.p8
+gh secret set MACOS_CERTIFICATE_PASSWORD < /secure/location/p12-passphrase.txt
+gh secret set ASC_PRIVATE_KEY < /secure/location/AuthKey.p8
 ```
 
 Use `gh secret set ASC_KEY_ID`, `gh secret set ASC_ISSUER_ID` and
