@@ -1,0 +1,190 @@
+name: Desktop release
+
+on:
+  push:
+    tags: ['desktop-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release
+  cancel-in-progress: false
+
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      MACOS_TEAM_ID: ${{ vars.MACOS_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v3
+        with:
+          version: '2026.10.0'
+          install_args: go python
+          cache: true
+      - name: Validate release tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, re
+          version = re.search(r'const version = "([^"]+)"', pathlib.Path('cmd/sakamoto/main.go').read_text()).group(1)
+          tag = os.environ['RELEASE_TAG']
+          if os.environ['GITHUB_REF_TYPE'] == 'tag':
+              assert tag == 'desktop-v' + version, 'Desktop tag must match the source version'
+          PY
+      - name: Prepare Developer ID signing
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: python3 scripts/macos-signing.py prepare
+      - name: Verify desktop workflows
+        run: |
+          export SAKAMOTO_MENUBAR_ARTIFACT_DIR="$PWD/dist/menubar-verification"
+          go test ./internal/desktop -count=1 -timeout=60s
+          cd desktop
+          go test ./... -count=1 -timeout=60s
+          go vet ./...
+      - name: Build, sign, notarize and staple both architectures
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          python3 scripts/build-desktop.py --target darwin-arm64 --target darwin-amd64 --notarize
+          python3 scripts/verify-desktop-release.py --team-id "$MACOS_TEAM_ID" --cask-output dist/desktop/sakamoto-desktop.rb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-macos
+          path: |
+            dist/desktop/*.zip
+            dist/desktop/SHA256SUMS
+            dist/desktop/*.json
+            dist/desktop/sakamoto-desktop.rb
+          if-no-files-found: error
+          compression-level: 0
+      - name: Preserve notarization diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-notarization-diagnostics
+          path: dist/desktop/notary-*.json
+          if-no-files-found: ignore
+      - name: Remove temporary signing credentials
+        if: always()
+        run: python3 scripts/macos-signing.py cleanup
+
+  portable:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v3
+        with:
+          version: '2026.10.0'
+          install_args: go python
+          cache: true
+      - name: Package portable desktop clients
+        run: python3 scripts/build-desktop.py --target windows-arm64 --target windows-amd64 --target linux-arm64 --target linux-amd64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-portable
+          path: |
+            dist/desktop/*.zip
+            dist/desktop/*.tar.gz
+            dist/desktop/SHA256SUMS
+            dist/desktop/release-metadata.json
+          if-no-files-found: error
+          compression-level: 0
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/desktop-v')
+    needs: [macos, portable]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          path: dist/release-inputs
+      - name: Combine verified release artifacts
+        run: python3 scripts/merge-desktop-release.py
+      - name: Publish desktop release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" --draft --title "Desktop ${RELEASE_TAG#desktop-v}" --notes-file desktop/RELEASE_NOTES.md
+          gh release upload "$RELEASE_TAG" dist/release/* --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --latest=false
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-published
+          path: dist/release/
+          if-no-files-found: error
+          compression-level: 0
+
+  homebrew:
+    if: startsWith(github.ref, 'refs/tags/desktop-v')
+    needs: publish
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: source
+          persist-credentials: false
+      - uses: actions/checkout@v5
+        with:
+          repository: pi-dal/homebrew-tap
+          path: tap
+          ssh-key: ${{ secrets.HOMEBREW_TAP_SSH_KEY }}
+      - uses: jdx/mise-action@v3
+        with:
+          working_directory: source
+          version: '2026.10.0'
+          install_args: python
+      - name: Verify public release and generate cask
+        working-directory: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          MACOS_TEAM_ID: ${{ vars.MACOS_TEAM_ID }}
+        run: |
+          gh release download "$RELEASE_TAG" --repo pi-dal/sakamoto --dir dist/desktop --pattern '*darwin-*.zip' --pattern 'release-metadata.json' --pattern 'notary-*.json'
+          python3 scripts/verify-desktop-release.py --team-id "$MACOS_TEAM_ID" --cask-output dist/desktop/sakamoto-desktop.rb
+          python3 - <<'PY'
+          import json, pathlib, re, shutil
+          generated = pathlib.Path('dist/desktop/sakamoto-desktop.rb')
+          destination = pathlib.Path('../tap/Casks/sakamoto-desktop.rb')
+          if destination.exists():
+              previous = re.search(r'^  version "([0-9.]+)"', destination.read_text(), re.M).group(1)
+              current = json.loads(pathlib.Path('dist/desktop/release-metadata.json').read_text())['version']
+              assert tuple(map(int, current.split('.'))) >= tuple(map(int, previous.split('.'))), 'Refusing to downgrade the desktop cask'
+          shutil.copy2(generated, destination)
+          PY
+      - name: Audit and update tap
+        working-directory: tap
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          brew tap --custom-remote pi-dal/desktop-release "file://$PWD"
+          if brew command trust >/dev/null 2>&1; then brew trust pi-dal/desktop-release; fi
+          cp Casks/sakamoto-desktop.rb "$(brew --repository pi-dal/desktop-release)/Casks/sakamoto-desktop.rb"
+          brew style --cask pi-dal/desktop-release/sakamoto-desktop
+          brew audit --cask --strict --online pi-dal/desktop-release/sakamoto-desktop
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Casks/sakamoto-desktop.rb
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: release sakamoto-desktop ${RELEASE_TAG#desktop-v}"
+            git push origin HEAD:main
+          fi

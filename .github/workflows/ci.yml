@@ -35,3 +35,61 @@ jobs:
           path: dist/cli/
           if-no-files-found: error
           retention-days: 14
+      - name: Verify menu bar workflows
+        run: mise run gui:check
+      - name: Package native macOS menu bar app
+        run: |
+          python3 scripts/build-desktop.py --target darwin-arm64 --target darwin-amd64
+          python3 scripts/verify-desktop-release.py --allow-ad-hoc --cask-output dist/desktop/sakamoto-desktop.rb
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sakamoto-menubar-${{ github.sha }}
+          path: |
+            dist/desktop/
+            dist/menubar-verification/
+          if-no-files-found: warn
+          retention-days: 14
+  desktop-native:
+    name: Desktop client (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            platform: windows
+          - runner: ubuntu-24.04
+            platform: linux
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v3
+        with:
+          version: '2026.10.0'
+          install_args: go python
+          cache: true
+          cache_save: ${{ github.event_name != 'pull_request' }}
+      - name: Exercise external core API workflow
+        run: |
+          SAKAMOTO_MENUBAR_ARTIFACT_DIR="$PWD/dist/menubar-verification" go test ./internal/desktop -run TestExternalCoreEndToEnd -count=1 -timeout=30s
+      - name: Verify shared desktop view
+        run: |
+          export SAKAMOTO_MENUBAR_ARTIFACT_DIR="$PWD/dist/menubar-verification"
+          mkdir -p "$SAKAMOTO_MENUBAR_ARTIFACT_DIR"
+          cd desktop
+          go test ./... -count=1 -timeout=30s
+          go vet ./...
+      - name: Package native desktop client
+        run: python scripts/build-desktop.py --target ${{ matrix.platform }}-amd64
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sakamoto-desktop-${{ matrix.platform }}-${{ github.sha }}
+          path: |
+            dist/desktop/
+            dist/menubar-verification/
+          if-no-files-found: warn
+          retention-days: 14

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -17,6 +16,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/term"
 	"github.com/pi-dal/sakamoto/internal/config"
+	"github.com/pi-dal/sakamoto/internal/desktop"
 	"github.com/pi-dal/sakamoto/internal/gen"
 	"github.com/pi-dal/sakamoto/internal/icloud"
 	"github.com/pi-dal/sakamoto/internal/s3sync"
@@ -251,16 +251,9 @@ func pump(ctx context.Context, path string, p *tea.Program) {
 }
 
 func shadowrocketVPNConnected() bool {
-	out, err := exec.Command("/usr/sbin/scutil", "--nc", "list").Output()
-	if err != nil {
-		return false
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		if strings.Contains(line, "(Connected)") && strings.Contains(line, "com.liguangming.Shadowrocket") {
-			return true
-		}
-	}
-	return false
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return desktop.ShadowrocketConnected(ctx)
 }
 func queryService() tea.Msg {
 	shadowrocket := shadowrocketVPNConnected()

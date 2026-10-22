@@ -1,6 +1,6 @@
 # sakamoto
 
-A mouse-enabled macOS TUI for [sing-box](https://sing-box.sagernet.org/). Inspired by Shadowrocket's Home / Config / Data / Settings workflow; **not affiliated with Shadowrocket or SagerNet**.
+A connection client with a mouse-enabled macOS TUI and a shared macOS/Windows/Linux tray app for [sing-box](https://sing-box.sagernet.org/). Inspired by Shadowrocket's Home / Config / Data / Settings workflow; **not affiliated with Shadowrocket or SagerNet**.
 
 > **No real server credentials belong in this repository or tap.** The default local state directory is `~/.sakamoto` on a fresh install. Existing installs with a running legacy daemon keep using `~/.config/sakamoto` until explicitly migrated.
 
@@ -34,6 +34,31 @@ For a source build in this repository, use `./sakamoto setup` instead. `setup` l
 
 **After a reboot, reconnect manually.** Launchd restarts the supervisor and starts the watcher at login, but neither starts sing-box's TUN. With protected DNS enabled, the supervisor attempts to restore the prior DHCP/static DNS from its private snapshot when no loopback DNS listener survives; it does **not** re-enable protection automatically. Do not assume proxy or DNS protection persists across a reboot. See [startup, failure and verification boundaries](docs/dns-protection.md#startup-and-reboot-behavior).
 
+## Desktop tray app
+
+The shared MyGo + Onevra client lives in the independent [`desktop`](desktop/README.md)
+Go module. macOS uses a menu bar popover and the existing supervisor; Windows uses
+a notification-area flyout; Linux uses an AppIndicator menu and utility panel.
+The view, themes, mode/node controls, latency and traffic are shared. Windows/Linux
+use an existing native core API and explicitly show external ownership; their
+privileged connection/DNS service adapters are not supplied by this preview.
+Closing a tray panel keeps the app running, and quitting preserves the independent
+service. Opening it never connects. Advanced configuration remains user-owned.
+
+```bash
+mise run gui:demo     # build and open an explicitly labeled demo; no live runtime
+mise run gui:check    # isolated workflow tests, screenshots and JSON receipts
+mise run gui:build    # package the current OS under dist/desktop/
+mise exec -- python scripts/run-desktop.py
+```
+
+The [desktop release pipeline](docs/desktop-release.md) signs and notarizes macOS
+apps and updates the separate `sakamoto-desktop` Homebrew cask after publication.
+The first public release awaits an Account Holder-issued Developer ID
+certificate. Once published, install with
+`brew install --cask pi-dal/tap/sakamoto-desktop`; the existing CLI formula remains independent.
+See [platform capabilities, setup and verification limits](desktop/README.md).
+
 ## Android
 
 The official Android client is available from
@@ -59,6 +84,7 @@ mise install
 mise run ci:check
 mise run icons
 mise run cli:build                      # optimized arm64/Intel CLI + resources
+mise run gui:build                      # native tray client for the current OS
 mise run ios:build                       # macOS + Xcode
 mise run ios:package                     # simulator .app zip
 mise -E android install
@@ -98,6 +124,7 @@ task installs services or changes the live VPN.
 
 ## Configuration and migration
 
+- [Shared macOS/Windows/Linux tray client](desktop/README.md)
 - [TUI: mouse and keyboard workflows](docs/tui.md)
 - [S3 source sync across TUI, iOS and Android](docs/s3-sync.md)
 - [Configuration, fallback and privacy](docs/configuration.md)

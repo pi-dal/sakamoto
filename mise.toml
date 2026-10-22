@@ -48,6 +48,24 @@ SAKAMOTO_RECOVERY_ARTIFACT_DIR="$PWD/dist/recovery-e2e" go test -race ./cmd/saka
 description = "Package optimized macOS arm64 and Intel CLI/TUI binaries with setup resources"
 run = "python3 scripts/build-cli.py"
 
+[tasks."gui:check"]
+description = "Verify shared desktop workflows with local sockets, a mock API and rendered artifacts"
+run = "python scripts/check-desktop.py"
+
+[tasks."gui:build"]
+description = "Package the shared desktop client for this operating system"
+run = "python scripts/build-desktop.py"
+
+[tasks."gui:demo"]
+description = "Open the packaged tray demo without reading the live runtime"
+depends = ["gui:build"]
+run = "python scripts/run-desktop.py --demo"
+
+[tasks."gui:verify"]
+description = "Verify the packaged desktop demo and save its native lifecycle receipt"
+depends = ["gui:check", "gui:build"]
+run = "python scripts/run-desktop.py --demo --verify dist/menubar-verification"
+
 [tasks."ci:check"]
 description = "Validate Actions, shell scripts and repository text"
 tools.actionlint = "1.7.12"

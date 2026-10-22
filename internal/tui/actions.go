@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/pi-dal/sakamoto/internal/config"
 	"github.com/pi-dal/sakamoto/internal/core"
+	"github.com/pi-dal/sakamoto/internal/desktop"
 	"github.com/pi-dal/sakamoto/internal/gen"
 	"github.com/pi-dal/sakamoto/internal/s3sync"
 	"github.com/pi-dal/sakamoto/internal/sbclient"
@@ -529,34 +530,12 @@ func (m *model) selectCurrent() tea.Cmd {
 		m.notice = "Connect before selecting a node"
 		return nil
 	}
-	c, g, t := m.conn, r.group.Tag, r.item.Tag
-	if r.group.Selectable {
-		return func() tea.Msg {
-			err := c.SelectOutbound(context.Background(), g, t)
-			return actionMsg{text: "Selected " + t, err: err}
-		}
-	}
-	// Select an auto-group leaf via ManualPick before switching MainProxy.
-	available := false
-	for _, group := range m.groups {
-		if group.Tag == "ManualPick" {
-			for _, item := range group.Items {
-				if item.Tag == t {
-					available = true
-				}
-			}
-		}
-	}
-	if !available {
-		m.notice = "This node is unavailable in ManualPick"
-		return nil
-	}
+	c, groups, groupTag, tag := m.conn, m.groups, r.group.Tag, r.item.Tag
 	return func() tea.Msg {
-		if err := c.SelectOutbound(context.Background(), "ManualPick", t); err != nil {
-			return actionMsg{err: err}
-		}
-		err := c.SelectOutbound(context.Background(), "MainProxy", "ManualPick")
-		return actionMsg{text: "Manually selected " + t, err: err}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		err := desktop.SelectNode(ctx, c, groups, groupTag, tag)
+		return actionMsg{text: "Selected " + tag, err: err}
 	}
 }
 func (m *model) testCurrent() tea.Cmd {
@@ -646,27 +625,8 @@ func (m *model) cycleMode() tea.Cmd {
 			return actionMsg{err: fmt.Errorf("read routing mode: %w", err)}
 		}
 		next := nextMode(before.CurrentMode)
-		available := false
-		for _, mode := range before.ModeList {
-			if strings.EqualFold(mode, next) {
-				available = true
-				break
-			}
-		}
-		if !available {
-			return actionMsg{err: fmt.Errorf("%s mode is unavailable; regenerate config and reconnect the TUN", next)}
-		}
-		if err := c.SetClashMode(ctx, next); err != nil {
-			return actionMsg{err: fmt.Errorf("set %s mode: %w", next, err)}
-		}
-		after, err := c.ClashModeStatus(ctx)
-		if err != nil {
-			return actionMsg{err: fmt.Errorf("verify %s mode: %w", next, err)}
-		}
-		if !strings.EqualFold(after.CurrentMode, next) {
-			return actionMsg{err: fmt.Errorf("%s mode was not applied (core reports %s)", next, after.CurrentMode)}
-		}
-		return actionMsg{text: "Mode: " + after.CurrentMode, mode: after.CurrentMode}
+		observed, err := desktop.ApplyMode(ctx, c, next)
+		return actionMsg{text: "Mode: " + observed, mode: observed, err: err}
 	}
 }
 func (m *model) toggleSetting(i int) tea.Cmd {
