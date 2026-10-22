@@ -1,0 +1,197 @@
+package daemon_test
+
+// Failure cases: control cannot answer /key; health errors are hidden at info;
+// control recovers without a core restart; login URLs and status updates arrive;
+// cancellation and shutdown release the control connection and subscription.
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/daemon"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/tailscale/control/controlhttp/controlhttpserver"
+	"github.com/sagernet/tailscale/ipn"
+	"github.com/sagernet/tailscale/ipn/store"
+	"github.com/sagernet/tailscale/tailcfg"
+	"github.com/sagernet/tailscale/types/key"
+	"github.com/sagernet/tailscale/types/persist"
+	"golang.org/x/net/http2"
+)
+
+func TestSakamotoTailscaleControlFailureAndRecovery(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "")
+	t.Setenv("HTTPS_PROXY", "")
+	t.Setenv("ALL_PROXY", "")
+	t.Setenv("TS_AUTHKEY", "")
+	t.Setenv("TS_AUTH_KEY", "")
+	ctx, cancel := context.WithTimeout(include.Context(context.Background()), 30*time.Second)
+	defer cancel()
+	var blocked atomic.Bool
+	blocked.Store(true)
+	var attempts atomic.Int32
+	machine := key.NewMachine()
+	authURL := "https://login.tailscale.com/a/local-test-only"
+	mux := http.NewServeMux()
+	mux.HandleFunc("/key", func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		if blocked.Load() {
+			http.Error(w, "test control unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		json.NewEncoder(w).Encode(tailcfg.OverTLSPublicKeyResponse{PublicKey: machine.Public(), LegacyPublicKey: machine.Public()})
+	})
+	mux.HandleFunc("/ts2021", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := controlhttpserver.AcceptHTTP(ctx, w, r, machine, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		// Bound every upgraded connection, including on a failed assertion.
+		stop := context.AfterFunc(ctx, func() { conn.Close() })
+		defer stop()
+		h2 := &http2.Server{}
+		h2.ServeConn(conn, &http2.ServeConnOpts{Context: ctx, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/machine/register" {
+				http.NotFound(w, r)
+				return
+			}
+			var request tailcfg.RegisterRequest
+			if json.NewDecoder(r.Body).Decode(&request) != nil {
+				http.Error(w, "bad request", 400)
+				return
+			}
+			if request.Followup != "" {
+				<-r.Context().Done()
+				return
+			}
+			json.NewEncoder(w).Encode(tailcfg.RegisterResponse{AuthURL: authURL})
+		})})
+	})
+	control := httptest.NewServer(mux)
+	defer control.Close()
+	service := daemon.NewStartedService(daemon.ServiceOptions{Context: ctx, LogMaxLines: 100})
+	defer func() { cancel(); service.CloseService(); service.Close() }()
+	stateDirectory := filepath.Join(t.TempDir(), "tailnet")
+	if err := os.MkdirAll(stateDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.NewFileStore(t.Logf, filepath.Join(stateDirectory, "tailscaled.state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefs := ipn.NewPrefs()
+	prefs.WantRunning = true
+	prefs.ControlURL = control.URL
+	prefs.Persist = &persist.Persist{PrivateNodeKey: key.NewNode(), UserProfile: tailcfg.UserProfile{ID: 1, LoginName: "fixture@example.invalid"}}
+	profile := &ipn.LoginProfile{ID: "test", Key: "profile-test", Name: "fixture", UserProfile: prefs.Persist.UserProfile, ControlURL: control.URL}
+	known, _ := json.Marshal(map[ipn.ProfileID]*ipn.LoginProfile{"test": profile})
+	for key, value := range map[ipn.StateKey][]byte{ipn.CurrentProfileStateKey: []byte("profile-test"), ipn.KnownProfilesStateKey: known, "profile-test": prefs.ToBytes()} {
+		if err := state.WriteState(key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	directory, _ := json.Marshal(stateDirectory)
+	config := fmt.Sprintf(`{"log":{"level":"info"},"endpoints":[{"type":"tailscale","tag":"tailnet","state_directory":%s,"control_url":%q}],"outbounds":[{"type":"direct","tag":"direct"}],"route":{"final":"direct"}}`, directory, control.URL)
+	if err := service.StartOrReloadService(ctx, config, nil); err != nil {
+		t.Fatal(err)
+	}
+	instance := service.RunningInstanceID()
+	endpoint, ok := service.Instance().Box().Endpoint().Endpoints()[0].(adapter.TailscaleEndpoint)
+	if !ok {
+		t.Fatal("missing embedded endpoint")
+	}
+	updates := make(chan *adapter.TailscaleEndpointStatus, 32)
+	finished := make(chan error, 1)
+	watchCtx, stopWatch := context.WithCancel(ctx)
+	defer stopWatch()
+	go func() {
+		finished <- endpoint.SubscribeTailscaleStatus(watchCtx, func(s *adapter.TailscaleEndpointStatus) {
+			select {
+			case updates <- s:
+			case <-watchCtx.Done():
+			}
+		})
+	}()
+	waitStatus := func(state string, requireURL bool) *adapter.TailscaleEndpointStatus {
+		t.Helper()
+		for {
+			select {
+			case s := <-updates:
+				t.Logf("state=%s auth_url_present=%v control_attempts=%d", s.BackendState, s.AuthURL != "", attempts.Load())
+				if s.BackendState == state && (!requireURL || s.AuthURL != "") {
+					return s
+				}
+			case err := <-finished:
+				t.Fatalf("status subscription stopped: %v", err)
+				return nil
+			case <-ctx.Done():
+				t.Fatalf("missing %s status: %v; control_attempts=%d", state, ctx.Err(), attempts.Load())
+				return nil
+			}
+		}
+	}
+	waitStatus("NoState", false)
+	// Wait for a real health warning from the failed control login, rather
+	// than injecting a backend enum or an artificial notification.
+	visible := false
+	deadline := time.NewTimer(12 * time.Second)
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer deadline.Stop()
+	defer ticker.Stop()
+waitHealth:
+	for {
+		for _, entry := range service.SavedLog() {
+			if strings.Contains(entry.Message, "health:") && strings.Contains(entry.Message, "503 Service Unavailable") {
+				visible = true
+				break waitHealth
+			}
+		}
+		select {
+		case <-deadline.C:
+			break waitHealth
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-ticker.C:
+		}
+	}
+	if attempts.Load() == 0 {
+		t.Fatal("control was never contacted")
+	}
+	if !visible {
+		t.Error("control health failure is hidden at the default info log level")
+	}
+	blocked.Store(false)
+	login := waitStatus("NeedsLogin", true)
+	if login.AuthURL != authURL {
+		t.Fatal("login URL lost in status conversion")
+	}
+	if service.RunningInstanceID() != instance {
+		t.Fatal("control recovery restarted core")
+	}
+	stopWatch()
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("status subscription did not cancel")
+	}
+	report := map[string]any{"blocked_state": "NoState", "health_visible_at_info": visible, "recovered_state": login.BackendState, "auth_url_received": true, "same_core": true, "control_attempts": attempts.Load()}
+	if dir := os.Getenv("SAKAMOTO_TEST_ARTIFACT_DIR"); dir != "" {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := json.MarshalIndent(report, "", "  ")
+		if err := os.WriteFile(filepath.Join(dir, "tailscale-control-recovery.json"), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

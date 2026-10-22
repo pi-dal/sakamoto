@@ -48,6 +48,39 @@ def patch(root):
 \t\tdefer t.transportConnections.Close()
 \t}
 ''', "transport teardown")
+    transport = replace_once(transport,
+        '\tvar reportedAuthURL string\n',
+        '\tvar reportedAuthURL string\n\treportedHealth := make(map[string]string)\n', "health warning history")
+    transport = replace_once(transport,
+        'localBackend.WatchNotifications(t.ctx, ipn.NotifyInitialState|ipn.NotifyPeerPatches, nil,',
+        'localBackend.WatchNotifications(t.ctx, ipn.NotifyInitialState|ipn.NotifyPeerPatches|ipn.NotifyInitialHealthState, nil,', "initial health snapshot")
+    transport = replace_once(transport, '''\t\t\tif roNotify.ErrMessage != nil {
+\t\t\t\tbusError = *roNotify.ErrMessage
+\t\t\t\treturn false
+\t\t\t}
+''', '''\t\t\t// Surface backend health at the normal log level. Low-level tsnet
+\t\t\t// logs are trace/debug, so a control failure otherwise looks like
+\t\t\t// an endless NoState with no explanation in the app's logs.
+\t\t\tif roNotify.Health != nil {
+\t\t\t\tcurrent := make(map[string]string, len(roNotify.Health.Warnings))
+\t\t\t\tfor code, warning := range roNotify.Health.Warnings {
+\t\t\t\t\tcurrent[string(code)] = warning.Text
+\t\t\t\t\tif reportedHealth[string(code)] != warning.Text {
+\t\t\t\t\t\tif warning.Severity == "low" {
+\t\t\t\t\t\t\tt.logger.Info("health: ", warning.Text)
+\t\t\t\t\t\t} else {
+\t\t\t\t\t\t\tt.logger.Warn("health: ", warning.Text)
+\t\t\t\t\t\t}
+\t\t\t\t\t}
+\t\t\t\t}
+\t\t\t\treportedHealth = current
+\t\t\t}
+\t\t\tif roNotify.ErrMessage != nil {
+\t\t\t\tbusError = *roNotify.ErrMessage
+\t\t\t\tt.logger.Error("backend: ", busError)
+\t\t\t\treturn false
+\t\t\t}
+''', "backend health logging")
     # Validate every upstream anchor before writing. Never edit GOMODCACHE.
     server.write_text(source)
     monitor.write_text(network)

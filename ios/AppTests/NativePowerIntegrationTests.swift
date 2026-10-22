@@ -116,7 +116,7 @@ final class NativePowerIntegrationTests: XCTestCase {
     }
 }
 
-private final class ObservationTestPlatform: NSObject, LibboxPlatformInterfaceProtocol, LibboxCommandServerHandlerProtocol {
+final class ObservationTestPlatform: NSObject, LibboxPlatformInterfaceProtocol, LibboxCommandServerHandlerProtocol {
     private func unsupported() -> NSError { NSError(domain: "SyntheticObservationServer", code: 1) }
     func openTun(_ options: LibboxTunOptionsProtocol?, ret0_: UnsafeMutablePointer<Int32>?) throws { throw unsupported() }
     func usePlatformAutoDetectControl() -> Bool { false }

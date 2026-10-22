@@ -36,7 +36,28 @@ Explicit iOS wake immediately resumes the core; the minute timer remains a
 fallback when the system omits a wake callback.
 
 Tailscale status subscriptions retry independently of the shared command channel
-and reject stale callbacks after cancellation. Peer Ping displays direct,
+and reject stale callbacks after cancellation. `NoState` is rendered as
+Initializing (not an unknown state); it is not a usable tailnet session. A
+nonempty HTTP/HTTPS authentication URL remains available regardless of the
+concurrent state notification. The checked libbox patch logs deduplicated
+Tailscale health changes at info/warn and backend errors at error, so Data →
+Logs can explain control/login failures without trace logging. Low-severity
+startup notices stay at info. The endpoint defaults to direct control/DERP
+transport unless its dialer `detour` is configured; selecting an app proxy or
+forcing DERP does not itself change the control connection. Persistent NoState
+can also reflect state-store health problems; inspect the actual health message
+before attributing it to networking.
+
+The regression scenario uses an existing disposable identity and a local Noise
+control server: fail `/key`, observe NoState plus a visible health error, restore
+control, and receive NeedsLogin plus an auth URL without replacing the core.
+Run `SAKAMOTO_TEST_ARTIFACT_DIR=ios/build/tailscale-artifacts python3 scripts/test-libbox-network.py`
+for `tailscale-control-recovery.json`. `NativeTailscaleIntegrationTests` exercises
+the actual iOS libbox status stream and controller cancellation/reattachment;
+its JSON attachment is kept in the Xcode test result. The framework must be
+rebuilt with `ios/scripts/build-libbox.sh` to ship the backend logging patch.
+
+Peer Ping displays direct,
 DERP region, peer relay, or an unspecified relay. These changes target network
 recovery, but sustained SSH sessions across switching networks and background
 intervals still require physical-device verification. An explicit configuration
@@ -312,9 +333,9 @@ pinned by `TailscaleVocabularyTests`):
 - any external-CLI/system-daemon probing (no such thing on iOS; faking it
   would be fake support)
 
-`TailscaleBackendState` maps the wire strings `Stopped / Starting /
-NeedsLogin / NeedsMachineAuth / Running` and carries unknown values verbatim
-(`unrecognized`) instead of guessing.
+`TailscaleBackendState` maps the wire strings `NoState / InUseOtherUser /
+Stopped / Starting / NeedsLogin / NeedsMachineAuth / Running` and carries
+unknown values verbatim (`unrecognized`) instead of guessing.
 
 ## State vocabulary: one source of truth
 

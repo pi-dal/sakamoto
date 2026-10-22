@@ -258,10 +258,14 @@ struct TailscaleView: View {
                 if let selfPeer = endpoint.selfPeer {
                     statusRow("This device", value: selfPeer.displayName)
                 }
-                if endpoint.backendState.needsLoginFlow, !endpoint.authURL.isEmpty {
-                    if let url = URL(string: endpoint.authURL) {
-                        Link("Open login URL", destination: url)
-                    }
+                if endpoint.backendState == .noState {
+                    Text("Waiting for Tailscale to initialize. If this continues, check Data → Logs for Tailscale health warnings.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                if !endpoint.authURL.isEmpty, let url = URL(string: endpoint.authURL),
+                   ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil {
+                    Link("Open login URL", destination: url)
                     Text(endpoint.authURL)
                         .font(.footnote.monospaced())
                         .textSelection(.enabled)
@@ -282,6 +286,8 @@ struct TailscaleView: View {
 
     private func stateText(_ endpoint: TailscaleEndpointSummary) -> String {
         switch endpoint.backendState {
+        case .noState: return "Initializing"
+        case .inUseOtherUser: return "In use by another user"
         case .stopped: return "Stopped"
         case .starting: return "Starting"
         case .needsLogin: return "Needs login"

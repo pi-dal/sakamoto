@@ -19,7 +19,8 @@ import Foundation
 //
 // The strings below are the wire facts reported by Libbox v1.14.2:
 //   - BackendState values come from tailscale/ipn.State.String()
-//     ("Stopped", "Starting", "NeedsLogin", "NeedsMachineAuth", "Running").
+//     ("NoState", "InUseOtherUser", "Stopped", "Starting", "NeedsLogin",
+//     "NeedsMachineAuth", "Running").
 //   - Actions map 1:1 onto LibboxCommandClient methods that exist in
 //     v1.14.2. Everything else is listed in `TailscaleCapabilities.
 //     unsupported` with the exact reason, so the UI can say why a button is
@@ -28,6 +29,9 @@ import Foundation
 /// Normalized tailscaled backend state (ipn.State). `unrecognized` carries
 /// values from a newer core verbatim — never guessed into a known bucket.
 public enum TailscaleBackendState: Equatable, Sendable {
+    /// Initialization is pending, including the first control-plane result.
+    case noState
+    case inUseOtherUser
     case stopped
     case starting
     /// Login required; the login URL arrives separately (authURL).
@@ -39,6 +43,8 @@ public enum TailscaleBackendState: Equatable, Sendable {
 
     public init(backendState: String) {
         switch backendState.trimmingCharacters(in: .whitespacesAndNewlines) {
+        case "NoState": self = .noState
+        case "InUseOtherUser": self = .inUseOtherUser
         case "Stopped": self = .stopped
         case "Starting": self = .starting
         case "NeedsLogin": self = .needsLogin
@@ -66,6 +72,8 @@ public enum TailscaleBackendState: Equatable, Sendable {
     /// wire string it was parsed from.
     public var wireString: String {
         switch self {
+        case .noState: return "NoState"
+        case .inUseOtherUser: return "InUseOtherUser"
         case .stopped: return "Stopped"
         case .starting: return "Starting"
         case .needsLogin: return "NeedsLogin"
