@@ -177,6 +177,7 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           brew tap --custom-remote pi-dal/desktop-release "file://$PWD"
+          if brew command trust >/dev/null 2>&1; then brew trust pi-dal/desktop-release; fi
           cp Casks/sakamoto-desktop.rb "$(brew --repository pi-dal/desktop-release)/Casks/sakamoto-desktop.rb"
           brew style --cask pi-dal/desktop-release/sakamoto-desktop
           brew audit --cask --strict --online pi-dal/desktop-release/sakamoto-desktop
