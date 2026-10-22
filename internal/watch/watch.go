@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pi-dal/sakamoto/internal/config"
@@ -31,12 +33,16 @@ type Watcher struct {
 	cfgPath string
 	dialFn  func(ctx context.Context) (*sbclient.Client, error)
 
-	events       chan Event
-	healthy      map[string]int // Candidate tag to consecutive healthy checks for recovery.
-	lastSnap     *daemon.Groups
-	lastSwitch   map[string]time.Time // Selector tag to most recent SelectOutbound we issued.
-	recoveryCh   chan recoveryRequest
-	lastRecovery time.Time
+	events           chan Event
+	healthy          map[string]int // Candidate tag to consecutive healthy checks for recovery.
+	lastSnap         *daemon.Groups
+	lastSwitch       map[string]time.Time // Selector tag to most recent SelectOutbound we issued.
+	recoveryCh       chan recoveryRequest
+	lastRecovery     time.Time
+	lastLearning     time.Time
+	learningCooldown map[string]time.Time
+	learningBusy     atomic.Bool
+	learningWorkers  sync.WaitGroup
 }
 
 func New(cfg *config.Config, dialFn func(ctx context.Context) (*sbclient.Client, error)) *Watcher {
@@ -65,6 +71,7 @@ func (w *Watcher) emit(level, format string, args ...any) {
 
 // Run reconnects on stream failure and exits when ctx is canceled.
 func (w *Watcher) Run(ctx context.Context) error {
+	defer w.learningWorkers.Wait()
 	ready := make(chan error, 1)
 	go w.serveRecovery(ctx, ready)
 	select {
@@ -75,12 +82,19 @@ func (w *Watcher) Run(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+	if err := w.prepareLearning(); err != nil {
+		w.emit("error", "auto: verification setup failed: %v", err)
+	}
 	go w.proxyLoop(ctx)
 	backoff := time.Second
 	for {
+		connectedAt := time.Now()
 		err := w.runOnce(ctx)
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if time.Since(connectedAt) >= time.Minute {
+			backoff = time.Second
 		}
 		w.emit("error", "API disconnected: %v; reconnecting in %s", err, backoff)
 		select {
@@ -151,6 +165,8 @@ func (w *Watcher) proxyLoop(ctx context.Context) {
 }
 
 func (w *Watcher) runOnce(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	c, err := w.dialFn(ctx)
 	if err != nil {
 		return err
@@ -177,7 +193,7 @@ func (w *Watcher) runOnce(ctx context.Context) error {
 		}
 		var subCtx context.Context
 		subCtx, autoCancel = context.WithCancel(ctx)
-		connectionCh, connectionErrors = c.SubscribeConnections(subCtx, 500)
+		connectionCh, connectionErrors = c.SubscribeConnections(subCtx, 5*time.Second)
 		logCh, logErrors = c.SubscribeLog(subCtx)
 	}
 	if w.experimentEnabled() {
@@ -244,28 +260,30 @@ func (w *Watcher) runOnce(ctx context.Context) error {
 			if !ok {
 				return fmt.Errorf("auto connection stream closed")
 			}
-			if w.experimentEnabled() && events != nil {
+			if w.experimentEnabled() && events != nil && !events.Reset_ {
 				for _, ev := range events.Events {
-					tracker.Connection(ev, time.Now())
+					if candidate := tracker.ObserveConnection(ev, time.Now()); candidate != nil {
+						w.considerLearning(ctx, *candidate)
+					}
 				}
 			}
 		case entry, ok := <-logCh:
 			if !ok {
 				return fmt.Errorf("auto log stream closed")
 			}
-			if w.experimentEnabled() && entry != nil {
+			if w.experimentEnabled() && entry != nil && !entry.Reset_ {
 				for _, msg := range entry.Messages {
 					if msg.Level != daemon.LogLevel_ERROR && !w.cfg.Experiment.CFRegionBlock {
 						continue
 					}
 					if w.cfg.Experiment.Mode == "auto" {
-						if domain := tracker.Failure(msg.Message, time.Now(), w.proxyHealthy()); domain != "" {
-							w.learnDomain(ctx, domain, "repeated direct timeouts")
+						if candidate := tracker.ObserveFailure(msg.Message, time.Now(), true); candidate != nil {
+							w.considerLearning(ctx, *candidate)
 						}
 					}
 					if w.cfg.Experiment.CFRegionBlock {
-						if domain := tracker.CloudflareRegionBlock(msg.Message, time.Now(), w.proxyHealthy()); domain != "" {
-							w.learnDomain(ctx, domain, "Cloudflare region block")
+						if candidate := tracker.ObserveRegionBlock(msg.Message, time.Now(), w.proxyHealthy()); candidate != nil {
+							w.considerLearning(ctx, *candidate)
 						}
 					}
 				}
@@ -277,6 +295,10 @@ func (w *Watcher) runOnce(ctx context.Context) error {
 			w.lastSnap = g // Consume results continuously; sleeping would stall the stream.
 		case req := <-w.recoveryCh:
 			if req.ctx.Err() != nil {
+				continue
+			}
+			if w.learningBusy.Load() {
+				req.reply <- "busy"
 				continue
 			}
 			latest, err := config.Load(w.cfgPath)
@@ -295,7 +317,7 @@ func (w *Watcher) runOnce(ctx context.Context) error {
 			}
 			req.reply <- decision
 		case <-tick.C:
-			if settleCh != nil || w.lastSnap == nil {
+			if settleCh != nil || w.lastSnap == nil || w.learningBusy.Load() {
 				continue
 			}
 			if latest, err := config.Load(w.cfgPath); err == nil {
@@ -413,58 +435,6 @@ func (w *Watcher) proxyHealthy() bool {
 		return false
 	}
 	return aliveFresh(w.lastSnap, main.Selected, time.Now().Add(-2*time.Minute).Unix())
-}
-
-func (w *Watcher) learnDomain(ctx context.Context, domain, reason string) {
-	if ctx.Err() != nil {
-		return
-	}
-	dir := filepath.Dir(w.cfgPath)
-	candidate, err := os.ReadFile(filepath.Join(dir, "config.json"))
-	if err != nil {
-		w.emit("error", "auto: could not read config: %v", err)
-		return
-	}
-	outbound, err := experiment.ProxyOutbound(candidate)
-	if err != nil {
-		w.emit("error", "auto: could not find proxy exit: %v", err)
-		return
-	}
-	rollback, err := experiment.Stage(dir, domain, outbound)
-	if err != nil {
-		w.emit("error", "auto: route validation failed: %v", err)
-		return
-	}
-	if rollback == nil {
-		return
-	}
-	w.emit("info", "%s: %s; proxy rule saved, reconnecting to apply", domain, reason)
-	reconnectErr := svc.Reconnect()
-	if reconnectErr == nil {
-		probeCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
-		defer cancel()
-		for probeCtx.Err() == nil {
-			c, e := w.dialFn(probeCtx)
-			if e == nil {
-				c.Close()
-				w.emit("switch", "%s: automatic proxy route is active", domain)
-				return
-			}
-			select {
-			case <-probeCtx.Done():
-			case <-time.After(300 * time.Millisecond):
-			}
-		}
-		reconnectErr = fmt.Errorf("API did not recover after auto route update")
-	}
-	if restoreErr := rollback(); restoreErr != nil {
-		w.emit("error", "auto: rollback failed: %v", restoreErr)
-		return
-	}
-	if restoreErr := svc.Reconnect(); restoreErr != nil {
-		w.emit("error", "auto: reconnect with previous config failed: %v", restoreErr)
-	}
-	w.emit("error", "%s: auto route failed and was rolled back: %v", domain, reconnectErr)
 }
 
 func pickFallback(snap *daemon.Groups, chain []string, started int64) (string, int) {

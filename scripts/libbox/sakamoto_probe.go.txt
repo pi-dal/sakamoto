@@ -1,0 +1,70 @@
+package daemon
+
+import (
+    "context"
+    "crypto/tls"
+    "fmt"
+    "net"
+    "net/http"
+    "regexp"
+    "strconv"
+    "time"
+
+    "github.com/sagernet/sing-box/adapter"
+    C "github.com/sagernet/sing-box/constant"
+    M "github.com/sagernet/sing/common/metadata"
+    "github.com/sagernet/sing/common/ntp"
+)
+
+var automaticOriginDomain = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$`)
+
+// ProbeAutomaticOrigin uses the running core's protected sockets and DNS.
+// An empty outbound checks the ordinary router after the inline slot update.
+// Never hold lifecycleAccess while waiting on the network: stopping the core
+// cancels the instance context and closes the request immediately.
+func (s *StartedService) ProbeAutomaticOrigin(domain string, port int32, outboundTag string, expectedInstanceID int64, timeoutMillis int32) (int32, error) {
+    if !automaticOriginDomain.MatchString(domain) || net.ParseIP(domain) != nil || (port != 80 && port != 443) {
+        return 0, fmt.Errorf("only observed HTTP(S) domain origins are supported")
+    }
+    s.serviceAccess.RLock()
+    instance := s.instance
+    valid := !s.closed && instance != nil && s.serviceStatus.Status == ServiceStatus_STARTED && expectedInstanceID != 0 && s.startedAt.UnixNano() == expectedInstanceID
+    s.serviceAccess.RUnlock()
+    if !valid { return 0, fmt.Errorf("core changed or stopped") }
+    if timeoutMillis < 1 || timeoutMillis > 8000 { return 0, fmt.Errorf("invalid origin deadline") }
+    ctx, cancel := context.WithTimeout(instance.ctx, time.Duration(timeoutMillis)*time.Millisecond)
+    defer cancel()
+    destination := M.ParseSocksaddrHostPort(domain, uint16(port))
+    transport := &http.Transport{
+        DisableKeepAlives: true,
+        MaxResponseHeaderBytes: 32 << 10,
+        TLSClientConfig: &tls.Config{RootCAs: adapter.RootPoolFromContext(ctx), Time: ntp.TimeFuncFromContext(ctx)},
+        DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+            if outboundTag != "" {
+                outbound, found := instance.Box().Outbound().Outbound(outboundTag)
+                if !found { return nil, fmt.Errorf("configured outbound unavailable") }
+                return outbound.DialContext(ctx, "tcp", destination)
+            }
+            client, routed := net.Pipe()
+            metadata := adapter.InboundContext{Network: "tcp", Destination: destination, Domain: domain}
+            // Match the mobile TUN's inbound rules as well as domain rules.
+            for _, inbound := range instance.Box().Inbound().Inbounds() {
+                if inbound.Type() == C.TypeTun { metadata.Inbound = inbound.Tag(); metadata.InboundType = C.TypeTun; break }
+            }
+            go instance.Box().Router().RouteConnectionEx(ctx, routed, metadata, nil)
+            context.AfterFunc(ctx, func() { client.Close(); routed.Close() })
+            return client, nil
+        },
+    }
+    defer transport.CloseIdleConnections()
+    scheme := "http"
+    if port == 443 { scheme = "https" }
+    request, err := http.NewRequestWithContext(ctx, http.MethodHead, scheme+"://"+net.JoinHostPort(domain, strconv.Itoa(int(port)))+"/", nil)
+    if err != nil { return 0, fmt.Errorf("invalid observed origin") }
+    client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+    response, err := client.Do(request)
+    if err != nil { return 0, fmt.Errorf("origin connection, TLS or response failed") }
+    response.Body.Close()
+    if s.RunningInstanceID() != expectedInstanceID { return 0, fmt.Errorf("core changed during verification") }
+    return int32(response.StatusCode), nil
+}

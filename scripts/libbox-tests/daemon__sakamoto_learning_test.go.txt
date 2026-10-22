@@ -1,0 +1,120 @@
+package daemon_test
+
+import (
+    "bufio"
+    "context"
+    "encoding/json"
+    "fmt"
+    "io"
+    "net"
+    "net/http"
+    "os"
+    "path/filepath"
+    "sync"
+    "sync/atomic"
+    "testing"
+    "time"
+
+    "github.com/pi-dal/sakamoto/pkg/mobileexperiment"
+    "github.com/sagernet/sing-box/daemon"
+    "github.com/sagernet/sing-box/include"
+)
+
+type mobileOriginProber struct { server *daemon.StartedService; id int64 }
+func (p mobileOriginProber) ProbeOrigin(domain string, port int32, outbound string, timeoutMillis int32) (int32, error) {
+    return p.server.ProbeAutomaticOrigin(domain, port, outbound, p.id, timeoutMillis)
+}
+
+func TestSakamotoVerifiedLearningThroughNativeExits(t *testing.T) {
+    var report []map[string]any
+    for _, tc := range []struct { name string; direct, proxy int32; precedingRule bool; state string }{
+        {"proxy_recovers", 502, 200, false, "verified"},
+        {"direct_recovers", 200, 200, false, "direct_recovered"},
+        {"both_fail", 502, 502, false, "not_improved"},
+        {"denied", 502, 403, false, "not_improved"},
+        {"rate_limited", 502, 429, false, "not_improved"},
+        {"server_error", 502, 503, false, "not_improved"},
+        {"explicit_direct_wins", 502, 200, true, "rolled_back"},
+    } {
+        t.Run(tc.name, func(t *testing.T) {
+            var direct, proxy atomic.Int32
+            direct.Store(tc.direct); proxy.Store(tc.proxy)
+            dp := mobileOriginSOCKS(t, &direct); pp := mobileOriginSOCKS(t, &proxy)
+            service := daemon.NewStartedService(daemon.ServiceOptions{Context: include.Context(context.Background()), LogMaxLines: 10})
+            t.Cleanup(func() { service.CloseService(); service.Close() })
+            prior := ""
+            if tc.precedingRule { prior = `{"domain":["origin.example"],"action":"route","outbound":"direct"},` }
+            config := fmt.Sprintf(`{"log":{"disabled":true},"outbounds":[{"type":"socks","tag":"direct","server":"127.0.0.1","server_port":%d},{"type":"socks","tag":"proxy","server":"127.0.0.1","server_port":%d}],"route":{"final":"direct","rule_set":[{"type":"inline","tag":"sakamoto-auto-proxy","rules":[{"domain_regex":["a^"]}]}],"rules":[%s{"rule_set":["sakamoto-auto-proxy"],"action":"route","outbound":"proxy"}]}}`, dp, pp, prior)
+            if err := service.StartOrReloadService(context.Background(), config, nil); err != nil { t.Fatal(err) }
+            prober := mobileOriginProber{service, service.RunningInstanceID()}
+            check, err := mobileexperiment.NewLearningCheck(`{"domain":"origin.example","port":"80","failures":1,"required":3,"reason":"observed unmatched direct TCP dial failure"}`)
+            if err != nil { t.Fatal(err) }
+            check.Compare(prober, "proxy")
+            if check.Ready() {
+                if err := service.UpdateAutomaticDomains(`["origin.example"]`, prober.id); err != nil { t.Fatal(err) }
+                if !check.Verify(prober) {
+                    if err := service.UpdateAutomaticDomains(`[]`, prober.id); err != nil { t.Fatal(err) }
+                }
+            }
+            var result map[string]any
+            if err := json.Unmarshal([]byte(check.ReportJSON()), &result); err != nil { t.Fatal(err) }
+            if result["state"] != tc.state { t.Fatalf("want %s: %s", tc.state, check.ReportJSON()) }
+            if service.RunningInstanceID() != prober.id { t.Fatal("learning restarted core") }
+            if _, err := prober.ProbeOrigin("https://bad.example", 80, "proxy", 1000); err == nil { t.Fatal("invalid domain accepted") }
+            if _, err := prober.ProbeOrigin("origin.example", 22, "proxy", 1000); err == nil { t.Fatal("unsupported port accepted") }
+            // A non-TLS proxy origin must never pass HTTPS validation.
+            if _, err := prober.ProbeOrigin("origin.example", 443, "proxy", 1000); err == nil { t.Fatal("invalid TLS accepted") }
+            if err := service.CloseService(); err != nil { t.Fatal(err) }
+            if _, err := prober.ProbeOrigin("origin.example", 80, "proxy", 1000); err == nil { t.Fatal("stopped core accepted probe") }
+            result["same_core"] = true
+            report = append(report, result)
+        })
+    }
+    if dir := os.Getenv("SAKAMOTO_TEST_ARTIFACT_DIR"); dir != "" {
+        if err := os.MkdirAll(dir, 0700); err != nil { t.Fatal(err) }
+        raw, _ := json.MarshalIndent(report, "", "  ")
+        if err := os.WriteFile(filepath.Join(dir, "mobile-native-learning.json"), raw, 0600); err != nil { t.Fatal(err) }
+    }
+}
+
+func mobileOriginSOCKS(t *testing.T, code *atomic.Int32) int {
+    t.Helper()
+    listener, err := net.Listen("tcp", "127.0.0.1:0"); if err != nil { t.Fatal(err) }
+    var workers sync.WaitGroup
+    var accepting sync.WaitGroup
+    accepting.Add(1)
+    t.Cleanup(func() { listener.Close(); accepting.Wait(); workers.Wait() })
+    go func() {
+        defer accepting.Done()
+        for {
+            conn, err := listener.Accept(); if err != nil { return }
+            workers.Add(1)
+            go func() {
+                defer workers.Done(); defer conn.Close()
+                conn.SetDeadline(time.Now().Add(2*time.Second))
+                var hello [2]byte
+                if _, err := io.ReadFull(conn, hello[:]); err != nil { return }
+                if _, err := io.CopyN(io.Discard, conn, int64(hello[1])); err != nil { return }
+                conn.Write([]byte{5,0})
+                var request [4]byte
+                if _, err := io.ReadFull(conn, request[:]); err != nil { return }
+                n := 0
+                switch request[3] {
+                case 1: n = 4
+                case 4: n = 16
+                case 3:
+                    var size [1]byte
+                    if _, err := io.ReadFull(conn, size[:]); err != nil { return }; n = int(size[0])
+                default: return
+                }
+                if _, err := io.CopyN(io.Discard, conn, int64(n+2)); err != nil { return }
+                conn.Write([]byte{5,0,0,1,127,0,0,1,0,0})
+                head, err := http.ReadRequest(bufio.NewReader(conn)); if err != nil { return }
+                defer head.Body.Close()
+                if head.Method != "HEAD" || head.URL.Path != "/" || head.Header.Get("Authorization") != "" || head.Header.Get("Cookie") != "" { t.Error("probe leaked app request details") }
+                fmt.Fprintf(conn, "HTTP/1.1 %d Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", code.Load())
+            }()
+        }
+    }()
+    return listener.Addr().(*net.TCPAddr).Port
+}

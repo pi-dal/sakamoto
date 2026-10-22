@@ -1,6 +1,7 @@
 package experiment
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 const FileName = "auto-proxy.json"
@@ -194,20 +196,8 @@ func Stage(dir, domain, outbound string) (func() error, error) {
 	if err != nil {
 		return nil, err
 	}
-	candidate, err := os.CreateTemp(dir, ".auto-check-*.json")
-	if err != nil {
+	if err := Validate(dir, newConfig); err != nil {
 		return nil, err
-	}
-	defer func() { _ = os.Remove(candidate.Name()) }()
-	if _, err = candidate.Write(newConfig); err != nil {
-		_ = candidate.Close()
-		return nil, err
-	}
-	if err = candidate.Close(); err != nil {
-		return nil, err
-	}
-	if output, err := exec.Command("sing-box", "check", "-D", dir, "-c", candidate.Name()).CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("auto rule check: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 	prevState, stateErr := os.ReadFile(filepath.Join(dir, FileName))
 	if stateErr != nil && !os.IsNotExist(stateErr) {
@@ -228,6 +218,55 @@ func Stage(dir, domain, outbound string) (func() error, error) {
 		return nil
 	}, nil
 }
+
+// Validate uses a bounded native check and resolves Homebrew even in launchd's
+// minimal PATH. It never activates a candidate configuration.
+func Validate(dir string, raw []byte) error {
+	candidate, err := os.CreateTemp(dir, ".auto-check-*.json")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(candidate.Name()) }()
+	if _, err = candidate.Write(raw); err != nil {
+		_ = candidate.Close()
+		return err
+	}
+	if err = candidate.Close(); err != nil {
+		return err
+	}
+	binary, err := exec.LookPath("sing-box")
+	if err != nil {
+		for _, path := range []string{"/opt/homebrew/bin/sing-box", "/usr/local/bin/sing-box"} {
+			if info, e := os.Stat(path); e == nil && info.Mode()&0111 != 0 {
+				binary = path
+				break
+			}
+		}
+	}
+	if binary == "" {
+		return fmt.Errorf("native core executable is unavailable")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if output, e := exec.CommandContext(ctx, binary, "check", "-D", dir, "-c", candidate.Name()).CombinedOutput(); e != nil {
+		return fmt.Errorf("auto rule check: %w: %s", e, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+// StageProbe writes already checked verification ingress and provides rollback.
+func StageProbe(dir string, raw []byte) (func() error, error) {
+	path := filepath.Join(dir, "config.json")
+	old, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if err = writeAtomic(path, raw); err != nil {
+		return nil, err
+	}
+	return func() error { return writeAtomic(path, old) }, nil
+}
+
 func restoreState(dir string, prev []byte) {
 	if prev == nil {
 		_ = os.Remove(filepath.Join(dir, FileName))

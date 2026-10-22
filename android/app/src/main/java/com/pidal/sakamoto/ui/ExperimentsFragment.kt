@@ -14,10 +14,16 @@ import kotlinx.coroutines.launch
 /** Native controls for phone-owned experiments; core evidence limits stay explicit. */
 class ExperimentsFragment : androidx.fragment.app.Fragment() {
     private var statusRow: GroupedPage.Row? = null
+    private var historySignature: String? = null
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, state: Bundle?): View = android.widget.FrameLayout(requireContext()).apply { addView(build().root) }
     override fun onViewCreated(view: View, state: Bundle?) {
         super.onViewCreated(view, state)
-        viewLifecycleOwner.lifecycleScope.launch { ExperimentRuntime.status.collect { statusRow?.detail("${it.message} · ${it.learned} learned") } }
+        viewLifecycleOwner.lifecycleScope.launch {
+            ExperimentRuntime.status.collect {
+                statusRow?.detail("${it.message} · ${it.learned} learned")
+                if (!it.pending && ExperimentRuntime.history(requireContext()).lastOrNull() != historySignature) refresh()
+            }
+        }
     }
     private fun refresh() { (view as? android.widget.FrameLayout)?.let { it.removeAllViews(); it.addView(build().root) } }
     private fun build(): GroupedPage {
@@ -59,6 +65,19 @@ class ExperimentsFragment : androidx.fragment.app.Fragment() {
             }
         }
         if (ExperimentRuntime.learned(requireContext()).isEmpty()) page.row(learned, getString(R.string.experiment_no_learned))
+        val history = ExperimentRuntime.history(requireContext())
+        historySignature = history.lastOrNull()
+        val checks = page.section(getString(R.string.experiment_checks))
+        if (history.isEmpty()) page.row(checks, getString(R.string.experiment_no_checks))
+        history.takeLast(10).reversed().forEach { raw ->
+            val result = org.json.JSONObject(raw)
+            val domain = result.getString("domain")
+            val detail = result.getString("detail")
+            page.row(checks, domain, detail) {
+                MaterialAlertDialogBuilder(requireContext()).setTitle(domain).setMessage(detail).setPositiveButton(android.R.string.ok, null).show()
+            }
+        }
+        page.note(getString(R.string.experiment_check_note))
         return page
     }
     private fun feedback(message: String) { view?.let { Snackbar.make(it, message, Snackbar.LENGTH_LONG).show() } }

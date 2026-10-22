@@ -22,15 +22,16 @@ import (
 // ---------------- Main generation pipeline ----------------
 
 type Options struct {
-	ConfPath       string
-	SRJSONPath     string
-	NodesFile      string // optional share-link file
-	AllowHosts     string // comma-separated manual-node host allowlist
-	Cfg            *config.Config
-	OutDir         string                                              // output directory (defaults to the active runtime)
-	Quiet          bool                                                // suppress stdout so generation does not disrupt the TUI
-	HTTPClient     *http.Client                                        // optional platform-specific fetching policy
-	LookupProxyIPs func(context.Context, string) ([]netip.Addr, error) // injectable bounded DNS lookup
+	ConfPath          string
+	SRJSONPath        string
+	NodesFile         string // optional share-link file
+	AllowHosts        string // comma-separated manual-node host allowlist
+	Cfg               *config.Config
+	OutDir            string                                              // output directory (defaults to the active runtime)
+	Quiet             bool                                                // suppress stdout so generation does not disrupt the TUI
+	OmitLearningProbe bool                                                // mobile providers own their observation and rule lifecycle
+	HTTPClient        *http.Client                                        // optional platform-specific fetching policy
+	LookupProxyIPs    func(context.Context, string) ([]netip.Addr, error) // injectable bounded DNS lookup
 }
 
 func Run(o Options) error {
@@ -244,6 +245,23 @@ func Run(o Options) error {
 	b, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode sing-box config: %w", err)
+	}
+	if !o.OmitLearningProbe && (cfg.Experiment.Mode == "auto" || cfg.Experiment.CFRegionBlock) {
+		b, err = experiment.PrepareProbe(b)
+		if err != nil {
+			return fmt.Errorf("prepare learning verification: %w", err)
+		}
+		learned, loadErr := experiment.Load(out)
+		if loadErr != nil {
+			return loadErr
+		}
+		b, err = experiment.PrepareLiveRules(b, out, learned.Domains)
+		if err != nil {
+			return fmt.Errorf("prepare live learning: %w", err)
+		}
+		if err = experiment.WriteLiveRules(out, learned.Domains); err != nil {
+			return err
+		}
 	}
 	cfgPath := filepath.Join(out, "config.json")
 	if err := os.WriteFile(cfgPath, b, 0o600); err != nil {

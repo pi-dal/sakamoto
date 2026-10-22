@@ -26,7 +26,10 @@
     <string name="experiments_title">Experiments</string>
     <string name="experiments_entry_note">Unmatched policy, learned routes and fallback recovery</string>
     <string name="experiment_mode">Unmatched policy</string>
-    <string name="experiment_threshold">Separate direct timeout threshold (1–20)</string>
+    <string name="experiment_threshold">Direct failure threshold (1–20)</string>
+    <string name="experiment_checks">Recent checks</string>
+    <string name="experiment_no_checks">No origin checks yet</string>
+    <string name="experiment_check_note">Checks compare the origin through direct and proxy exits. A new route is saved only after it passes another check. Results stay on this device.</string>
     <string name="experiment_cf">Cloudflare regional signal learning</string>
     <string name="experiment_auto_confirm">Enable automatic route learning?</string>
     <string name="experiment_auto_note">Only correlated unmatched-direct TCP timeouts with fresh healthy proxy tests qualify. Learning validates and reloads the tunnel, interrupting active connections. It is local to this phone and can be reversed.</string>

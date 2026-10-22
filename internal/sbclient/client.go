@@ -34,6 +34,18 @@ func Dial(ctx context.Context, serverURL, secret string) (*Client, error) {
 
 func (c *Client) Close() { _ = c.conn.Close() }
 
+// StartedAt identifies the running core and guards on-disk configuration edits.
+func (c *Client) StartedAt(ctx context.Context) (time.Time, error) {
+	value, err := c.svc.GetStartedAt(ctx, &emptypb.Empty{})
+	if err != nil {
+		return time.Time{}, err
+	}
+	if value.StartedAt <= 0 {
+		return time.Time{}, fmt.Errorf("core start time unavailable")
+	}
+	return time.UnixMilli(value.StartedAt), nil
+}
+
 func (c *Client) Version(ctx context.Context) (string, error) {
 	v, err := c.svc.GetVersion(ctx, &emptypb.Empty{})
 	if err != nil {
@@ -156,14 +168,14 @@ func (c *Client) CloseConnection(ctx context.Context, id string) error {
 	return err
 }
 
-// SubscribeConnections streams connection events at a millisecond interval.
-// The native wire interval is a time.Duration measured in nanoseconds.
-func (c *Client) SubscribeConnections(ctx context.Context, intervalMs int64) (<-chan *daemon.ConnectionEvents, <-chan error) {
+// SubscribeConnections streams lifecycle events immediately and traffic deltas
+// at the given duration. A one-second floor prevents accidental busy polling.
+func (c *Client) SubscribeConnections(ctx context.Context, interval time.Duration) (<-chan *daemon.ConnectionEvents, <-chan error) {
 	ch := make(chan *daemon.ConnectionEvents, 8)
 	errCh := make(chan error, 1)
 	go func() {
 		defer close(ch)
-		stream, err := c.svc.SubscribeConnections(ctx, &daemon.SubscribeConnectionsRequest{Interval: int64(time.Duration(intervalMs) * time.Millisecond)})
+		stream, err := c.svc.SubscribeConnections(ctx, &daemon.SubscribeConnectionsRequest{Interval: int64(max(interval, time.Second))})
 		if err != nil {
 			errCh <- err
 			return
@@ -184,14 +196,14 @@ func (c *Client) SubscribeConnections(ctx context.Context, intervalMs int64) (<-
 	return ch, errCh
 }
 
-// SubscribeStatus streams traffic, memory, and service metrics at a millisecond
-// interval. The native wire interval is a time.Duration measured in nanoseconds.
-func (c *Client) SubscribeStatus(ctx context.Context, intervalMs int64) (<-chan *daemon.Status, <-chan error) {
+// SubscribeStatus streams metrics with a one-second minimum duration.
+// The native wire representation is nanoseconds, just like time.Duration.
+func (c *Client) SubscribeStatus(ctx context.Context, interval time.Duration) (<-chan *daemon.Status, <-chan error) {
 	ch := make(chan *daemon.Status, 8)
 	errCh := make(chan error, 1)
 	go func() {
 		defer close(ch)
-		stream, err := c.svc.SubscribeStatus(ctx, &daemon.SubscribeStatusRequest{Interval: int64(time.Duration(intervalMs) * time.Millisecond)})
+		stream, err := c.svc.SubscribeStatus(ctx, &daemon.SubscribeStatusRequest{Interval: int64(max(interval, time.Second))})
 		if err != nil {
 			errCh <- err
 			return

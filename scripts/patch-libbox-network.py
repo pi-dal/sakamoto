@@ -116,6 +116,7 @@ func (s *StartedService) UpdateAutomaticDomains(domainsJSON string, expectedInst
     return local.UpdateMobileDomains(domains)
 }
 ''')
+    (root / "daemon/sakamoto_probe.go").write_text((Path(__file__).resolve().parent / "libbox/sakamoto_probe.go.txt").read_text())
     (root / "route/rule/sakamoto_domains.go").write_text('''package rule
 
 import (

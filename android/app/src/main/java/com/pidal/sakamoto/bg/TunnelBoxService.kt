@@ -153,7 +153,7 @@ class TunnelBoxService(
             MobilecoreRuntime.setServiceState("Running")
             if (!ConfigRepository.load(service).sourceNeedsGenerate) MobilecoreRuntime.completeConfigApply()
             val instanceID = server.runningInstanceID()
-            com.pidal.sakamoto.runtime.ExperimentRuntime.start(service) { domains -> server.updateAutomaticDomains(domains, instanceID) }
+            com.pidal.sakamoto.runtime.ExperimentRuntime.start(service, com.pidal.sakamoto.runtime.NativeLearningProber(server, instanceID)) { domains -> server.updateAutomaticDomains(domains, instanceID) }
             CommandClientRuntime.start()
             showForegroundNotification(starting = false)
             com.pidal.sakamoto.runtime.SystemStatusSurface.start(service)
@@ -201,7 +201,7 @@ class TunnelBoxService(
             server.startOrReloadService(com.pidal.sakamoto.runtime.ExperimentRuntime.prepareContent(service, content), OverrideOptions())
             check(server.isServiceRunning()) { "Core reload was interrupted" }
             val instanceID = server.runningInstanceID()
-            com.pidal.sakamoto.runtime.ExperimentRuntime.start(service) { domains -> server.updateAutomaticDomains(domains, instanceID) }
+            com.pidal.sakamoto.runtime.ExperimentRuntime.start(service, com.pidal.sakamoto.runtime.NativeLearningProber(server, instanceID)) { domains -> server.updateAutomaticDomains(domains, instanceID) }
             MobilecoreRuntime.setServiceState("Running")
             MobilecoreRuntime.completeConfigApply()
             showForegroundNotification(starting = false)

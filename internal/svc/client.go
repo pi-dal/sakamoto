@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -76,22 +77,34 @@ func commandReplyError(command, reply string, err error) error {
 }
 
 func Reconnect() error {
-	cfg, err := config.Load(config.DefaultPath())
+	return ReconnectAt(config.DefaultPath())
+}
+
+// ReconnectAt keeps custom runtimes and integration fixtures on their own socket.
+func ReconnectAt(cfgPath string) error {
+	send := func(command string) (string, error) {
+		return SendTo(filepath.Join(filepath.Dir(cfgPath), SockName), command)
+	}
+	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return err
 	}
 	if cfg.DNSGuard.Enabled {
-		if err := RequireDNSLifecycle(); err != nil {
+		reply, err := send("capabilities")
+		if err != nil {
 			return err
 		}
+		if strings.TrimSpace(reply) != "native-dns-v1" {
+			return fmt.Errorf("root daemon lacks native DNS lifecycle support; upgrade it while disconnected")
+		}
 	}
-	status, err := Send("status")
+	status, err := send("status")
 	if err != nil {
 		return err
 	}
 	if strings.HasPrefix(status, "connected") {
 		old := statusPID.FindStringSubmatch(status)
-		reply, e := Send("disconnect")
+		reply, e := send("disconnect")
 		if e != nil || !strings.HasPrefix(reply, "disconnected") {
 			return commandReplyError("disconnect", reply, e)
 		}
@@ -110,7 +123,7 @@ func Reconnect() error {
 			}
 		}
 	}
-	reply, err := Send("connect")
+	reply, err := send("connect")
 	if err != nil || !strings.HasPrefix(reply, "connected") {
 		return commandReplyError("connect", reply, err)
 	}

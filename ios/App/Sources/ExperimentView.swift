@@ -25,7 +25,7 @@ struct ExperimentView: View {
                     ForEach(ExperimentMode.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
                 }
                 .sakamotoInspectTag("ExperimentMode")
-                Text("Off: unmatched traffic connects directly. On: uses the configured proxy. Auto: starts direct and learns only repeated, correlated failures.")
+                Text("Off: unmatched traffic connects directly. On: uses the configured proxy. Auto: verifies correlated direct failures before learning a proxy route.")
                     .font(.footnote).foregroundStyle(.secondary)
                 Stepper("Direct failure threshold: \(settings.threshold)", value: Binding(get: { settings.threshold }, set: { value in update { $0.threshold = value } }), in: 1...20)
                 Toggle("CF region auto-proxy", isOn: Binding(get: { settings.cfRegionBlock }, set: { value in update { $0.cfRegionBlock = value } }))
@@ -71,6 +71,17 @@ struct ExperimentView: View {
                 }
                 Text(runtime.status).font(.footnote).foregroundStyle(.secondary)
                 Text("Learned domains stay local to this profile. Source DIRECT and REJECT rules keep priority.").font(.footnote).foregroundStyle(.secondary)
+            }
+            Section("Recent checks") {
+                if runtime.history.isEmpty { Text("No origin checks yet").foregroundStyle(.secondary) }
+                ForEach(Array(runtime.history.suffix(10).reversed())) { result in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(result.domain)
+                        Text(result.detail).font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+                Text("Checks compare the origin through direct and proxy exits. A new route is saved only after it passes another check. Results stay on this device.")
+                    .font(.footnote).foregroundStyle(.secondary)
             }
             Section {
                 Button("Apply Experiment & configuration") { confirmApply = true }

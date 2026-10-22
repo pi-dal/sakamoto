@@ -606,9 +606,3 @@ func (s *CertificateServer) Close() error {
 	b := s.httpsServer.Close()
 	return errors.Join(a, b)
 }
-
-// ProxyURL is only used by local integration tests and connection settings.
-func proxyURL(port int) *url.URL {
-	u, _ := url.Parse("http://127.0.0.1:" + strconv.Itoa(port))
-	return u
-}

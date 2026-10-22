@@ -43,7 +43,8 @@ with tempfile.TemporaryDirectory(prefix="sakamoto-network-test-") as temporary:
         package, filename = fixture.name.split("__", 1)
         target = {"tailscale": "protocol/tailscale", "rule": "route/rule", "daemon": "daemon"}[package]
         (root / target / filename.removesuffix(".txt")).write_text(fixture.read_text())
-    changed = [str(root / name) for name in ["experimental/libbox/command_server.go", "experimental/libbox/monitor.go", "protocol/tailscale/endpoint.go", "protocol/tailscale/sakamoto_transport.go", "daemon/sakamoto_service.go", "route/rule/sakamoto_domains.go"]]
+    changed = [str(root / name) for name in ["experimental/libbox/command_server.go", "experimental/libbox/monitor.go", "protocol/tailscale/endpoint.go", "protocol/tailscale/sakamoto_transport.go", "daemon/sakamoto_service.go", "daemon/sakamoto_probe.go", "route/rule/sakamoto_domains.go"]]
     subprocess.run(["gofmt", "-w", *changed], check=True)
-    subprocess.run(["go", "test", "-race", "-tags", "with_tailscale,with_gvisor", "-run", "TestSakamoto", "-count=1", "./protocol/tailscale", "./route/rule", "./daemon"], cwd=root, check=True)
+    subprocess.run(["go", "mod", "edit", "-require=github.com/pi-dal/sakamoto@v0.0.0", f"-replace=github.com/pi-dal/sakamoto={REPO}"], cwd=root, check=True)
+    subprocess.run(["go", "test", "-mod=mod", "-race", "-tags", "with_tailscale,with_gvisor", "-run", "TestSakamoto", "-count=1", "./protocol/tailscale", "./route/rule", "./daemon"], cwd=root, check=True)
 print("libbox patch: drift rejection, idempotence and native connection tests passed")

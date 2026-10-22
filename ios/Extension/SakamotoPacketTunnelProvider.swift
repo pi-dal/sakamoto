@@ -338,8 +338,9 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
 
     @MainActor private func startExperiments(options: TunnelStartOptions, settings: ExperimentSettings?, content: String, root: URL) throws {
         guard let id = options.profileID, let settings else { return }
-        let instanceID = commandServer?.runningInstanceID() ?? 0
-        let runner = try ProviderExperimentRunner(profileID: id, settings: settings, content: content, root: root) { [weak self] candidate in
+        guard let server = commandServer else { throw ProviderStartupError("Core command server unavailable") }
+        let instanceID = server.runningInstanceID()
+        let runner = try ProviderExperimentRunner(profileID: id, settings: settings, content: content, root: root, prober: ProviderLearningProber(server: server, instanceID: instanceID)) { [weak self] candidate in
             guard let self, let server = self.commandServer, self.operationGate.state == nil else {
                 throw ProviderStartupError("Provider stopped or configuration is being applied")
             }

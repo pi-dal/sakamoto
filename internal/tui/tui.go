@@ -191,8 +191,8 @@ func pump(ctx context.Context, path string, p *tea.Program) {
 			p.Send(connectedMsg{c})
 			g, ge := c.SubscribeGroups(ctx)
 			mode, modeErr := c.SubscribeClashMode(ctx)
-			s, se := c.SubscribeStatus(ctx, 2000)
-			cs, ce := c.SubscribeConnections(ctx, 2000)
+			s, se := c.SubscribeStatus(ctx, 2*time.Second)
+			cs, ce := c.SubscribeConnections(ctx, 2*time.Second)
 			ls, le := c.SubscribeLog(ctx)
 		stream:
 			for {

@@ -30,19 +30,28 @@ object ExperimentRuntime {
     @Volatile private var settling = false
     private var attempts = Channel<String>(Channel.RENDEZVOUS)
     private val recoveries = mutableMapOf<String, Int>()
-    @Volatile private var updateDomains: ((String) -> Unit)? = null
+    @Volatile private var prober: io.nekohasekai.mobileexperiment.LearningProber? = null
+    @Volatile private var activeCheck: io.nekohasekai.mobileexperiment.LearningCheck? = null
+    private val learningCooldown = mutableMapOf<String, Long>()
+    private var lastVerificationAt = 0L
+    private var updateDomains: ((String) -> Unit)? = null
     private var context: Context? = null
     private val schedule = ExperimentProbeSchedule()
     private var wakeups = Channel<Unit>(Channel.CONFLATED)
     private var recoveryJob: Job? = null
+    @Volatile private var verificationChange = "Network or policy changed"
     private val networkGeneration = java.util.concurrent.atomic.AtomicLong()
     @Volatile private var healthSince = 0L
     private var observedGroups: List<ConfigRepository.Group> = emptyList()
     private var monitoredSelectors = setOf("MainProxy")
+    private var observedMode = ""
 
     fun networkChanged() {
         if (!activeSettings.requiresMonitoring || scope == null) return
+        verificationChange = "Network changed"
         networkGeneration.incrementAndGet()
+        activeCheck?.cancel()
+        tracker = if (activeSettings.learningEnabled) Mobileexperiment.newExperimentTracker(activeSettings.threshold) else null
         healthSince = System.currentTimeMillis() / 1000 + 1
         schedule.reset()
         scope?.launch {
@@ -51,13 +60,20 @@ object ExperimentRuntime {
         }
     }
 
-    fun modeChanged() { if (scope != null) wakeups.trySend(Unit) }
+    fun modeChanged() {
+        val next = MobilecoreRuntime.state.value.routingMode.lowercase()
+        if (next != observedMode) {
+            observedMode = next; verificationChange = "Routing mode changed"; networkGeneration.incrementAndGet(); activeCheck?.cancel()
+        }
+        if (scope != null) wakeups.trySend(Unit)
+    }
 
     @Synchronized fun groupsChanged(groups: List<ConfigRepository.Group>) {
         if (!activeSettings.requiresMonitoring || scope == null) return
         val previous = FallbackDecision.selectedObservation(observedGroups)
         val current = FallbackDecision.selectedObservation(groups)
-        val selectionChanged = groups.any { group -> group.tag in monitoredSelectors && (observedGroups.firstOrNull { it.tag == group.tag }?.selected ?: "") != group.selected }
+        val selectionChanged = groups.any { group -> group.tag in monitoredSelectors && observedGroups.firstOrNull { it.tag == group.tag }?.let { it.selected != group.selected } == true } || (previous != null && current != null && previous.tag != current.tag)
+        if (selectionChanged) { verificationChange = "Proxy selection changed"; networkGeneration.incrementAndGet(); activeCheck?.cancel() }
         observedGroups = groups
         if (!settling && (selectionChanged || ((previous?.delay ?: 0) > 0 && (current?.delay ?: 0) <= 0))) {
             schedule.reset(); wakeups.trySend(Unit)
@@ -78,6 +94,16 @@ object ExperimentRuntime {
         val raw = context.getSharedPreferences("experiments", Context.MODE_PRIVATE).getString("learned", "[]")!!
         val array = JSONArray(raw)
         return (0 until array.length()).map { array.getString(it) }
+    }
+    fun history(context: Context): List<String> {
+        val array = JSONArray(context.getSharedPreferences("experiments", Context.MODE_PRIVATE).getString("history", "[]"))
+        return (0 until array.length()).map { array.getJSONObject(it).toString() }
+    }
+    private fun record(context: Context, check: io.nekohasekai.mobileexperiment.LearningCheck) {
+        val result = JSONObject(check.reportJSON())
+        val items = history(context).takeLast(49).map { JSONObject(it) } + result
+        check(context.getSharedPreferences("experiments", Context.MODE_PRIVATE).edit().putString("history", JSONArray(items).toString()).commit())
+        _status.value = _status.value.copy(message = if (scope == null) "Stopped" else result.getString("domain") + ": " + result.getString("detail"))
     }
     @Synchronized fun saveSettings(context: Context, next: Settings) {
         require(next.mode in setOf("off", "on", "auto") && next.threshold in 1..20 && next.recoverAfter in 1..20)
@@ -114,8 +140,9 @@ object ExperimentRuntime {
         return Mobileexperiment.prepareLiveRulesJSON(connected, domains, domains)
     }
 
-    @Synchronized fun start(context: Context, update: (String) -> Unit) {
+    @Synchronized fun start(context: Context, prober: io.nekohasekai.mobileexperiment.LearningProber? = null, update: (String) -> Unit) {
         if (job != null) return
+        this.prober = prober
         updateDomains = update
         this.context = context.applicationContext
         activeSettings = settings(context)
@@ -123,7 +150,9 @@ object ExperimentRuntime {
             JSONObject(ConfigRepository.load(context).hostMetadata).optJSONObject("fallbacks")?.keys()?.asSequence()?.toSet().orEmpty()
         }.getOrDefault(emptySet())
         tracker = if (activeSettings.learningEnabled) Mobileexperiment.newExperimentTracker(activeSettings.threshold) else null
-        schedule.reset(); observedGroups = emptyList(); healthSince = System.currentTimeMillis() / 1000
+        schedule.reset(); observedGroups = CommandClientRuntime.groups.value
+        observedMode = MobilecoreRuntime.state.value.routingMode.lowercase()
+        healthSince = System.currentTimeMillis() / 1000
         CommandClientRuntime.setLearningEnabled(activeSettings.learningEnabled)
         if (!activeSettings.requiresMonitoring) {
             _status.value = Status("Monitoring disabled", learned(context).size)
@@ -159,21 +188,23 @@ object ExperimentRuntime {
         runBlocking { running?.join() }
     }
     @Synchronized fun stop() {
+        activeCheck?.cancel(); networkGeneration.incrementAndGet()
         scope?.cancel(); scope = null; job = null; recoveryJob = null
         wakeups.close(); schedule.reset(); observedGroups = emptyList()
         CommandClientRuntime.setLearningEnabled(false)
-        attempts.close(); tracker = null; updateDomains = null; context = null; settling = false; recoveries.clear()
+        attempts.close(); tracker = null; updateDomains = null; prober = null; context = null; settling = false; recoveries.clear()
         _status.value = _status.value.copy(message = "Stopped", pending = false)
     }
     fun connection(events: ConnectionEvents) {
-        if (activeSettings.mode != "auto" && !activeSettings.cfRegion) return
+        if (_status.value.pending || (activeSettings.mode != "auto" && !activeSettings.cfRegion)) return
         val iterator = events.iterator()
         val now = System.currentTimeMillis()
         while (iterator.hasNext()) {
             val event = iterator.next()
             if (event.type.toLong() !in setOf(Libbox.ConnectionEventNew, Libbox.ConnectionEventClosed)) continue
             val c = event.connection ?: continue
-            tracker?.connection(event.id, c.domain, c.destination, c.network, c.outbound, c.rule, event.type.toLong() == Libbox.ConnectionEventClosed, c.downlinkTotal, now)
+            val candidate = tracker?.observeConnectionJSON(event.id, c.domain, c.destination, c.network, c.outbound, c.rule, event.type.toLong() == Libbox.ConnectionEventClosed, c.downlinkTotal, now).orEmpty()
+            if (activeSettings.mode == "auto") queueCandidate(candidate)
         }
     }
     fun log(message: String) {
@@ -182,61 +213,90 @@ object ExperimentRuntime {
         val fresh = maxOf(healthSince, System.currentTimeMillis() / 1000 - 120)
         val observation = FallbackDecision.selectedObservation(groups)
         val healthy = observation != null && observation.delay > 0 && observation.testedAt >= fresh
-        val domain = tracker?.observeLog(message, System.currentTimeMillis(), healthy, activeSettings.mode == "auto", activeSettings.cfRegion).orEmpty()
-        if (domain.isNotEmpty()) {
-            val sent = attempts.trySend(domain)
-            if (sent.isFailure) _status.value = _status.value.copy(message = "Learning busy; waiting for fresh evidence")
+        queueCandidate(tracker?.observeFailureJSON(message, System.currentTimeMillis(), healthy, activeSettings.mode == "auto", activeSettings.cfRegion).orEmpty())
+    }
+    @Synchronized private fun queueCandidate(candidate: String) {
+        if (candidate.isEmpty() || _status.value.pending || settling || MobilecoreRuntime.state.value.configState != "Clean" || MobilecoreRuntime.state.value.routingMode.lowercase() != "rule") return
+        val observation = FallbackDecision.selectedObservation(CommandClientRuntime.groups.value) ?: return
+        val now = System.currentTimeMillis()
+        if (observation.delay <= 0 || observation.testedAt < maxOf(healthSince, now / 1000 - 120)) return
+        learningCooldown.entries.removeAll { it.value <= now }
+        val domain = JSONObject(candidate).getString("domain")
+        if (domain in learned(context ?: return) || domain in learningCooldown || learningCooldown.size >= 1024 || now - lastVerificationAt < 30_000) return
+        if (attempts.trySend(candidate).isSuccess) {
+            learningCooldown[domain] = now + 300_000; lastVerificationAt = now
         }
     }
-    private suspend fun promote(context: Context, domain: String) {
+    private suspend fun promote(context: Context, candidateJSON: String) {
+        val check = runCatching { Mobileexperiment.newLearningCheck(candidateJSON) }.getOrNull() ?: return
+        val domain = JSONObject(candidateJSON).getString("domain")
         val known = learned(context)
         val update = updateDomains ?: return
+        val probe = prober ?: return
         if (MobilecoreRuntime.state.value.routingMode.lowercase() != "rule") return
         if (domain in known || known.size >= 1000 || !CommandClientRuntime.channelConnected.value) return
         val before = ConfigRepository.load(context)
-        if (before.sourceNeedsGenerate || MobilecoreRuntime.state.value.configState != "Clean") {
-            _status.value = Status("Pending edits; automatic route update deferred", known.size)
-            return
+        if (before.sourceNeedsGenerate || MobilecoreRuntime.state.value.configState != "Clean") return
+        val generation = networkGeneration.get()
+        fun unchanged() {
+            check(generation == networkGeneration.get() && CommandClientRuntime.channelConnected.value && MobilecoreRuntime.state.value.routingMode.lowercase() == "rule") { "Network, selection or policy changed during verification" }
         }
-        _status.value = Status("Validating learned route", known.size, true)
+        _status.value = Status("Checking direct and proxy origin", known.size, true)
+        activeCheck = check
         var wrote = false
+        var liveAttempted = false
         var candidate = ""
+        var committed = false
         try {
+            currentCoroutineContext().ensureActive()
+            check.compare(probe, Mobileexperiment.proxyOutbound(before.generatedContent))
+            currentCoroutineContext().ensureActive(); unchanged()
+            if (!check.ready()) return
+            check(ConfigRepository.load(context) == before && MobilecoreRuntime.state.value.configState == "Clean") { "Configuration changed during verification" }
             candidate = addOwnedRule(before.generatedContent, known + domain)
             Libbox.checkConfig(candidate)
-            check(ConfigRepository.load(context) == before) { "Configuration changed during learning" }
             val prefs = context.getSharedPreferences("experiments", Context.MODE_PRIVATE)
             check(prefs.edit().putString("pendingBefore", before.generatedContent).putString("pendingCandidate", candidate).commit())
             ConfigRepository.save(context, before.copy(generatedContent = candidate)); wrote = true
             MobilecoreRuntime.configEvent("modified")
-            // The live inline rule-set affects future connections only. Keep
-            // the core/TUN/Tailscale instance and established SSH streams.
+            liveAttempted = true
             update(JSONArray(known + domain).toString())
-            currentCoroutineContext().ensureActive()
+            check(check.verify(probe)) { "Installed route failed target verification" }
+            currentCoroutineContext().ensureActive(); unchanged()
             check(ConfigRepository.load(context).generatedContent == candidate) { "Configuration changed during learning" }
-            check(MobilecoreRuntime.state.value.serviceState == "Running" && CommandClientRuntime.channelConnected.value)
+            check(MobilecoreRuntime.state.value.serviceState == "Running")
+            check(prefs.edit().putString("learned", JSONArray(known + domain).toString()).remove("pendingBefore").remove("pendingCandidate").commit())
+            committed = true
             MobilecoreRuntime.completeConfigApply()
-            check(context.getSharedPreferences("experiments", Context.MODE_PRIVATE).edit().putString("learned", JSONArray(known + domain).toString()).remove("pendingBefore").remove("pendingCandidate").commit())
-            _status.value = Status("Learned proxy route applied", known.size + 1)
-        } catch (cancelled: CancellationException) {
-            if (wrote && ConfigRepository.load(context).generatedContent == candidate) ConfigRepository.save(context, before)
-            // Leave the journal for next-start recovery if cancellation
-            // occurred during a native reload; never claim it was applied.
-            throw cancelled
-        } catch (_: Exception) {
-            if (wrote && ConfigRepository.load(context).generatedContent == candidate) {
-                ConfigRepository.save(context, before)
-                try {
-                    update(JSONArray(known).toString())
-                    MobilecoreRuntime.completeConfigApply()
-                } catch (_: Exception) {
-                    _status.value = Status("Learning rollback failed; reconnect", known.size)
-                    return // Keep the journal for next-start recovery.
+            _status.value = Status("Verified proxy route applied", known.size + 1, true)
+        } catch (error: Exception) {
+            if (liveAttempted && !committed) {
+                try { update(JSONArray(known).toString()) }
+                catch (_: Exception) {
+                    check.finish("failed", "Learning rollback failed; reconnect to restore previous rules")
+                    return // Keep the durable journal until next-start recovery.
                 }
             }
-            context.getSharedPreferences("experiments", Context.MODE_PRIVATE).edit().remove("pendingBefore").remove("pendingCandidate").commit()
-            _status.value = Status("Learning failed; previous configuration restored", known.size)
-        } finally { _status.value = _status.value.copy(pending = false) }
+            if (wrote && !committed && ConfigRepository.load(context).generatedContent == candidate) {
+                ConfigRepository.save(context, before)
+                MobilecoreRuntime.completeConfigApply()
+            }
+            check(context.getSharedPreferences("experiments", Context.MODE_PRIVATE).edit().remove("pendingBefore").remove("pendingCandidate").commit())
+            val interrupted = error is CancellationException
+            val changed = generation != networkGeneration.get()
+            check.finish(if (liveAttempted) "rolled_back" else "skipped", when {
+                liveAttempted -> "Learning verification failed or was interrupted; previous rules restored"
+                interrupted -> "Verification canceled; no route saved"
+                changed -> "$verificationChange during verification; no route saved"
+                ConfigRepository.load(context) != before -> "Configuration changed during verification; no route saved"
+                else -> "Verification could not complete; no route saved"
+            })
+            if (error is CancellationException) throw error
+        } finally {
+            activeCheck = null; check.cancel()
+            try { record(context, check) }
+            finally { _status.value = _status.value.copy(pending = false) }
+        }
     }
     // Remove only an exact phone-owned learned domain set, not arbitrary user rules.
     private fun stripOwnedRule(content: String, domains: List<String>): String {

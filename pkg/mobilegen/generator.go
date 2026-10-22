@@ -157,7 +157,7 @@ func GenerateProfileWithFetcherJSON(bundleJSON, settingsJSON string, fetcher Sou
 	cfg.ConfPath = filepath.Join(work, "sources", filepath.FromSlash(main))
 	cfg.NodesFile = filepath.Join(work, "sources", "nodes.txt")
 	out := filepath.Join(work, "runtime")
-	if err := gen.Run(gen.Options{ConfPath: cfg.ConfPath, NodesFile: cfg.NodesFile, Cfg: cfg, OutDir: out, Quiet: true, HTTPClient: sourceClient(fetcher)}); err != nil {
+	if err := gen.Run(gen.Options{ConfPath: cfg.ConfPath, NodesFile: cfg.NodesFile, Cfg: cfg, OutDir: out, Quiet: true, OmitLearningProbe: true, HTTPClient: sourceClient(fetcher)}); err != nil {
 		return "", fmt.Errorf("generation failed: %s", sanitizeGenerationError(err))
 	}
 	raw, err := os.ReadFile(filepath.Join(out, "config.json"))

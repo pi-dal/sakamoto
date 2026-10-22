@@ -1,0 +1,28 @@
+include:
+  - project.yml
+name: SakamotoNativeTests
+targets:
+  SakamotoNativeTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: AppTests
+    dependencies:
+      - target: Sakamoto
+      - framework: Frameworks/Libbox.xcframework
+        embed: false
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.pidal.sakamoto.NativeTests
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Sakamoto.app/Sakamoto"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+schemes:
+  SakamotoNativeTests:
+    build:
+      targets:
+        Sakamoto: all
+        SakamotoNativeTests: [test]
+    test:
+      targets:
+        - SakamotoNativeTests

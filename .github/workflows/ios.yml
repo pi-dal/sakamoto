@@ -5,6 +5,8 @@ on:
   push:
     branches: [main]
     paths:
+      - 'scripts/libbox/**'
+      - 'scripts/libbox-tests/**'
       - 'scripts/patch-libbox-location.py'
       - 'scripts/patch-libbox-network.py'
       - 'scripts/mobile-go.py'
@@ -21,6 +23,8 @@ on:
       - '.github/workflows/ios.yml'
   pull_request:
     paths:
+      - 'scripts/libbox/**'
+      - 'scripts/libbox-tests/**'
       - 'scripts/patch-libbox-location.py'
       - 'scripts/patch-libbox-network.py'
       - 'scripts/mobile-go.py'
@@ -93,7 +97,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ios/Frameworks
-          key: ios-frameworks-v4-combined-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.build }}-${{ hashFiles('mise.toml', 'go.mod', 'go.sum', 'pkg/**', 'internal/**', 'ios/scripts/build-*.sh', 'ios/scripts/patch-tailscale-derp.py', 'ios/scripts/flatten-gomobile-framework.sh', 'ios/scripts/share-libbox.py', 'scripts/patch-libbox-location.py', 'scripts/patch-libbox-network.py', 'scripts/mobile-go.py', 'scripts/go-size-profile.json') }}
+          key: ios-frameworks-v4-combined-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.build }}-${{ hashFiles('mise.toml', 'go.mod', 'go.sum', 'pkg/**', 'internal/**', 'ios/scripts/build-*.sh', 'ios/scripts/patch-tailscale-derp.py', 'ios/scripts/flatten-gomobile-framework.sh', 'ios/scripts/share-libbox.py', 'scripts/patch-libbox-location.py', 'scripts/patch-libbox-network.py', 'scripts/libbox/**', 'scripts/libbox-tests/**', 'scripts/mobile-go.py', 'scripts/go-size-profile.json') }}
 
       - name: Build combined Libbox and Mobilecore framework
         if: steps.frameworks.outputs.cache-hit != 'true'

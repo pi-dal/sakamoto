@@ -31,16 +31,24 @@ object PowerObservationScenario {
         }
         val samples = org.json.JSONArray()
         val previousConfig = com.pidal.sakamoto.runtime.ConfigRepository.load(test.targetContext)
+        val experimentPrefs = test.targetContext.getSharedPreferences("experiments", 0)
+        val previousSettings = experimentPrefs.getString("settings", null)
+        check(experimentPrefs.edit().remove("settings").commit())
         var activity: MainActivity? = null
         try {
             server.start()
             val config = """{"log":{"level":"warn"},"outbounds":[{"type":"direct","tag":"direct"},{"type":"selector","tag":"MainProxy","outbounds":["direct"]}],"route":{"rules":[{"clash_mode":"global","action":"route","outbound":"MainProxy"},{"clash_mode":"direct","action":"route","outbound":"direct"}],"final":"MainProxy"},"experimental":{"clash_api":{"default_mode":"rule"}}}"""
             server.startOrReloadService(config, OverrideOptions())
             val instance = server.runningInstanceID()
+            check(runCatching { server.probeAutomaticOrigin("invalid/host", 80, "direct", instance, 1000) }.isFailure) { "JNI origin probe accepted an invalid hostname" }
             CommandClientRuntime.setLearningEnabled(false)
             CommandClientRuntime.setDataVisible(false)
             CommandClientRuntime.start()
             eventually { CommandClientRuntime.channelConnected.value }
+            stage = "initial Rule mode"
+            CommandClientRuntime.setClashMode("rule")
+            eventually { com.pidal.sakamoto.runtime.MobilecoreRuntime.state.value.routingMode.lowercase() == "rule" }
+            com.pidal.sakamoto.runtime.MobilecoreRuntime.completeConfigApply()
             val field = CommandClientRuntime.javaClass.getDeclaredField("client").apply { isAccessible = true }
             val actionClient = field.get(CommandClientRuntime)
             Thread.sleep(1200)
@@ -119,9 +127,11 @@ object PowerObservationScenario {
             eventually { com.pidal.sakamoto.runtime.MobilecoreRuntime.state.value.routingMode.lowercase() == "direct" }
             samples.put(org.json.JSONObject().put("stage", "restarted").put("action", "direct").put("same_core", true))
             java.io.File(test.targetContext.cacheDir, "power-observation.json").writeText(samples.toString(2))
+            LearningObservationScenario.run(test, server, checkNotNull(activity))
         } finally {
             com.pidal.sakamoto.runtime.ExperimentRuntime.quiesce()
             com.pidal.sakamoto.runtime.ConfigRepository.save(test.targetContext, previousConfig)
+            check(experimentPrefs.edit().apply { if (previousSettings == null) remove("settings") else putString("settings", previousSettings) }.commit())
             test.runOnMainSync { activity?.finish() }
             CommandClientRuntime.setDataVisible(false)
             CommandClientRuntime.setLearningEnabled(false)

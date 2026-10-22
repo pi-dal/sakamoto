@@ -31,9 +31,9 @@ type Config struct {
 	Fallbacks                map[string][]string `yaml:"fallbacks"`
 	FallbackEnabled          bool                `yaml:"fallback_enabled"` // automatic RealityAuto → OthersAuto failover
 
-	CheckInterval    time.Duration `yaml:"check_interval"`     // default 30s
-	RecoverAfter     int           `yaml:"recover_after"`      // default 2
-	TestSettle       time.Duration `yaml:"test_settle"`        // wait for URLTest results; default 5s
+	CheckInterval     time.Duration `yaml:"check_interval"`      // default 30s
+	RecoverAfter      int           `yaml:"recover_after"`       // default 2
+	TestSettle        time.Duration `yaml:"test_settle"`         // wait for URLTest results; default 5s
 	SwitchMinInterval time.Duration `yaml:"switch_min_interval"` // min gap between selects on the same selector; default 5m, 0 disables
 
 	// Import sources.
@@ -126,11 +126,11 @@ func legacyDir() string {
 
 func Default() *Config {
 	c := &Config{
-		Fallbacks:       map[string][]string{"MainProxy": {"RealityAuto", "OthersAuto"}},
-		FallbackEnabled: true,
-		CheckInterval:    30 * time.Second,
-		RecoverAfter:     2,
-		TestSettle:       5 * time.Second,
+		Fallbacks:         map[string][]string{"MainProxy": {"RealityAuto", "OthersAuto"}},
+		FallbackEnabled:   true,
+		CheckInterval:     30 * time.Second,
+		RecoverAfter:      2,
+		TestSettle:        5 * time.Second,
 		SwitchMinInterval: 5 * time.Minute,
 	}
 	c.API.URL = "http://127.0.0.1:9090"

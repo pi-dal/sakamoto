@@ -10,6 +10,12 @@ final class ProviderExperimentRunner {
     let profileID: String
     let settings: ExperimentSettings
     private let apply: (String) async throws -> Void
+    private let prober: MobileexperimentLearningProberProtocol?
+    private let proxyTag: String
+    private var activeCheck: MobileexperimentLearningCheck?
+    private var generation: UInt64 = 0
+    private var learningCooldown: [String: Date] = [:]
+    private var lastVerificationAt = Date.distantPast
     private var client: LibboxCommandClient?
     private var handler: ExperimentCommandHandler?
     private var monitor: Task<Void, Never>?
@@ -42,11 +48,14 @@ final class ProviderExperimentRunner {
     }
     private var recoveryCommands: RecoveryCommands?
 
-    init(profileID: String, settings: ExperimentSettings, content: String, root: URL, recoveryCommands: RecoveryCommands? = nil, apply: @escaping (String) async throws -> Void) throws {
+    init(profileID: String, settings: ExperimentSettings, content: String, root: URL, recoveryCommands: RecoveryCommands? = nil, prober: MobileexperimentLearningProberProtocol? = nil, apply: @escaping (String) async throws -> Void) throws {
         try settings.validate()
         _ = try ExperimentFiles.directory(profileID: profileID, root: root)
         self.profileID = profileID; self.settings = settings
-        self.root = root; self.apply = apply; self.recoveryCommands = recoveryCommands
+        self.root = root; self.apply = apply; self.recoveryCommands = recoveryCommands; self.prober = prober
+        var proxyError: NSError?
+        proxyTag = settings.learningEnabled ? MobileexperimentProxyOutbound(content, &proxyError) : ""
+        if let proxyError { throw proxyError }
         state = try ExperimentFiles.read(profileID: profileID, root: root)
         if settings.learningEnabled {
             var error: NSError?
@@ -147,6 +156,7 @@ final class ProviderExperimentRunner {
 
     func networkChanged() {
         guard !stopped, settings.requiresMonitoring else { return }
+        generation &+= 1; activeCheck?.cancel()
         healthSince = Int64(Date().timeIntervalSince1970) + 1
         schedule.reset(); recovery.reset()
         if recovering {
@@ -161,14 +171,14 @@ final class ProviderExperimentRunner {
     }
 
     func quiesce() async {
-        stopped = true; monitorSignal?.finish(); probeWake?.cancel(); monitor?.cancel(); operation?.cancel()
+        stopped = true; generation &+= 1; activeCheck?.cancel(); monitorSignal?.finish(); probeWake?.cancel(); monitor?.cancel(); operation?.cancel()
         removal?.cancel()
         await operation?.value
         _ = try? await removal?.value
         stop()
     }
     func stop() {
-        stopped = true; monitorSignal?.finish(); probeWake?.cancel(); monitor?.cancel(); operation?.cancel(); removal?.cancel()
+        stopped = true; generation &+= 1; activeCheck?.cancel(); monitorSignal?.finish(); probeWake?.cancel(); monitor?.cancel(); operation?.cancel(); removal?.cancel()
         let client = client; self.client = nil
         Task.detached { try? client?.disconnect() }
         connected = false; tracker = nil; groups = []; recovery.reset()
@@ -178,19 +188,19 @@ final class ProviderExperimentRunner {
         guard !stopped else { return }
         let changed = connected != value
         connected = value; firstLogs = true
-        if !value { groups = []; mode = ""; recovery.reset(); schedule.reset(); status("Waiting for the core command channel") }
+        if !value { generation &+= 1; activeCheck?.cancel(); groups = []; mode = ""; recovery.reset(); schedule.reset(); status("Waiting for the core command channel") }
         if changed { wakeMonitor() }
     }
     func clashMode(_ value: String?) {
         let next = value?.lowercased() ?? ""
-        if mode != next { mode = next; wakeMonitor() }
+        if mode != next { generation &+= 1; activeCheck?.cancel(); mode = next; wakeMonitor() }
     }
     func updateGroups(_ values: [ExperimentGroup]) {
         let previous = ExperimentGroup.selectedObservation(groups: groups)
         let current = ExperimentGroup.selectedObservation(groups: values)
         let selectors = Set(settings.fallbacks.keys).union(["MainProxy"])
         let selectionChanged = values.contains(where: { group in selectors.contains(group.tag) && (groups.first(where: { $0.tag == group.tag }).map { $0.selected != group.selected } ?? !group.selected.isEmpty) })
-        if selectionChanged { recovery.reset() }
+        if selectionChanged { generation &+= 1; activeCheck?.cancel(); recovery.reset() }
         groups = values
         if !busy && (selectionChanged || ((previous?.delay ?? 0) > 0 && (current?.delay ?? 0) <= 0)) {
             schedule.reset(); wakeMonitor()
@@ -200,7 +210,8 @@ final class ProviderExperimentRunner {
     }
     func observeConnection(id: String, domain: String, destination: String, network: String, outbound: String, rule: String, closed: Bool, downlink: Int64) {
         guard connected, !busy, !editsPending(), settings.mode == .auto || settings.cfRegionBlock else { return }
-        tracker?.connection(id, domain: domain, destination: destination, network: network, outbound: outbound, rule: rule, closed: closed, downlink: downlink, nowMillis: Int64(Date().timeIntervalSince1970 * 1000))
+        let candidate = tracker?.observeConnectionJSON(id, domain: domain, destination: destination, network: network, outbound: outbound, rule: rule, closed: closed, downlink: downlink, nowMillis: Int64(Date().timeIntervalSince1970 * 1000)) ?? ""
+        if settings.mode == .auto { consider(candidate) }
     }
     func observeLogs(_ lines: [String]) {
         // The first batch after subscription is historical, not evidence for
@@ -210,20 +221,62 @@ final class ProviderExperimentRunner {
         let now = Date()
         guard ExperimentGroup.selectedProxyHealthy(groups: groups, since: max(healthSince, Int64(now.timeIntervalSince1970) - 120)) else { return }
         for line in lines {
-            let domain = tracker?.observeLog(line, nowMillis: Int64(now.timeIntervalSince1970 * 1000), proxyHealthy: true, autoMode: settings.mode == .auto, cfRegion: settings.cfRegionBlock) ?? ""
-            if !domain.isEmpty && !state.learned.contains(domain) && state.learned.count < 1000 {
-                busy = true
-                operation = Task { [weak self] in
-                    guard let self else { return }
-                    defer { self.busy = false }
-                    do { try await self.replaceLearned((self.state.learned + [domain]).sorted()) }
-                    catch {
-                        if self.state.status != "Reload rollback failed; disconnect and reconnect" {
-                            self.status("Learning failed; previous rules retained")
-                        }
-                    }
-                }
-                return
+            let candidate = tracker?.observeFailureJSON(line, nowMillis: Int64(now.timeIntervalSince1970 * 1000), proxyHealthy: true, autoMode: settings.mode == .auto, cfRegion: settings.cfRegionBlock) ?? ""
+            if consider(candidate) { return }
+        }
+    }
+    @discardableResult private func consider(_ candidate: String) -> Bool {
+        let now = Date()
+        guard connected, !busy, !stopped, !editsPending(), mode == "rule", prober != nil,
+              ExperimentGroup.selectedProxyHealthy(groups: groups, since: max(healthSince, Int64(now.timeIntervalSince1970) - 120)),
+              let value = try? JSONSerialization.jsonObject(with: Data(candidate.utf8)) as? [String: Any],
+              let domain = value["domain"] as? String, !state.learned.contains(domain), state.learned.count < 1000 else { return false }
+        learningCooldown = learningCooldown.filter { $0.value > now }
+        guard learningCooldown[domain] == nil, learningCooldown.count < 1024, now.timeIntervalSince(lastVerificationAt) >= 30 else { return false }
+        lastVerificationAt = now
+        learningCooldown[domain] = now.addingTimeInterval(300)
+        busy = true
+        let expected = generation
+        operation = Task { [weak self] in
+            guard let self else { return }
+            defer { self.busy = false }
+            await self.learn(candidate, expectedGeneration: expected)
+        }
+        return true
+    }
+    private func learn(_ candidate: String, expectedGeneration: UInt64) async {
+        var error: NSError?
+        guard let check = MobileexperimentNewLearningCheck(candidate, &error), let prober else { return }
+        let before = expectedGeneration
+        var updateStarted = false
+        activeCheck = check
+        status("Checking direct and proxy origin")
+        defer {
+            activeCheck = nil; check.cancel()
+            if let report = try? JSONDecoder().decode(ExperimentLearningResult.self, from: Data(check.reportJSON().utf8)) {
+                state.history = Array((state.history + [report]).suffix(50))
+                status(report.domain + ": " + report.detail)
+            }
+        }
+        do {
+            try Task.checkCancellation()
+            guard generation == before, !stopped else { throw CancellationError() }
+            let proxy = proxyTag
+            await withTaskCancellationHandler(operation: {
+                await Task.detached { check.compare(prober, proxyTag: proxy) }.value
+            }, onCancel: { check.cancel() })
+            try Task.checkCancellation()
+            guard generation == before, !stopped, connected, mode == "rule", !editsPending() else { throw CancellationError() }
+            guard check.ready() else { return }
+            let value = try JSONSerialization.jsonObject(with: Data(candidate.utf8)) as? [String: Any]
+            guard let domain = value?["domain"] as? String else { return }
+            updateStarted = true
+            try await replaceLearned((state.learned + [domain]).sorted(), validation: check)
+        } catch {
+            if state.status == "Learning rollback failed; disconnect and reconnect" {
+                check.finish("failed", detail: state.status)
+            } else {
+                check.finish(updateStarted ? "rolled_back" : "skipped", detail: "Learning interrupted or target verification failed; previous rules retained")
             }
         }
     }
@@ -236,7 +289,8 @@ final class ProviderExperimentRunner {
         removal = task
         try await task.value
     }
-    private func replaceLearned(_ next: [String]) async throws {
+    private func replaceLearned(_ next: [String], validation: MobileexperimentLearningCheck? = nil) async throws {
+        let before = generation
         let previous = Self.json(state.learned)
         let candidate = Self.json(next)
         guard connected, !stopped, !editsPending(), mode == "rule" else { throw TunnelProfile.InvalidProfile("Automatic changes require Rule mode and a live tunnel") }
@@ -244,7 +298,15 @@ final class ProviderExperimentRunner {
         do {
             try await apply(candidate)
             try Task.checkCancellation()
-            guard !stopped else { throw CancellationError() }
+            guard !stopped, connected, mode == "rule", generation == before else { throw CancellationError() }
+            if let validation, let prober {
+                let verified = await withTaskCancellationHandler(operation: {
+                    await Task.detached { validation.verify(prober) }.value
+                }, onCancel: { validation.cancel() })
+                guard verified else { throw TunnelProfile.InvalidProfile("Installed route failed target verification") }
+            }
+            try Task.checkCancellation()
+            guard !stopped, connected, mode == "rule", generation == before else { throw CancellationError() }
             guard !editsPending() else { throw TunnelProfile.InvalidProfile("Profile edits arrived during learning; previous runtime restored") }
             var updated = state; updated.learned = next; updated.status = "Learned routes applied"; updated.updatedAt = Date()
             try ExperimentFiles.write(updated, profileID: profileID, root: root)
@@ -252,10 +314,8 @@ final class ProviderExperimentRunner {
         } catch {
             // Roll back the actual service as well as its display state. If
             // rollback fails, keep a loud failure, not a false success.
-            if !stopped {
-                do { try await apply(previous) }
-                catch { status("Reload rollback failed; disconnect and reconnect"); throw error }
-            }
+            do { try await apply(previous) }
+            catch { status("Learning rollback failed; disconnect and reconnect"); throw error }
             throw error
         }
     }

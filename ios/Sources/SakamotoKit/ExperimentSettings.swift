@@ -38,11 +38,37 @@ public struct ExperimentSettings: Codable, Equatable, Sendable {
     }
 }
 
+public struct ExperimentOriginResult: Codable, Equatable, Sendable {
+    public var reachable: Bool
+    public var httpStatus: Int?
+    public var error: String?
+    private enum CodingKeys: String, CodingKey { case reachable, httpStatus = "http_status", error }
+}
+
+public struct ExperimentLearningResult: Codable, Equatable, Sendable, Identifiable {
+    public var domain: String
+    public var state: String
+    public var detail: String
+    public var time: String
+    public var direct: ExperimentOriginResult?
+    public var proxy: ExperimentOriginResult?
+    public var id: String { time + domain }
+}
+
 public struct ExperimentRuntimeState: Codable, Equatable, Sendable {
     public var learned: [String] = []
     public var status = "Stopped"
     public var updatedAt = Date()
+    public var history: [ExperimentLearningResult] = []
     public init() {}
+    private enum CodingKeys: String, CodingKey { case learned, status, updatedAt, history }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        learned = try values.decodeIfPresent([String].self, forKey: .learned) ?? []
+        status = try values.decodeIfPresent(String.self, forKey: .status) ?? "Stopped"
+        updatedAt = try values.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+        history = Array((try values.decodeIfPresent([ExperimentLearningResult].self, forKey: .history) ?? []).suffix(50))
+    }
 }
 
 /// Timestamped latency facts, not the UI's selected/reachable shorthand.

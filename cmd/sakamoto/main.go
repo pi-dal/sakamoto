@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	"github.com/pi-dal/sakamoto/internal/config"
+	"github.com/pi-dal/sakamoto/internal/experiment"
 	"github.com/pi-dal/sakamoto/internal/sbclient"
 	"github.com/pi-dal/sakamoto/internal/security"
 	"github.com/pi-dal/sakamoto/internal/svc"
@@ -21,7 +22,7 @@ import (
 	"github.com/pi-dal/sakamoto/internal/watch"
 )
 
-const version = "0.2.16"
+const version = "0.2.17"
 
 const usage = `sakamoto — a macOS sing-box controller inspired by Shadowrocket
 
@@ -37,6 +38,7 @@ Usage:
   sakamoto ctl state | status | logs | reload  Inspect/control the supervisor
   sakamoto ctl urltest "TAG"             Queue a background latency check
   sakamoto ctl select "GROUP" "OUTBOUND"  Change a selector explicitly
+  sakamoto learning     Show private learned domains and verification outcomes
   sakamoto recover      Ask the user-level watcher for fresh MainProxy tests
   sakamoto dns-restore  Restore an orphaned DNS snapshot (core must be stopped)
   sakamoto dns-prepare  Build a private protected-DNS candidate; do not activate
@@ -155,6 +157,13 @@ func main() {
 			fatal("ctl", fmt.Errorf("%s", strings.TrimSpace(reply)))
 		}
 		fmt.Print(reply)
+	case "learning":
+		if len(args) != 1 {
+			fatal("learning", fmt.Errorf("learning takes no arguments"))
+		}
+		if err := runLearningStatus(*cfgPath); err != nil {
+			fatal("learning", err)
+		}
 	case "recover":
 		if len(args) != 1 {
 			fatal("recover", fmt.Errorf("recover takes no arguments"))
@@ -209,6 +218,35 @@ func main() {
 		fmt.Fprintf(os.Stderr, "unknown subcommand %q\n\n%s", sub, usage)
 		os.Exit(2)
 	}
+}
+
+func runLearningStatus(path string) error {
+	cfg, err := config.Load(path)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(path)
+	learned, err := experiment.Load(dir)
+	if err != nil {
+		return err
+	}
+	history, err := experiment.ReadReport(dir)
+	if err != nil {
+		return err
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(struct {
+		Mode              string                      `json:"mode"`
+		CFRegionBlock     bool                        `json:"cf_region_block"`
+		VerificationReady bool                        `json:"verification_ready"`
+		Domains           []string                    `json:"learned_domains"`
+		History           []experiment.LearningResult `json:"recent_verifications"`
+	}{cfg.Experiment.Mode, cfg.Experiment.CFRegionBlock, experiment.ProbeReady(raw), learned.Domains, history})
 }
 
 func fatal(subject string, err error) {
