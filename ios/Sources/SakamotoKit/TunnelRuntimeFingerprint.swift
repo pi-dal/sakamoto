@@ -63,6 +63,12 @@ public final class TunnelOperationGate: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         stopping = false; applying = false; generation &+= 1
     }
+    /// Publish final observations under the same short lock as stop invalidation.
+    public func publishIfActive(_ operation: () -> Void) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard !stopping, !applying else { return false }
+        operation(); return true
+    }
     public var state: ServiceState? {
         lock.lock(); defer { lock.unlock() }
         return stopping ? .stopping : (applying ? .starting : nil)

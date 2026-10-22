@@ -8,7 +8,6 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.os.Build
-import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -17,336 +16,333 @@ import androidx.core.content.ContextCompat
 import com.pidal.sakamoto.MainActivity
 import com.pidal.sakamoto.R
 import com.pidal.sakamoto.SakamotoApplication
-import com.pidal.sakamoto.runtime.ConfigRepository
 import com.pidal.sakamoto.command.CommandClientRuntime
+import com.pidal.sakamoto.runtime.ConfigRepository
+import com.pidal.sakamoto.runtime.ExperimentRuntime
 import com.pidal.sakamoto.runtime.MobilecoreRuntime
+import com.pidal.sakamoto.runtime.SystemStatusSurface
 import com.pidal.sakamoto.security.TailscaleAuthKeyStore
 import com.pidal.sakamoto.security.TailscaleConfigInjection
-import io.nekohasekai.libbox.CommandServer
-import io.nekohasekai.libbox.CommandServerHandler
-import io.nekohasekai.libbox.Libbox
-import io.nekohasekai.libbox.OverrideOptions
-import io.nekohasekai.libbox.PlatformInterface
-import io.nekohasekai.libbox.SystemProxyStatus
+import io.nekohasekai.libbox.*
+import io.nekohasekai.mobilecore.Mobilecore
+import io.nekohasekai.mobilecore.RecoverySession
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+import org.json.JSONObject
 
-/**
- * The tunnel-side service wrapper — a direct port of upstream
- * SagerNet/sing-box-for-android BoxService.kt for the parts this client
- * uses: CommandServerHandler + CommandServer(handler, platformInterface),
- * startOrReloadService(configContent, OverrideOptions) with the staged
- * config, and the foreground-service lifecycle around it.
- *
- * Upstream reads the profile from its Room database; we read the staged
- * generated config from ConfigRepository (filesDir JSON). Everything else —
- * the notification plumbing, the SERVICE_CLOSE broadcast, the error/alert
- * path that maps to the core's "Unavailable" service state — follows the
- * upstream shape.
- *
- * STATUS PENDING SDK BUILD VERIFICATION: this file compiles against the
- * gomobile-generated libbox API by construction (signatures mirrored from
- * upstream + experimental/libbox v1.14.2 sources), but no Android SDK/JDK
- * exists on the current machine, so it has NOT been compiled. See
- * android/README.md for the exact toolchain gap.
- */
-class TunnelBoxService(
-    private val service: Service,
-    private val platformInterface: PlatformInterface,
-) : CommandServerHandler {
-
+/** One native lifecycle worker; Go owns admission, generations and repair policy. */
+class TunnelBoxService(private val service: Service, private val platformInterface: PlatformInterface) : CommandServerHandler {
     companion object {
         private const val TAG = "TunnelBoxService"
         private const val NOTIFICATION_ID = 1
         const val ACTION_CLOSE = "com.pidal.sakamoto.action.SERVICE_CLOSE"
-
-        fun start(context: Context) {
-            val intent = Intent(context, SakamotoVpnService::class.java)
+        const val EXTRA_MANUAL = "manual"
+        const val EXTRA_REPAIR = "repair"
+        const val EXTRA_REQUEST = "request"
+        private val requests = AtomicLong()
+        private val ownership = Any()
+        @Volatile private var active: TunnelBoxService? = null
+        fun start(context: Context, manual: Boolean = true, repair: Boolean = false) {
+            val intent = Intent(context, SakamotoVpnService::class.java).putExtra(EXTRA_MANUAL, manual)
+                .putExtra(EXTRA_REPAIR, repair).putExtra(EXTRA_REQUEST, requests.incrementAndGet())
             ContextCompat.startForegroundService(context, intent)
         }
-
         fun stop(context: Context) {
-            context.sendBroadcast(
-                Intent(ACTION_CLOSE).setPackage(context.packageName),
-            )
+            com.pidal.sakamoto.runtime.TunnelRepair.cancel()
+            requests.incrementAndGet()
+            val owner = active
+            if (owner != null) owner.stopService(cancelRepair = false)
+            else context.sendBroadcast(Intent(ACTION_CLOSE).setPackage(context.packageName))
         }
+        fun stopForRepair() { requests.incrementAndGet(); active?.stopService(cancelRepair = false) }
+        /** Fresh native query with a bounded caller wait, never on Android's UI thread. */
+        fun verifiedInstance(): Long = active?.verifyInstance() ?: 0L
+        fun hasOwner(): Boolean = active != null
     }
-
-    var fileDescriptor: ParcelFileDescriptor? = null
-
+    private val gate = Mobilecore.newRuntimeGate()
+    private val stopping = AtomicBoolean()
+    private val applying = AtomicBoolean()
+    private val worker = Executors.newSingleThreadScheduledExecutor { runnable -> Thread(runnable, "sakamoto-vpn-lifecycle").apply { isDaemon = true } }
+    private val probeWorker = Executors.newSingleThreadExecutor { runnable -> Thread(runnable, "sakamoto-vpn-check").apply { isDaemon = true } }
+    private var probeFuture: java.util.concurrent.Future<Long>? = null
     @Volatile private var commandServer: CommandServer? = null
-    @Volatile private var reloading = false
     @Volatile private var starting = false
-
-    private val receiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            when (intent.action) {
-                ACTION_CLOSE -> stopService()
-            }
+    @Volatile private var reloading = false
+    @Volatile private var closingNative = false
+    private val publicationLock = Any()
+    @Volatile private var ticket = 0L
+    private var session: RecoverySession? = null
+    private var journalTicket: String? = null
+    private var stableTask: java.util.concurrent.ScheduledFuture<*>? = null
+    private val tunLock = Any()
+    private val admissionLock = Any()
+    private var tun: ParcelFileDescriptor? = null
+    private var receiverRegistered = false
+    private data class Profile(val content: String, val metadata: String, val retained: Boolean = false)
+    private var applied: Profile? = null
+    @Volatile private var destroyed = false
+    @Volatile private var completedState: String? = null
+    fun onDestroyed() {
+        destroyed = true
+        if (completedState != null) releaseOwnership() else stopService()
+    }
+    private fun releaseOwnership() {
+        synchronized(ownership) {
+            if (active === this) { active = null; completedState?.let { MobilecoreRuntime.setServiceState(it) } }
         }
     }
-    private var receiverRegistered = false
+    private val receiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) { if (intent.action == ACTION_CLOSE) stopService() }
+    }
 
-    /** Called from SakamotoVpnService.onStartCommand. */
-    @Synchronized fun onStartCommand(): Int {
-        if (commandServer != null || starting) return Service.START_NOT_STICKY
+    /** Establishment and stop share a short fd publication lock. A late fd is closed. */
+    fun acceptTun(fd: ParcelFileDescriptor): Int = synchronized(tunLock) {
+        if (!gate.current(ticket) || stopping.get()) { fd.close(); error("VPN startup was canceled") }
+        tun?.close(); tun = fd; fd.fd
+    }
+    private fun closeTun() = synchronized(tunLock) { runCatching { tun?.close() }; tun = null }
+    private fun current(value: Long) { check(!stopping.get() && gate.current(value)) { "VPN operation was canceled" } }
+
+    @Synchronized fun onStartCommand(manual: Boolean, repair: Boolean, request: Long): Int {
+        showForegroundNotification(true)
+        if (request != 0L && requests.get() != 0L && request != requests.get()) {
+            synchronized(ownership) { if (active == null) active = this }
+            stopService(cancelRepair = false); return Service.START_NOT_STICKY
+        }
+        if (stopping.get() || commandServer != null || starting) return Service.START_NOT_STICKY
+        synchronized(ownership) {
+            if (active != null && active !== this) {
+                MobilecoreRuntime.setNotice("The previous core has not finished stopping. Use Android VPN settings if it remains unresponsive.")
+                service.stopSelf(); return Service.START_NOT_STICKY
+            }
+            active = this
+        }
+        ticket = gate.begin()
+        if (ticket == 0L) return Service.START_NOT_STICKY
         starting = true
         MobilecoreRuntime.setServiceState("Starting")
-        showForegroundNotification(starting = true)
         if (!receiverRegistered) {
-            ContextCompat.registerReceiver(
-                service,
-                receiver,
-                IntentFilter(ACTION_CLOSE),
-                ContextCompat.RECEIVER_NOT_EXPORTED,
-            )
+            ContextCompat.registerReceiver(service, receiver, IntentFilter(ACTION_CLOSE), ContextCompat.RECEIVER_NOT_EXPORTED)
             receiverRegistered = true
         }
-        // Upstream: GlobalScope + Dispatchers.IO. A plain thread keeps the
-        // dependency set minimal without changing the semantics.
-        Thread {
+        val operation = ticket
+        worker.execute {
             try {
+                current(operation)
+                val journal = synchronized(admissionLock) {
+                    current(operation)
+                    val created = Mobilecore.newRecoverySession(service.filesDir.absolutePath)
+                    session = created
+                    journalTicket = created.begin(manual)
+                    created
+                }
+                current(operation)
+                ExperimentRuntime.restorePending(service)
                 val server = CommandServer(this, platformInterface)
-                server.start()
                 commandServer = server
-                startServer(server)
-            } catch (e: Exception) {
-                stopAndAlert("start command server: ${e.message}")
+                server.start()
+                current(operation)
+                val profile = if (repair && (ConfigRepository.load(service).sourceNeedsGenerate || MobilecoreRuntime.state.value.configState != "Clean")) {
+                    runCatching { retainedProfile(journal) }.getOrElse { currentProfile() }
+                } else currentProfile()
+                try { startProfile(server, journal, profile, operation, initial = true) }
+                catch (error: Exception) {
+                    current(operation)
+                    journal.failed(checkNotNull(journalTicket))
+                    val retained = retainedProfile(journal)
+                    journalTicket = journal.beginFallback()
+                    startProfile(server, journal, retained, operation, initial = true)
+                }
+            } catch (error: Exception) {
+                if (!stopping.get()) failAndClose()
             } finally { starting = false }
-        }.start()
+        }
         return Service.START_NOT_STICKY
     }
-
-    private fun startServer(server: CommandServer) {
-        try {
-            com.pidal.sakamoto.runtime.ExperimentRuntime.restorePending(service)
-            val base = ConfigRepository.readGeneratedContent(service)
-            if (base == null) {
-                stopAndAlert("empty configuration — import a config in the Config tab first")
-                return
+    private fun currentProfile(): Profile {
+        val config = ConfigRepository.load(service)
+        val base = ConfigRepository.readGeneratedContent(service) ?: error("No complete generated configuration")
+        val staged = com.pidal.sakamoto.runtime.AutomaticConnectionSettings.load(service).applying(base)
+        val key = TailscaleAuthKeyStore(service).readAuthKey()
+        val injected = if (key.isNullOrEmpty()) staged else TailscaleConfigInjection.inject(key, staged)
+        return Profile(ExperimentRuntime.prepareContent(service, injected), JSONObject().put("hostMetadata", config.hostMetadata).toString())
+    }
+    private fun retainedProfile(journal: RecoverySession): Profile = Profile(journal.retainedConfig(), journal.retainedMetadata(), retained = true)
+    private fun startProfile(server: CommandServer, journal: RecoverySession, profile: Profile, operation: Long, initial: Boolean, beforeNative: (() -> Unit)? = null) {
+        current(operation)
+        Libbox.checkConfig(profile.content)
+        val receipt = checkNotNull(journalTicket)
+        journal.prepare(receipt, profile.content, profile.metadata, service.filesDir.absolutePath)
+        val captured = journal.preparedConfig()
+        current(operation)
+        DefaultNetworkMonitor.start()
+        beforeNative?.invoke()
+        stableTask?.cancel(false)
+        server.startOrReloadService(captured, OverrideOptions())
+        current(operation)
+        check(server.isServiceRunning() && server.runningInstanceID() > 0) { "Core startup was not confirmed" }
+        check(!server.needWIFIState()) { "Configuration requires unavailable Wi-Fi permissions" }
+        check(synchronized(tunLock) { tun != null }) { "VPN interface was not established" }
+        val instance = server.runningInstanceID()
+        if (initial) journal.ready(receipt, instance.toString(), Libbox.version()) else journal.replaced(receipt, instance.toString(), Libbox.version())
+        current(operation)
+        applied = profile.copy(content = captured)
+        if (!profile.retained) {
+            ExperimentRuntime.start(service, com.pidal.sakamoto.runtime.NativeLearningProber(server, instance)) { domains ->
+                current(operation); server.updateAutomaticDomains(domains, instance)
             }
-            val staged = com.pidal.sakamoto.runtime.AutomaticConnectionSettings.load(service).applying(base)
-            // Tailscale auth key injection at start time (mirrors the iOS
-            // TailscaleConfigInjection): the stored key merges into the
-            // tailscale endpoint config here, in the tunnel process's start
-            // path. It is never logged, and the notice below never carries it.
-            val content = try {
-                val storedKey = TailscaleAuthKeyStore(service).readAuthKey()
-                if (storedKey.isNullOrEmpty()) staged
-                else TailscaleConfigInjection.inject(storedKey, staged)
-            } catch (e: TailscaleConfigInjection.ConfigInjectionError.NoTailscaleEndpoint) {
-                stopAndAlert("a Tailscale auth key is stored but the config has no tailscale endpoint")
-                return
-            } catch (e: Exception) {
-                stopAndAlert("config injection failed: ${e.message}")
-                return
-            }
-            DefaultNetworkMonitor.start()
-            // The one libbox entry point that runs the box: the same call
-            // upstream makes with its profile content.
-            server.startOrReloadService(com.pidal.sakamoto.runtime.ExperimentRuntime.prepareContent(service, content), OverrideOptions())
-            check(server.isServiceRunning()) { "Core startup was interrupted" }
-            if (server.needWIFIState()) {
-                // Wi-Fi rule matching would need location permissions this
-                // client does not request yet — refuse instead of misbehaving.
-                stopAndAlert("this config needs Wi-Fi state; location permissions are not granted")
-                return
-            }
-            MobilecoreRuntime.setServiceState("Running")
             if (!ConfigRepository.load(service).sourceNeedsGenerate) MobilecoreRuntime.completeConfigApply()
-            val instanceID = server.runningInstanceID()
-            com.pidal.sakamoto.runtime.ExperimentRuntime.start(service, com.pidal.sakamoto.runtime.NativeLearningProber(server, instanceID)) { domains -> server.updateAutomaticDomains(domains, instanceID) }
-            CommandClientRuntime.start()
-            showForegroundNotification(starting = false)
-            com.pidal.sakamoto.runtime.SystemStatusSurface.start(service)
-        } catch (e: Exception) {
-            stopAndAlert("create service: ${e.message}")
+        } else {
+            MobilecoreRuntime.configEvent("modified"); MobilecoreRuntime.configEvent("regenerate_succeeded")
+            MobilecoreRuntime.setNotice("Using the verified saved configuration; learning paused. Review Config before applying changes.")
         }
-    }
-
-    /**
-     * CommandServerHandler: invoked by the Go core when the box stops
-     * (config error, fatal I/O, ...). Upstream closes the tun fd here.
-     */
-    override fun serviceStop() {
-        MobilecoreRuntime.setServiceState("Stopping")
-        fileDescriptor?.close()
-        fileDescriptor = null
-        if (!reloading) {
-            cleanup()
-            MobilecoreRuntime.setServiceState("Stopped")
-            com.pidal.sakamoto.runtime.SystemStatusSurface.stop(service)
-        }
-    }
-
-    /** CommandServerHandler: the core asked for a reload with current staged config. */
-    override fun serviceReload() {
-        val server = commandServer ?: return
-        com.pidal.sakamoto.runtime.ExperimentRuntime.quiesce()
-        try {
-            val base = ConfigRepository.readGeneratedContent(service)
-            if (base == null) {
-                stopAndAlert("empty configuration on reload")
-                return
-            }
-            val staged = com.pidal.sakamoto.runtime.AutomaticConnectionSettings.load(service).applying(base)
-            val content = try {
-                val storedKey = TailscaleAuthKeyStore(service).readAuthKey()
-                if (storedKey.isNullOrEmpty()) staged
-                else TailscaleConfigInjection.inject(storedKey, staged)
-            } catch (e: Exception) {
-                stopAndAlert("reload: auth key injection failed: ${e.message}")
-                return
-            }
-            MobilecoreRuntime.beginConfigApply()
-            reloading = true
-            server.startOrReloadService(com.pidal.sakamoto.runtime.ExperimentRuntime.prepareContent(service, content), OverrideOptions())
-            check(server.isServiceRunning()) { "Core reload was interrupted" }
-            val instanceID = server.runningInstanceID()
-            com.pidal.sakamoto.runtime.ExperimentRuntime.start(service, com.pidal.sakamoto.runtime.NativeLearningProber(server, instanceID)) { domains -> server.updateAutomaticDomains(domains, instanceID) }
+        synchronized(publicationLock) {
+            current(operation)
+            if (initial) check(gate.ready(operation)) { "VPN startup was canceled" }
+            MobilecoreRuntime.recordCoreIdentity(instance)
             MobilecoreRuntime.setServiceState("Running")
-            MobilecoreRuntime.completeConfigApply()
-            showForegroundNotification(starting = false)
-        } catch (e: Exception) {
+        }
+        CommandClientRuntime.start()
+        showForegroundNotification(false); SystemStatusSurface.start(service)
+        stableTask?.cancel(false)
+        stableTask = worker.schedule({
+            if (!stopping.get() && gate.current(operation) && commandServer === server && server.isServiceRunning() && server.runningInstanceID() == instance) {
+                runCatching { journal.stable(receipt, instance.toString()) }.onFailure { Log.w(TAG, "Stable recovery receipt was not promoted") }
+            }
+        }, Mobilecore.recoveryStableSeconds(), TimeUnit.SECONDS)
+    }
+    /** Core-requested stop is unexpected unless a stop/reload is already in flight. */
+    override fun serviceStop() {
+        closeTun()
+        if (stopping.get() || reloading || starting || closingNative) return
+        synchronized(publicationLock) { gate.stop(); MobilecoreRuntime.setServiceState("Unavailable") }
+        worker.execute { if (!stopping.get()) failAndClose() }
+    }
+    override fun serviceReload() {
+        check(applying.compareAndSet(false, true)) { "Configuration is already being applied" }
+        val operation = ticket
+        reloading = true
+        val future = try { worker.submit {
+            var nativeApplyStarted = false
+            val server = commandServer
+            val journal = session
+            val previous = applied
+            try {
+                current(operation)
+                checkNotNull(server); checkNotNull(journal)
+                val next = currentProfile(); Libbox.checkConfig(next.content)
+                ExperimentRuntime.quiesce(); current(operation)
+                MobilecoreRuntime.beginConfigApply()
+                startProfile(server, journal, next, operation, initial = false, beforeNative = { nativeApplyStarted = true })
+            } catch (error: Exception) {
+                MobilecoreRuntime.configEvent("regenerate_failed")
+                if (!stopping.get() && gate.current(operation) && server != null && journal != null) {
+                    if (!nativeApplyStarted && server.isServiceRunning()) {
+                        MobilecoreRuntime.setNotice("Configuration rejected; the running core was retained. Review Config before applying again.")
+                    } else if (previous != null) {
+                        try {
+                            startProfile(server, journal, previous.copy(retained = true), operation, initial = false)
+                            MobilecoreRuntime.setNotice("Configuration update failed; the previous running configuration was restored. Review Config before applying again.")
+                        } catch (rollback: Exception) { if (!stopping.get()) failAndClose() }
+                    } else failAndClose()
+                }
+                throw IllegalStateException("Configuration was not applied; inspect Home before trying again")
+            } finally { reloading = false; applying.set(false) }
+        } } catch (error: Exception) { reloading = false; applying.set(false); throw error }
+        // This is the Go command-server callback thread, not Android's main
+        // thread. A successful native ACK must mean the replacement completed.
+        try { future.get(30, TimeUnit.SECONDS) }
+        catch (error: Exception) { throw IllegalStateException("Configuration application was not confirmed; inspect Home") }
+    }
+    /** Cancellation/fd removal happen before waiting for any blocked native call. */
+    fun stopService(cancelRepair: Boolean = true) {
+        if (!stopping.compareAndSet(false, true)) return
+        synchronized(publicationLock) { gate.stop(); MobilecoreRuntime.setServiceState("Stopping") }
+        stableTask?.cancel(false)
+        if (cancelRepair) {
+            com.pidal.sakamoto.runtime.TunnelRepair.cancel()
+            requests.incrementAndGet()
+        }
+        closeTun()
+        synchronized(admissionLock) {
+            runCatching { (session ?: Mobilecore.newRecoverySession(service.filesDir.absolutePath)).stop() }
+        }
+        worker.execute {
+            runCatching { closeNative() }.onSuccess { finishService("Stopped") }.onFailure {
+                MobilecoreRuntime.setNotice("Core shutdown is unconfirmed. Disconnect in Android VPN settings before trying again.")
+            }
+        }
+    }
+    private fun failAndClose() {
+        stableTask?.cancel(false)
+        journalTicket?.let { runCatching { session?.failed(it) } }
+        gate.stop(); closeTun()
+        if (runCatching { closeNative() }.isFailure) {
+            MobilecoreRuntime.setServiceState("Unavailable")
+            MobilecoreRuntime.setNotice("Core shutdown is unconfirmed. Disconnect in Android VPN settings before trying again.")
+            return
+        }
+        if (!stopping.get()) {
             MobilecoreRuntime.configEvent("regenerate_failed")
-            stopAndAlert("reload service: ${e.message}")
-        } finally { reloading = false }
+            MobilecoreRuntime.setNotice("Core startup or recovery failed. Check and repair VPN, or disconnect in Android VPN settings. Private configuration details remain on this device.")
+            finishService("Unavailable")
+        }
     }
-
-    override fun getSystemProxyStatus(): SystemProxyStatus? {
-        // This client implements the VPN (TUN) service only; the system
-        // HTTP-proxy surface of upstream ProxyService is out of scope here.
-        return null
+    private fun closeNative() {
+        ExperimentRuntime.stop(); CommandClientRuntime.stop(); DefaultNetworkMonitor.stop()
+        closingNative = true
+        try {
+            val server = commandServer
+            runCatching { server?.closeService() }
+            check(server?.isServiceRunning() != true) { "Core shutdown is unconfirmed" }
+            server?.close(); commandServer = null
+            session?.releaseSnapshots()
+            closeTun(); gate.finishStop()
+        } finally { closingNative = false }
     }
-
-    override fun setSystemProxyEnabled(enabled: Boolean) {
-        serviceReload()
+    private fun finishService(state: String) {
+        stopping.set(true)
+        if (receiverRegistered) { runCatching { service.unregisterReceiver(receiver) }; receiverRegistered = false }
+        SystemStatusSurface.stop(service)
+        completedState = state
+        if (destroyed) releaseOwnership()
+        ServiceCompat.stopForeground(service, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        service.stopSelf()
+        probeWorker.shutdown(); worker.shutdown()
     }
-
-    override fun triggerNativeCrash() {
-        // Debug-only upstream; not wired on this client.
+    @Synchronized private fun verifyInstance(): Long {
+        if (stopping.get() || gate.state() != "Running") return 0L
+        if (probeFuture?.isDone == false) return 0L
+        val server = commandServer ?: return 0L
+        val future = probeWorker.submit<Long> { if (server.isServiceRunning()) server.runningInstanceID() else 0L }
+        probeFuture = future
+        return runCatching { future.get(1500, TimeUnit.MILLISECONDS) }.getOrDefault(0L)
     }
-
-    override fun writeDebugMessage(message: String?) {
-        Log.d(TAG, message ?: "")
-    }
-
+    override fun getSystemProxyStatus(): SystemProxyStatus? = null
+    override fun setSystemProxyEnabled(enabled: Boolean) { serviceReload() }
+    override fun triggerNativeCrash() {}
+    override fun writeDebugMessage(message: String?) { Log.d(TAG, message ?: "") }
     override fun connectSSHAgent(): Int = -1
 
-    /** Internal stop: close the box, the channel, and the service itself. */
-    fun stopService() {
-        val server = commandServer
-        if (server != null) {
-            try {
-                server.closeService()
-            } catch (e: Exception) {
-                server.setError("android: close service: ${e.message}")
-            }
-            server.close()
-            commandServer = null
-        }
-        MobilecoreRuntime.setServiceState("Stopping")
-        fileDescriptor?.close()
-        fileDescriptor = null
-        cleanup()
-        MobilecoreRuntime.setServiceState("Stopped")
-        com.pidal.sakamoto.runtime.SystemStatusSurface.stop(service)
-    }
-
-    /** Map a startup/runtime failure onto the core's Unavailable state. */
-    private fun stopAndAlert(message: String) {
-        com.pidal.sakamoto.runtime.ExperimentRuntime.stop()
-        CommandClientRuntime.stop()
-        fileDescriptor?.close()
-        fileDescriptor = null
-        DefaultNetworkMonitor.stop()
-        val server = commandServer
-        if (server != null) {
-            runCatching { server.closeService() }
-            runCatching { server.close() }
-            commandServer = null
-        }
-        MobilecoreRuntime.setServiceState("Unavailable")
-        MobilecoreRuntime.setNotice(message)
-        if (receiverRegistered) {
-            runCatching { service.unregisterReceiver(receiver) }
-            receiverRegistered = false
-        }
-        com.pidal.sakamoto.runtime.SystemStatusSurface.stop(service)
-        service.stopSelf()
-    }
-
-    private fun cleanup() {
-        com.pidal.sakamoto.runtime.ExperimentRuntime.stop()
-        CommandClientRuntime.stop()
-        DefaultNetworkMonitor.stop()
-        if (receiverRegistered) {
-            runCatching { service.unregisterReceiver(receiver) }
-            receiverRegistered = false
-        }
-        service.stopSelf()
-    }
-
     private fun showForegroundNotification(starting: Boolean) {
-        val notification = if (starting) buildNotification(
-            title = service.getString(R.string.app_name), body = service.getString(R.string.status_starting),
-        ) else com.pidal.sakamoto.runtime.SystemStatusSurface.notification(service)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            ServiceCompat.startForeground(
-                service,
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED,
-            )
-        } else {
-            ServiceCompat.startForeground(service, NOTIFICATION_ID, notification, 0)
-        }
+        val notification = if (starting) buildNotification(service.getString(R.string.app_name), service.getString(R.string.status_starting)) else SystemStatusSurface.notification(service)
+        ServiceCompat.startForeground(service, NOTIFICATION_ID, notification, if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED else 0)
     }
-
-    /** libbox SendNotification: status/log alerts from the running core. */
     fun showLibboxNotification(identifier: String, typeID: Int, title: String, body: String, openURL: String) {
         val manager = SakamotoApplication.appContext.getSystemService(android.app.NotificationManager::class.java)
-        val builder = NotificationCompat.Builder(service, SakamotoApplication.CHANNEL_EVENTS)
-            .setSmallIcon(R.drawable.ic_service)
-            .setContentTitle(title)
-            .setContentText(body)
-            .setOnlyAlertOnce(true)
-            .setAutoCancel(true)
-        if (openURL.isNotBlank()) {
-            builder.setContentIntent(
-                PendingIntent.getActivity(
-                    service,
-                    0,
-                    Intent(service, MainActivity::class.java).apply {
-                        this.action = Intent.ACTION_VIEW
-                        this.data = android.net.Uri.parse(openURL)
-                        addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-                    },
-                    PendingIntent.FLAG_IMMUTABLE,
-                ),
-            )
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            manager.createNotificationChannel(
-                android.app.NotificationChannel(
-                    SakamotoApplication.CHANNEL_EVENTS,
-                    service.getString(R.string.channel_events),
-                    android.app.NotificationManager.IMPORTANCE_HIGH,
-                ),
-            )
-        }
+        val builder = NotificationCompat.Builder(service, SakamotoApplication.CHANNEL_EVENTS).setSmallIcon(R.drawable.ic_service)
+            .setContentTitle(title).setContentText(body).setOnlyAlertOnce(true).setAutoCancel(true)
+        if (openURL.isNotBlank()) builder.setContentIntent(PendingIntent.getActivity(service, 0, Intent(service, MainActivity::class.java).apply {
+            action = Intent.ACTION_VIEW; data = android.net.Uri.parse(openURL); addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+        }, PendingIntent.FLAG_IMMUTABLE))
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) manager.createNotificationChannel(android.app.NotificationChannel(
+            SakamotoApplication.CHANNEL_EVENTS, service.getString(R.string.channel_events), android.app.NotificationManager.IMPORTANCE_HIGH))
         manager.notify(identifier, typeID, builder.build())
     }
-
-    private fun buildNotification(title: String, body: String): android.app.Notification =
-        NotificationCompat.Builder(service, SakamotoApplication.CHANNEL_SERVICE)
-            .setSmallIcon(R.drawable.ic_service)
-            .setContentTitle(title)
-            .setContentText(body)
-            .setContentIntent(PendingIntent.getActivity(
-                service, 0, Intent(service, MainActivity::class.java),
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-            ))
-            .setCategory(NotificationCompat.CATEGORY_SERVICE)
-            .setOnlyAlertOnce(true)
-            .setOngoing(true)
-            .build()
+    private fun buildNotification(title: String, body: String): android.app.Notification = NotificationCompat.Builder(service, SakamotoApplication.CHANNEL_SERVICE)
+        .setSmallIcon(R.drawable.ic_service).setContentTitle(title).setContentText(body)
+        .setContentIntent(PendingIntent.getActivity(service, 0, Intent(service, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+        .setCategory(NotificationCompat.CATEGORY_SERVICE).setOnlyAlertOnce(true).setOngoing(true).build()
 }

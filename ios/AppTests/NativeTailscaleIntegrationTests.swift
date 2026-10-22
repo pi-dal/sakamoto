@@ -63,6 +63,39 @@ final class NativeTailscaleIntegrationTests: XCTestCase {
         attachment.name = "tailscale-native-pending-control"; attachment.lifetime = .keepAlways; add(attachment)
     }
 
+    // Failure cases: runtime preparation misses old saved configs, duplicate
+    // shortcuts after reconnect, or endpoint removal leaves dangling routes.
+    func testPreparedTailnetConfigurationCanBeReappliedAndDisabled() throws {
+        try AppServiceSetup.apply()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let saved = try TailscaleEndpointProvisioning.standaloneConfiguration(options: TailscaleEndpointOptions())
+        let prepared = try ProviderExperimentRunner.prepared(TunnelStartOptions(configContent: saved), root: root).0
+        let reapplied = try ProviderExperimentRunner.prepared(TunnelStartOptions(configContent: prepared), root: root).0
+        XCTAssertEqual(prepared, reapplied)
+        var error: NSError?
+        XCTAssertTrue(LibboxCheckConfig(prepared, &error))
+        if let error { throw error }
+        let document = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(prepared.utf8)) as? [String: Any])
+        let route = try XCTUnwrap(document["route"] as? [String: Any])
+        let rules = try XCTUnwrap(route["rules"] as? [[String: Any]])
+        let sniffIndex = try XCTUnwrap(rules.firstIndex { $0["action"] as? String == "sniff" })
+        XCTAssertTrue(rules[..<sniffIndex].contains { $0["outbound"] as? String == TailscaleEndpointOptions.defaultTag && $0["network"] as? String == "tcp" })
+        let disabled = try TailscaleEndpointProvisioning.disable(in: prepared)
+        error = nil
+        XCTAssertTrue(LibboxCheckConfig(disabled, &error))
+        if let error { throw error }
+        let reenabled = try TailscaleEndpointProvisioning.enable(options: TailscaleEndpointOptions(), in: disabled)
+        let restored = try ProviderExperimentRunner.prepared(TunnelStartOptions(configContent: reenabled), root: root).0
+        error = nil
+        XCTAssertTrue(LibboxCheckConfig(restored, &error))
+        if let error { throw error }
+        let report: [String: Any] = ["idempotent": prepared == reapplied, "shortcut_before_sniff": true, "disabled_core_config_valid": true, "reenabled_core_config_valid": true]
+        let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]), uniformTypeIdentifier: "public.json")
+        attachment.name = "tailscale-native-packet-configuration"; attachment.lifetime = .keepAlways; add(attachment)
+    }
+
     private func freePort() throws -> Int32 {
         let descriptor = socket(AF_INET, SOCK_STREAM, 0)
         guard descriptor >= 0 else { throw POSIXError(.EIO) }

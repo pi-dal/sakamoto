@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/pi-dal/sakamoto/internal/recovery"
 )
 
 const FileName = "auto-proxy.json"
@@ -20,7 +22,9 @@ const FileName = "auto-proxy.json"
 var hostname = regexp.MustCompile(`(?i)^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
 type State struct {
-	Domains []string `json:"domains"`
+	Domains    []string `json:"domains"`
+	staged     bool
+	generation string
 }
 
 func Domain(name string) string {
@@ -53,6 +57,14 @@ func Load(dir string) (State, error) {
 	return state, nil
 }
 func Save(dir string, state State) error {
+	unlock, err := recovery.LockRules(dir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return saveState(dir, state)
+}
+func saveState(dir string, state State) error {
 	if len(state.Domains) > 1000 {
 		return errors.New("auto proxy learned too many domains")
 	}

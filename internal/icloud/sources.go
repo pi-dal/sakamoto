@@ -35,8 +35,11 @@ func ValidSourceName(name string) bool {
 			return false
 		}
 		lower := strings.ToLower(part)
+		if lower == "recovery" || strings.HasPrefix(lower, "rescue-evidence-") {
+			return false
+		}
 		switch lower {
-		case "s3-credentials.json", "s3-state.json", "config.json", "sakamoto.yaml", "proxy-restore.json", "auto-proxy.json", "auto-proxy-rules.json", "learning-status.json", "api-rotation.pending.json", "watch.sock", "watch.lock", "svc.sock", "dns-restore.json", "icloud-state.json", "auth.json", "secrets.zsh":
+		case "s3-credentials.json", "s3-state.json", "config.json", "sakamoto.yaml", "maintenance.json", "crash-recovery.json", "rescue-complete.json", "svc.lock", "proxy-restore.json", "auto-proxy.json", "auto-proxy-rules.json", "learning-status.json", "api-rotation.pending.json", "watch.sock", "watch.lock", "svc.sock", "dns-restore.json", "icloud-state.json", "auth.json", "secrets.zsh":
 			return false
 		}
 		for _, suffix := range []string{".srs", ".log", ".sock", ".lock", ".db", ".db.rule", ".pem", ".key"} {

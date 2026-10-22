@@ -42,6 +42,11 @@ data class RuntimeState(
     val probeDetail: String = "Not checked",
     val probeAt: Long = 0L,
     val configApplyPending: Boolean = false,
+    val repairing: Boolean = false,
+    val repairResult: String? = null,
+    val nativeInstanceID: Long = 0,
+    val nativeVersion: String = "",
+    val recoveryProtocol: Int = 0,
 )
 
 /**
@@ -144,6 +149,8 @@ object MobilecoreRuntime {
         }
     }
 
+    fun recordCoreIdentity(instance: Long) = apply { it.copy(nativeInstanceID = instance, nativeVersion = io.nekohasekai.libbox.Libbox.version(), recoveryProtocol = io.nekohasekai.mobilecore.Mobilecore.recoveryProtocol()) }
+    fun recordRepair(result: String?, repairing: Boolean) = apply { it.copy(repairResult = result, repairing = repairing) }
     fun setNotice(message: String) = apply { it.copy(notice = message) }
     fun clearNotice() = apply { it.copy(notice = null) }
 }

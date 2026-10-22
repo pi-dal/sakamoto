@@ -48,10 +48,10 @@ public protocol TunnelControlling: AnyObject, Sendable {
     /// [ Connect ]: install/start the tunnel with the given generated
     /// config. Throws on NE errors; it never reports success for a request
     /// that was only queued.
-    func connect(options: TunnelStartOptions) async throws
+    @MainActor func connect(options: TunnelStartOptions) async throws
 
     /// [ Disconnect ]: stop the tunnel.
-    func disconnect() async throws
+    @MainActor func disconnect() async throws
 
     /// System VPN status, independent of provider IPC availability.
     func status() async throws -> ServiceState

@@ -33,6 +33,13 @@ class VpnStatusFragment : androidx.fragment.app.Fragment() {
         val core = page.section(getString(R.string.vpn_core_section))
         val service = page.row(core, getString(R.string.service_state_label))
         val channel = page.row(core, getString(R.string.vpn_channel))
+        page.row(core, getString(R.string.repair_core_library), io.nekohasekai.libbox.Libbox.version())
+        page.row(core, getString(R.string.repair_protocol), io.nekohasekai.mobilecore.Mobilecore.recoveryProtocol().toString())
+        val instance = page.row(core, getString(R.string.repair_core_instance))
+        val repairStatus = page.row(core, getString(R.string.repair_status))
+        val coreCheck = page.button(core, getString(R.string.repair_check_only)) {
+            viewLifecycleOwner.lifecycleScope.launch { com.pidal.sakamoto.runtime.TunnelRepair.run(context.applicationContext, checkOnly = true) }
+        }
         val probe = page.section(getString(R.string.vpn_probe_section))
         val result = page.row(probe, getString(R.string.vpn_probe_result))
         val timestamp = page.row(probe, getString(R.string.vpn_probe_time))
@@ -51,6 +58,9 @@ class VpnStatusFragment : androidx.fragment.app.Fragment() {
             physical.detail(status.physical.ifEmpty { getString(R.string.vpn_no_network) })
             dns.detail(status.dns.ifEmpty { "—" })
             service.detail(runtime.serviceState)
+            instance.detail(if (runtime.serviceState == "Running" && runtime.nativeInstanceID > 0) runtime.nativeInstanceID.toString() else "—")
+            repairStatus.detail(runtime.repairResult?.let { runCatching { org.json.JSONObject(it).optString("detail") }.getOrNull() } ?: getString(R.string.vpn_not_checked))
+            coreCheck.isEnabled = !runtime.repairing
             channel.detail(getString(if (status.channel) R.string.vpn_channel_up else R.string.vpn_channel_down))
             result.detail(runtime.probeDetail)
             timestamp.detail(if (runtime.probeAt == 0L) getString(R.string.vpn_not_checked) else DateFormat.getDateTimeInstance().format(Date(runtime.probeAt)))

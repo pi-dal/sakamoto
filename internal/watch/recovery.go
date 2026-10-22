@@ -3,6 +3,7 @@ package watch
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -12,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/pi-dal/sakamoto/internal/recovery"
 	"github.com/sagernet/sing-box/daemon"
 )
 
@@ -77,7 +79,7 @@ func RequestRecovery(cfgPath string) (string, error) {
 	}
 	status := strings.TrimSpace(line)
 	switch status {
-	case "queued", "busy", "cooldown", "manual", "disabled", "unavailable":
+	case "queued", "busy", "cooldown", "manual", "disabled", "unavailable", "maintenance":
 		return status, nil
 	default:
 		return "", fmt.Errorf("unrecognized watcher response %q", status)
@@ -159,8 +161,21 @@ func (w *Watcher) handleRecovery(ctx context.Context, conn net.Conn) {
 	_ = conn.SetDeadline(time.Now().Add(4 * time.Second))
 	scanner := bufio.NewScanner(conn)
 	scanner.Buffer(make([]byte, 0, 64), 64)
-	if !scanner.Scan() || scanner.Text() != "recover" {
+	if !scanner.Scan() {
 		_, _ = fmt.Fprintln(conn, "unavailable")
+		return
+	}
+	if scanner.Text() == "info" {
+		raw, _ := json.Marshal(map[string]any{"version": w.version, "protocol": 2, "pid": os.Getpid(), "maintenance": recovery.Held(filepath.Dir(w.cfgPath)), "api_connected": w.apiConnected.Load()})
+		_, _ = fmt.Fprintln(conn, string(raw))
+		return
+	}
+	if scanner.Text() != "recover" {
+		_, _ = fmt.Fprintln(conn, "unavailable")
+		return
+	}
+	if recovery.Held(filepath.Dir(w.cfgPath)) {
+		_, _ = fmt.Fprintln(conn, "maintenance")
 		return
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, 3*time.Second)

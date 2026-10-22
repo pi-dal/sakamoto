@@ -25,7 +25,11 @@ type previous struct {
 }
 
 func Networksetup(args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	return NetworksetupContext(context.Background(), args...)
+}
+
+func NetworksetupContext(parent context.Context, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(parent, 8*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "/usr/sbin/networksetup", args...)
 	cmd.Env = append(os.Environ(), "LC_ALL=C")
@@ -82,6 +86,26 @@ func setDNS(run Runner, service string, servers []string) error {
 	}
 	return nil
 }
+func CheckMissingState(path, service string, run Runner) error {
+	if _, err := os.Lstat(path); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	current, err := currentDNS(run, service)
+	if err != nil {
+		return err
+	}
+	for _, server := range current {
+		if server == "127.0.0.1" {
+			return errors.New("loopback DNS has no restore snapshot; original DNS must be restored administratively")
+		}
+	}
+	return nil
+}
+
+func ValidateState(path string) error { _, _, err := savedDNS(path); return err }
+
 func savedDNS(path string) (previous, bool, error) {
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {

@@ -6,7 +6,7 @@
     <key>EnvironmentVariables</key><dict><key>SAKAMOTO_DIR</key><string>@DIR@</string><key>SAKAMOTO_SING_BOX</key><string>@SING_BOX@</string><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
-    <key>ThrottleInterval</key><integer>5</integer>
+    <key>ThrottleInterval</key><integer>15</integer>
     <key>StandardOutPath</key><string>@DIR@/logs/watch.out.log</string>
     <key>StandardErrorPath</key><string>@DIR@/logs/watch.err.log</string>
 </dict></plist>

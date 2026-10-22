@@ -1,6 +1,7 @@
 package sysdns
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
@@ -26,25 +27,30 @@ func PortsFree(address string) error {
 
 // Probe requires a real DNS answer over both UDP and TCP, without involving
 // the system resolver or trusting merely that a port is open.
-func Probe(address string) error {
+func Probe(address string) error { return ProbeContext(context.Background(), address) }
+
+func ProbeContext(ctx context.Context, address string) error {
 	for _, network := range []string{"udp", "tcp"} {
-		if err := probeOne(address, network); err != nil {
+		if err := probeOne(ctx, address, network); err != nil {
 			return fmt.Errorf("native DNS %s probe: %w", network, err)
 		}
 	}
 	return nil
 }
-func probeOne(address, network string) error {
+func probeOne(ctx context.Context, address, network string) error {
 	id := make([]byte, 2)
 	if _, err := rand.Read(id); err != nil {
 		return err
 	}
 	query := []byte{id[0], id[1], 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0, 0, 1, 0, 1}
-	conn, err := net.DialTimeout(network, address, 2*time.Second)
+	dialer := net.Dialer{Timeout: 2 * time.Second}
+	conn, err := dialer.DialContext(ctx, network, address)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = conn.Close() }()
+	stopCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopCancel()
 	if err := conn.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
 		return err
 	}

@@ -1,0 +1,279 @@
+package daemon_test
+
+// Failure cases are documented in docs/tailscale-packet-forwarding.md before
+// implementation. Exercise the actual mobile preparer and pinned core parser,
+// router, sniff reader and a local bidirectional server-first RFB exchange.
+import (
+	"context"
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/pi-dal/sakamoto/pkg/mobilecore"
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-tun"
+)
+
+func tailscalePacketConfig(rules string, multiple bool) string {
+	endpoints := `{"type":"tailscale","tag":"tailnet","control_url":"http://127.0.0.1:1"}`
+	if multiple {
+		endpoints += `,{"type":"tailscale","tag":"other-tailnet","control_url":"http://127.0.0.1:1"}`
+	}
+	return fmt.Sprintf(`{"log":{"disabled":true},"dns":{"servers":[{"type":"udp","tag":"dns","server":"127.0.0.1","server_port":1}],"final":"dns"},"endpoints":[%s],"outbounds":[{"type":"direct","tag":"direct"}],"route":{"default_domain_resolver":{"server":"dns"},"rules":[%s],"final":"direct"}}`, endpoints, rules)
+}
+func packetCore(t *testing.T, config string) *box.Box {
+	t.Helper()
+	ctx, cancel := context.WithCancel(include.Context(context.Background()))
+	t.Cleanup(cancel)
+	var options option.Options
+	if err := options.UnmarshalJSONContext(ctx, []byte(config)); err != nil {
+		t.Fatal(err)
+	}
+	instance, err := box.New(box.Options{Context: ctx, Options: options})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No Box.Start: no external control requests, tailnet identity or OS routes.
+	return instance
+}
+func packetArtifact(t *testing.T, name string, value any) {
+	t.Helper()
+	if dir := os.Getenv("SAKAMOTO_TEST_ARTIFACT_DIR"); dir != "" {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := json.MarshalIndent(value, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(filepath.Join(dir, name), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+func TestSakamotoTailscalePacketRoutesAndDNS(t *testing.T) {
+	const baseRules = `{"action":"sniff"},{"protocol":"dns","action":"hijack-dns"},{"action":"route","outbound":"direct"}`
+	config, err := mobilecore.PrepareTailscaleConnectivityJSON(tailscalePacketConfig(baseRules, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := mobilecore.PrepareTailscaleConnectivityJSON(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != config {
+		t.Fatal("preparation duplicated or moved generated rules on second pass")
+	}
+	core := packetCore(t, config)
+	// A real DNS question for example.com, UDP payload without TCP framing.
+	query := []byte{0x12, 0x34, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0, 0, 1, 0, 1}
+	var report []map[string]any
+	for _, tc := range []struct {
+		name, target string
+		network      uint8
+		payload      []byte
+		want         tun.FlowAction
+	}{
+		{"vnc_ipv4", "100.101.102.103:5900", 6, nil, tun.ActionFlow},
+		{"vnc_ipv6", "[fd7a:115c:a1e0::1234]:5900", 6, nil, tun.ActionFlow},
+		{"ssh", "100.101.102.103:22", 6, nil, tun.ActionFlow},
+		{"tcp_dns", "100.101.102.103:53", 6, nil, tun.ActionAccept},
+		{"udp_dns", "100.101.102.103:53", 17, query, tun.ActionHijackDNS},
+		{"internet_https", "203.0.113.12:443", 6, nil, tun.ActionAccept},
+		{"internet_tcp_dns", "203.0.113.12:53", 6, nil, tun.ActionAccept},
+		{"internet_udp_dns", "203.0.113.12:53", 17, query, tun.ActionHijackDNS},
+		{"subnet_unowned", "192.0.2.10:5900", 6, nil, tun.ActionAccept},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dest := netip.MustParseAddrPort(tc.target)
+			source := netip.MustParseAddrPort("172.19.0.2:45000")
+			if dest.Addr().Is6() {
+				source = netip.MustParseAddrPort("[fdfe:dcba:9876::2]:45000")
+			}
+			result := adapter.JudgeFlow(core.Router(), "tun-in", "tun", tc.network, source, dest, tc.payload)
+			report = append(report, map[string]any{"case": tc.name, "action": result.Action, "expected": tc.want})
+			if result.Action != tc.want {
+				t.Errorf("actual core verdict %v, want %v", result.Action, tc.want)
+			}
+		})
+	}
+	for _, rules := range []string{
+		`{"network":"tcp","action":"sniff"},{"protocol":"dns","action":"hijack-dns"}`,
+		`{"action":"sniff","timeout":"1s"},{"protocol":"dns","action":"hijack-dns"}`,
+		`{"action":"sniff"},{"network":"tcp","action":"sniff"},{"protocol":"dns","action":"hijack-dns"}`,
+		`{"action":"sniff"},{"inbound":["tun-in"],"action":"hijack-dns"}`,
+		`{"action":"sniff"},{"port":5353,"action":"hijack-dns"}`,
+	} {
+		prepared, e := mobilecore.PrepareTailscaleConnectivityJSON(tailscalePacketConfig(rules, false))
+		if e != nil {
+			t.Fatal(e)
+		}
+		configured := packetCore(t, prepared)
+		v := adapter.JudgeFlow(configured.Router(), "tun-in", "tun", 6, netip.MustParseAddrPort("172.19.0.2:45000"), netip.MustParseAddrPort("100.101.102.103:5900"), nil)
+		if v.Action != tun.ActionAccept {
+			t.Errorf("shortcut bypassed configured inspection: %s", rules)
+		}
+	}
+	multi, e := mobilecore.PrepareTailscaleConnectivityJSON(tailscalePacketConfig(baseRules, true))
+	if e != nil {
+		t.Fatal(e)
+	}
+	multiCore := packetCore(t, multi)
+	v := adapter.JudgeFlow(multiCore.Router(), "tun-in", "tun", 6, netip.MustParseAddrPort("172.19.0.2:45000"), netip.MustParseAddrPort("100.101.102.103:5900"), nil)
+	if v.Action == tun.ActionFlow {
+		t.Error("multiple endpoints arbitrarily acquired a static prefix fallback without a peer map")
+	}
+	var migrated map[string]any
+	if e = json.Unmarshal([]byte(config), &migrated); e != nil {
+		t.Fatal(e)
+	}
+	migrated["endpoints"] = append(migrated["endpoints"].([]any), map[string]any{"type": "tailscale", "tag": "other-tailnet", "control_url": "http://127.0.0.1:1"})
+	oldSingle, e := json.Marshal(migrated)
+	if e != nil {
+		t.Fatal(e)
+	}
+	migratedConfig, e := mobilecore.PrepareTailscaleConnectivityJSON(string(oldSingle))
+	if e != nil {
+		t.Fatal(e)
+	}
+	migratedCore := packetCore(t, migratedConfig)
+	v = adapter.JudgeFlow(migratedCore.Router(), "tun-in", "tun", 6, netip.MustParseAddrPort("172.19.0.2:45000"), netip.MustParseAddrPort("100.101.102.103:5900"), nil)
+	if v.Action == tun.ActionFlow {
+		t.Error("stale single-endpoint prefix shortcut survived adding a second endpoint")
+	}
+	// A custom rule shaped similarly to a generated preferred route must survive.
+	custom := `{"network":"udp","preferred_by":["tailnet"],"action":"route","outbound":"tailnet"}`
+	customConfig, e := mobilecore.PrepareTailscaleConnectivityJSON(tailscalePacketConfig(baseRules+`,`+custom, false))
+	if e != nil {
+		t.Fatal(e)
+	}
+	var root map[string]any
+	if e = json.Unmarshal([]byte(customConfig), &root); e != nil {
+		t.Fatal(e)
+	}
+	kept := false
+	for _, r := range root["route"].(map[string]any)["rules"].([]any) {
+		m := r.(map[string]any)
+		if m["network"] == "udp" && m["outbound"] == "tailnet" {
+			kept = true
+		}
+	}
+	if !kept {
+		t.Error("custom preferred-route conditions removed")
+	}
+	packetArtifact(t, "tailscale-packet-routes.json", map[string]any{"scope": "real core parser and router; no live encrypted packet transfer or iPhone throughput", "cases": report, "idempotent": again == config, "prepared_config": json.RawMessage(config)})
+}
+
+func TestSakamotoTailscaleRFBServerFirstDelay(t *testing.T) {
+	// Real TCP sockets: local RFB service sends its version before client data.
+	// This isolates sniff's measurable startup penalty, not sustained VNC speed.
+	const greeting = "RFB 003.008\n"
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	done := make(chan struct{})
+	defer func() { listener.Close(); <-done }()
+	go func() {
+		defer close(done)
+		for {
+			c, e := listener.Accept()
+			if e != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				c.SetDeadline(time.Now().Add(2 * time.Second))
+				io.WriteString(c, greeting)
+				reply := make([]byte, len(greeting))
+				if _, e := io.ReadFull(c, reply); e == nil && string(reply) == greeting {
+					io.WriteString(c, "OK")
+				}
+			}()
+		}
+	}()
+	var report []map[string]any
+	for _, sniffFirst := range []bool{true, false} {
+		reserved, e := net.Listen("tcp4", "127.0.0.1:0")
+		if e != nil {
+			t.Fatal(e)
+		}
+		port := reserved.Addr().(*net.TCPAddr).Port
+		reserved.Close()
+		rules := `{"action":"sniff"},{"action":"route","outbound":"direct"}`
+		if !sniffFirst {
+			rules = `{"ip_cidr":["127.0.0.0/8"],"action":"route","outbound":"direct"},{"action":"sniff"}`
+		}
+		config := fmt.Sprintf(`{"log":{"disabled":true},"inbounds":[{"type":"mixed","tag":"rfb","listen":"127.0.0.1","listen_port":%d}],"outbounds":[{"type":"direct","tag":"direct"}],"route":{"rules":[%s],"final":"direct"}}`, port, rules)
+		core := packetCore(t, config)
+		if e = core.Start(); e != nil {
+			t.Fatal(e)
+		}
+		t.Cleanup(func() { core.Close() })
+		c, e := net.DialTimeout("tcp4", fmt.Sprintf("127.0.0.1:%d", port), time.Second)
+		if e != nil {
+			t.Fatal(e)
+		}
+		t.Cleanup(func() { c.Close() })
+		c.SetDeadline(time.Now().Add(2 * time.Second))
+		if _, e = c.Write([]byte{5, 1, 0}); e != nil {
+			t.Fatal(e)
+		}
+		auth := make([]byte, 2)
+		if _, e = io.ReadFull(c, auth); e != nil {
+			t.Fatal(e)
+		}
+		if auth[0] != 5 || auth[1] != 0 {
+			t.Fatal("SOCKS negotiation failed")
+		}
+		request := []byte{5, 1, 0, 1, 127, 0, 0, 1, 0, 0}
+		binary.BigEndian.PutUint16(request[8:], uint16(listener.Addr().(*net.TCPAddr).Port))
+		begin := time.Now()
+		if _, e = c.Write(request); e != nil {
+			t.Fatal(e)
+		}
+		connected := make([]byte, 10)
+		if _, e = io.ReadFull(c, connected); e != nil {
+			t.Fatal(e)
+		}
+		if connected[1] != 0 || connected[3] != 1 {
+			t.Fatal("SOCKS connection failed")
+		}
+		received := make([]byte, len(greeting))
+		_, e = io.ReadFull(c, received)
+		if e != nil {
+			t.Fatal(e)
+		}
+		elapsed := float64(time.Since(begin).Microseconds()) / 1000
+		if string(received) != greeting {
+			t.Fatal("bad RFB greeting")
+		}
+		if _, e = c.Write(received); e != nil {
+			t.Fatal(e)
+		}
+		result := make([]byte, 2)
+		if _, e = io.ReadFull(c, result); e != nil {
+			t.Fatal(e)
+		}
+		c.Close()
+		if string(result) != "OK" {
+			t.Fatal("RFB exchange failed")
+		}
+		if sniffFirst && elapsed < 250 {
+			t.Errorf("sniff delay not reproduced: %fms", elapsed)
+		}
+		report = append(report, map[string]any{"sniff_first": sniffFirst, "greeting_ms": elapsed, "bidirectional_exchange": true})
+	}
+	packetArtifact(t, "tailscale-rfb-startup.json", map[string]any{"scope": "real core SOCKS to loopback RFB exchange; not an encrypted tailnet or physical VNC benchmark", "samples": report})
+}

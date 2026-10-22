@@ -1,6 +1,7 @@
 package svc
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/pi-dal/sakamoto/internal/config"
+	"github.com/pi-dal/sakamoto/internal/recovery"
 	"github.com/pi-dal/sakamoto/internal/sysdns"
 )
 
@@ -65,23 +67,31 @@ func (s *Server) dnsPlan() (*config.Config, bool, error) {
 
 // protectDNS is invoked after child Start while the lifecycle lock is held.
 // The wait loop closes childDone without that lock, so failed startup is visible.
-func (s *Server) protectDNS(cfg *config.Config, done <-chan struct{}) error {
-	deadline := time.Now().Add(s.dnsWait)
+func (s *Server) protectDNS(ctx context.Context, cfg *config.Config, done <-chan struct{}) error {
+	ctx, cancel := context.WithTimeout(ctx, s.dnsWait)
+	defer cancel()
 	var last error
-	for time.Now().Before(deadline) {
+	for ctx.Err() == nil {
 		select {
 		case <-done:
 			return fmt.Errorf("core exited before DNS was ready")
 		default:
 		}
-		last = s.dnsProbe("127.0.0.1:53")
+		last = s.dnsProbeContext(ctx, "127.0.0.1:53")
 		if last == nil {
 			select {
 			case <-done:
 				return fmt.Errorf("core exited during DNS readiness check")
 			default:
 			}
-			if err := sysdns.Activate(s.dnsStatePath(), cfg.DNSGuard.Service, s.dnsRun); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if recovery.Held(s.workDir) {
+				return fmt.Errorf("maintenance hold canceled DNS takeover")
+			}
+			runner := func(args ...string) (string, error) { return s.dnsActivateRun(ctx, args...) }
+			if err := sysdns.Activate(s.dnsStatePath(), cfg.DNSGuard.Service, runner); err != nil {
 				return err
 			}
 			select {
@@ -91,11 +101,26 @@ func (s *Server) protectDNS(cfg *config.Config, done <-chan struct{}) error {
 				return nil
 			}
 		}
-		time.Sleep(300 * time.Millisecond)
+		timer := time.NewTimer(300 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-done:
+			timer.Stop()
+			return fmt.Errorf("core exited during DNS readiness")
+		case <-timer.C:
+		}
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
 	return fmt.Errorf("native DNS did not become healthy: %w", last)
 }
 func (s *Server) restoreDNS() error { return sysdns.Restore(s.dnsStatePath(), s.dnsRun) }
+func (s *Server) restoreDNSContext(ctx context.Context) error {
+	return sysdns.Restore(s.dnsStatePath(), func(args ...string) (string, error) { return s.dnsActivateRun(ctx, args...) })
+}
 func (s *Server) restoreDNSCommand() string {
 	s.lifecycle.Lock()
 	defer s.lifecycle.Unlock()

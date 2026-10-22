@@ -51,6 +51,6 @@ Homebrew normally links the formula automatically. `sakamoto link --check` compa
 | 8 | DMIT transport loss | Watcher already defaults to a forced check every 30 seconds. Native URLTest offers one configured target per automatic group; multiple-target probing is not implemented. No live cause or successful mitigation is claimed. |
 | 9 | Limited supervisor diagnostics | `ctl state`, `urltest`, `select`, and validated `reload` are implemented. |
 | 10 | Watcher Homebrew PATH | Template contains both Homebrew prefixes and the installer-resolved core path; existing services need their environment reloaded. |
-| 11 | Absolute SRS paths | Generated paths are runtime-relative; check/run with the same `-D` directory and copy the rules folder with the config. |
+| 11 | Absolute SRS paths | Generated paths are runtime-relative; check/run with the same `-D` directory and copy the rules folder with the config. The supervisor also pins the child cwd to that directory, so resolution does not depend on the daemon's own working directory. |
 
 Android supports S3 source sync, but a private provider endpoint, region, bucket/prefix and scoped credentials must be configured before live sync can be verified. No bucket was created by this change. Intermittent DMIT transport loss requires actual connection evidence; longer result windows improve classification but do not repair the transport path, and no outage cause is inferred from URL-test history alone.

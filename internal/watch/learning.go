@@ -2,6 +2,7 @@ package watch
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,11 +10,15 @@ import (
 
 	"github.com/pi-dal/sakamoto/internal/config"
 	"github.com/pi-dal/sakamoto/internal/experiment"
+	"github.com/pi-dal/sakamoto/internal/recovery"
 )
 
 // prepareLearning never activates generated configuration. Local rule files
 // already loaded by the core can safely recover their committed contents.
 func (w *Watcher) prepareLearning() error {
+	if recovery.Held(filepath.Dir(w.cfgPath)) {
+		return nil
+	}
 	cfg, err := config.Load(w.cfgPath)
 	if err != nil || !experimentEnabled(cfg) {
 		return err
@@ -47,7 +52,7 @@ func (w *Watcher) learnCandidate(ctx context.Context, candidate experiment.Candi
 		w.emit("info", "auto %s: %s; %s", candidate.Domain, result.State, result.Detail)
 	}()
 	cfg, err := config.Load(w.cfgPath)
-	if err != nil || !candidateEnabled(cfg, candidate) || ctx.Err() != nil {
+	if err != nil || !candidateEnabled(cfg, candidate) || ctx.Err() != nil || recovery.Held(dir) {
 		result.Detail = "learning is disabled, unavailable or canceled"
 		return
 	}
@@ -129,7 +134,7 @@ func (w *Watcher) learnCandidate(ctx context.Context, candidate experiment.Candi
 	}
 	// Reload settings immediately before any writes or reconnects.
 	latest, err := config.Load(w.cfgPath)
-	if err != nil || !candidateEnabled(latest, candidate) {
+	if err != nil || !candidateEnabled(latest, candidate) || recovery.Held(dir) {
 		result.Detail = "learning was disabled during verification"
 		return
 	}
@@ -161,14 +166,19 @@ func (w *Watcher) learnCandidate(ctx context.Context, candidate experiment.Candi
 	current, readErr := os.ReadFile(filepath.Join(dir, "config.json"))
 	afterEpoch, epochErr := w.learningCoreEpoch(ctx)
 	latest, loadErr := config.Load(w.cfgPath)
-	if verified && ctx.Err() == nil && readErr == nil && string(current) == string(raw) && epochErr == nil && afterEpoch.Equal(epoch) && loadErr == nil && candidateEnabled(latest, candidate) {
-		if err = experiment.Save(dir, next); err == nil {
+	if verified && !recovery.Held(dir) && ctx.Err() == nil && readErr == nil && string(current) == string(raw) && epochErr == nil && afterEpoch.Equal(epoch) && loadErr == nil && candidateEnabled(latest, candidate) {
+		if err = experiment.CommitLiveRules(dir, next); err == nil {
 			result.State = "verified"
 			result.Detail = "direct checks failed; target verified after live rule update; core and existing connections retained"
 			return
 		}
 	}
 	if err = rollback(); err != nil {
+		if errors.Is(err, experiment.ErrLiveRulesChanged) {
+			result.State = "superseded"
+			result.Detail = "runtime rules changed; retained the newer rules and committed state"
+			return
+		}
 		result.State = "failed"
 		result.Detail = "could not restore the previous live domain file: " + err.Error()
 		return

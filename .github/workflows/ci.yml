@@ -18,6 +18,15 @@ jobs:
         run: mise run ci:check
       - name: Check and build shared Go code
         run: mise run go:check
+      - name: Exercise isolated recovery faults
+        run: mise run go:recovery
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sakamoto-recovery-${{ github.sha }}
+          path: dist/recovery-e2e/
+          if-no-files-found: warn
+          retention-days: 14
       - name: Package optimized macOS CLI/TUI
         run: mise run cli:build
       - uses: actions/upload-artifact@v4

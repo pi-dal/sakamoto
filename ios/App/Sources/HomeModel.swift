@@ -46,6 +46,10 @@ final class HomeModel: ObservableObject {
     /// Live fact from the command channel; false before the first tunnel
     /// start and while it is down. Drives honest "unavailable" states.
     @Published private(set) var commandChannelActive = false
+    @Published private(set) var repairResult: CoreRepairResult?
+    @Published private(set) var repairing = false
+    @Published private(set) var repairIdentity: String?
+    private var controlGeneration: UInt64 = 0
 
     let tunnel: TunnelControlling
     let commanding: CoreCommanding?
@@ -107,8 +111,10 @@ final class HomeModel: ObservableObject {
             return
         }
         busy = true
+        controlGeneration &+= 1
+        let request = controlGeneration
         notice = nil
-        defer { busy = false }
+        defer { if request == controlGeneration { busy = false } }
         // Requested-but-unconfirmed: Starting until the provider confirms.
         serviceState = .starting
         refoldPhase()
@@ -124,10 +130,12 @@ final class HomeModel: ObservableObject {
             requestedProfileID = options.profileID
             requestedExperiment = options.experimentJSON
             try await tunnel.connect(options: options)
+            guard request == controlGeneration else { return }
             notice = Notice(kind: .progress, text: "Starting")
             await refreshProviderState()
             syncCommandChannel()
         } catch {
+            guard request == controlGeneration else { return }
             requestedConfig = nil
             serviceState = .stopped
             notice = Notice(kind: .error, text: "connect: \(error.localizedDescription)")
@@ -136,9 +144,13 @@ final class HomeModel: ObservableObject {
     }
 
     func disconnect() async {
-        guard !busy else { return }
+        // Stop supersedes pending connect/repair, even if native startup hangs.
+        controlGeneration &+= 1
+        let request = controlGeneration
+        repairing = false
+        repairResult = nil
         busy = true
-        defer { busy = false }
+        defer { if request == controlGeneration { busy = false } }
         // The tunnel is treated as up until the stop is confirmed.
         serviceState = .stopping
         refoldPhase()
@@ -150,11 +162,82 @@ final class HomeModel: ObservableObject {
         // The provider stops asynchronously; poll the snapshot once after a
         // beat instead of claiming success immediately.
         try? await Task.sleep(nanoseconds: 600 * NSEC_PER_MSEC)
+        guard request == controlGeneration else { return }
         await refreshProviderState()
         syncCommandChannel()
         if !serviceState.running {
             phase = .disconnected
         }
+    }
+
+    /// Go owns repair decisions; this layer controls NetworkExtension and
+    /// confirms a fresh provider/native instance before reporting completion.
+    func repair(checkOnly: Bool = false, restart: Bool = false) async {
+        guard !repairing, !busy else { return }
+        controlGeneration &+= 1
+        let request = controlGeneration
+        repairing = true; busy = true; repairIdentity = nil
+        repairResult = CoreRepairResult(state: "starting", detail: "Checking the VPN and core…")
+        defer { if request == controlGeneration { repairing = false; busy = false } }
+        do {
+            let observed = try await tunnel.status()
+            var native: TunnelStateSnapshot?
+            if observed == .running { native = try? await tunnel.ping() }
+            guard request == controlGeneration else { return }
+            let alive = native?.serviceState == .running && (native?.nativeInstanceID ?? 0) > 0
+            if let native, let version = native.nativeVersion, let instance = native.nativeInstanceID {
+                repairIdentity = "Core \(version) · instance \(instance) · recovery \(native.recoveryProtocol ?? 0)"
+            }
+            let options: TunnelStartOptions? = (checkOnly || (alive && !restart)) ? nil : (try? repairOptions())
+            let decision = try JSONDecoder().decode(CoreRepairResult.self, from: Data(MobilecoreRepairRuntimeJSON(try AppPaths.sharedDirectory().path, observed.rawValue, alive, checkOnly, restart, options != nil).utf8))
+            repairResult = decision
+            guard decision.action == "start" || decision.action == "restart", let options else { return }
+            if decision.action == "restart" {
+                try await tunnel.disconnect()
+                let deadline = ProcessInfo.processInfo.systemUptime + 10
+                while true {
+                    guard request == controlGeneration else { return }
+                    let state = try await tunnel.status()
+                    if state == .stopped || state == .unavailable { break }
+                    guard ProcessInfo.processInfo.systemUptime < deadline else { throw TunnelProfile.InvalidProfile("VPN teardown was not confirmed. Disconnect in Settings > VPN before trying again.") }
+                    try await Task.sleep(nanoseconds: 100_000_000)
+                }
+            }
+            guard request == controlGeneration else { return }
+            serviceState = .starting; refoldPhase()
+            try await tunnel.connect(options: options)
+            let deadline = ProcessInfo.processInfo.systemUptime + 20
+            while ProcessInfo.processInfo.systemUptime < deadline {
+                guard request == controlGeneration else { return }
+                if let snapshot = try? await tunnel.ping(), snapshot.serviceState == .running,
+                   let instance = snapshot.nativeInstanceID, instance > 0 {
+                    guard request == controlGeneration else { return }
+                    repairResult = CoreRepairResult(state: "repaired", action: decision.action == "restart" ? "restarted" : "started", verified: true, detail: snapshot.detail ?? "Core verified. Use Check connection to test DNS and HTTPS.")
+                    await refreshProviderState(); syncCommandChannel(); return
+                }
+                try await Task.sleep(nanoseconds: 250_000_000)
+            }
+            repairResult = CoreRepairResult(state: "degraded", action: decision.action, detail: "VPN startup is unconfirmed. Disconnect to cancel, or check Settings > VPN.")
+        } catch {
+            guard request == controlGeneration else { return }
+            let detail = TunnelDiagnostics.sanitized(error.localizedDescription)
+            let context = checkOnly ? "Core check unavailable." : "Repair incomplete."
+            repairResult = CoreRepairResult(state: "failed", detail: "\(context) \(detail). Review VPN access in Settings, then retry.")
+        }
+    }
+
+    private func repairOptions() throws -> TunnelStartOptions {
+        if store.configState != .clean || !store.canConnect {
+            let root = try AppPaths.sharedDirectory()
+            var error: NSError?
+            if let session = MobilecoreNewRecoverySession(root.path, &error),
+               let content = try? checkedNativeValue({ session.retainedConfig($0) }), let metadata = try? checkedNativeValue({ session.retainedMetadata($0) }),
+               var retained = try? JSONDecoder().decode(TunnelStartOptions.self, from: Data(metadata.utf8)) {
+                retained.configContent = content; retained.experimentJSON = nil
+                return retained
+            }
+        }
+        return try store.systemConnectionOptions()
     }
 
     func refreshProviderState() async {
@@ -234,7 +317,9 @@ final class HomeModel: ObservableObject {
     private func confirmRequestedConfiguration() {
         if serviceState.running, let config = requestedConfig {
             if store.selectedProfileID == requestedProfileID,
-               (try? store.connectionOptions().experimentJSON) == requestedExperiment {
+               (try? store.connectionOptions().experimentJSON) == requestedExperiment,
+               let options = try? store.systemConnectionOptions(),
+               TunnelConfigurationReceiptStore.read()?.matches(options) == true {
                 store.connectionConfirmed(content: config)
             }
             requestedConfig = nil; requestedProfileID = nil; requestedExperiment = nil

@@ -15,6 +15,7 @@ import (
 
 	"github.com/pi-dal/sakamoto/internal/config"
 	"github.com/pi-dal/sakamoto/internal/experiment"
+	"github.com/pi-dal/sakamoto/internal/rescue"
 	"github.com/pi-dal/sakamoto/internal/sbclient"
 	"github.com/pi-dal/sakamoto/internal/security"
 	"github.com/pi-dal/sakamoto/internal/svc"
@@ -22,7 +23,7 @@ import (
 	"github.com/pi-dal/sakamoto/internal/watch"
 )
 
-const version = "0.2.17"
+const version = "0.2.18"
 
 const usage = `sakamoto — a macOS sing-box controller inspired by Shadowrocket
 
@@ -35,10 +36,17 @@ Usage:
   sakamoto daemon       Root supervisor (LaunchDaemon); manages sing-box and
                         accepts connect/disconnect commands on a Unix socket
   sakamoto watch        LaunchAgent for automatic proxy group fallback
-  sakamoto ctl state | status | logs | reload  Inspect/control the supervisor
+  sakamoto rescue-install [--check | --replace]  Install/retain independent offline rescue
+  sakamoto doctor       Diagnose local services and offline escape paths (read-only)
+  sakamoto ctl state | status | info | logs | reload  Inspect/control the supervisor
+  sakamoto ctl connect | disconnect     Explicit VPN lifecycle control
+  sakamoto ctl resume | resume-installed | rollback  Manage blocked recovery
   sakamoto ctl urltest "TAG"             Queue a background latency check
   sakamoto ctl select "GROUP" "OUTBOUND"  Change a selector explicitly
   sakamoto learning     Show private learned domains and verification outcomes
+  sakamoto repair       Detect and repair a crashed core; verify API and protected DNS
+  sakamoto repair --check  Diagnose without changing the core or services
+  sakamoto repair --restart  Explicitly reconnect a live but unhealthy core
   sakamoto recover      Ask the user-level watcher for fresh MainProxy tests
   sakamoto dns-restore  Restore an orphaned DNS snapshot (core must be stopped)
   sakamoto dns-prepare  Build a private protected-DNS candidate; do not activate
@@ -95,8 +103,33 @@ func main() {
 		if err := runSetup(*cfgPath, len(args) == 2); err != nil {
 			fatal("setup", err)
 		}
+	case "rescue-install":
+		if len(args) > 2 || (len(args) == 2 && args[1] != "--check" && args[1] != "--replace") {
+			fatal("rescue-install", fmt.Errorf("choose --check or --replace"))
+		}
+		option := ""
+		if len(args) == 2 {
+			option = args[1]
+		}
+		if err := runRescueInstall(*cfgPath, option); err != nil {
+			fatal("rescue-install", err)
+		}
+	case "doctor":
+		if len(args) != 1 {
+			fatal("doctor", fmt.Errorf("doctor takes no arguments"))
+		}
+		report, err := rescue.Diagnose(ctx, filepath.Dir(*cfgPath))
+		if err != nil {
+			fatal("doctor", err)
+		}
+		report["cli_version"] = version
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(report); err != nil {
+			fatal("doctor", err)
+		}
 	case "daemon":
-		if err := runDaemon(); err != nil {
+		if err := runDaemon(ctx); err != nil {
 			fatal("daemon", err)
 		}
 	case "watch":
@@ -116,7 +149,7 @@ func main() {
 		if len(args) != 1 {
 			fatal("dns-restore", fmt.Errorf("dns-restore takes no arguments"))
 		}
-		reply, err := svc.Send("dns-restore")
+		reply, err := svc.SendTo(filepath.Join(filepath.Dir(*cfgPath), svc.SockName), "dns-restore")
 		if err != nil {
 			fatal("dns-restore", err)
 		}
@@ -130,7 +163,7 @@ func main() {
 		}
 		command := args[1]
 		switch command {
-		case "state", "status", "logs", "reload":
+		case "state", "status", "info", "logs", "reload", "connect", "disconnect", "resume", "resume-installed", "rollback", "maintenance":
 			if len(args) != 2 {
 				fatal("ctl", fmt.Errorf("%s takes no arguments", command))
 			}
@@ -153,7 +186,10 @@ func main() {
 		if err != nil {
 			fatal("ctl", err)
 		}
-		if strings.HasPrefix(reply, "error:") || strings.HasPrefix(reply, "unknown:") {
+		if strings.HasPrefix(reply, "unknown:") {
+			fatal("ctl", fmt.Errorf("running supervisor does not support %s; run sakamoto doctor and arrange a controlled supervisor upgrade", args[1]))
+		}
+		if strings.HasPrefix(reply, "error:") || strings.HasPrefix(reply, "start failed:") || strings.HasPrefix(reply, "disconnect failed:") {
 			fatal("ctl", fmt.Errorf("%s", strings.TrimSpace(reply)))
 		}
 		fmt.Print(reply)
@@ -163,6 +199,24 @@ func main() {
 		}
 		if err := runLearningStatus(*cfgPath); err != nil {
 			fatal("learning", err)
+		}
+	case "repair":
+		options := svc.RepairOptions{}
+		if len(args) > 2 {
+			fatal("repair", fmt.Errorf("choose --check or --restart"))
+		}
+		if len(args) == 2 {
+			switch args[1] {
+			case "--check":
+				options.CheckOnly = true
+			case "--restart":
+				options.Restart = true
+			default:
+				fatal("repair", fmt.Errorf("choose --check or --restart"))
+			}
+		}
+		if err := runRepair(ctx, *cfgPath, options); err != nil {
+			fatal("repair", err)
 		}
 	case "recover":
 		if len(args) != 1 {
@@ -299,12 +353,14 @@ func daemonDirectory() (string, error) {
 	return filepath.Join(home, ".sakamoto"), nil
 }
 
-func runDaemon() error {
+func runDaemon(ctx context.Context) error {
 	dir, err := daemonDirectory()
 	if err != nil {
 		return err
 	}
-	return svc.NewServer(filepath.Join(dir, "config.json"), dir).Run()
+	server := svc.NewServer(filepath.Join(dir, "config.json"), dir)
+	server.SetVersion(version)
+	return server.RunContext(ctx)
 }
 
 func runWatch(ctx context.Context, path string) error {
@@ -321,6 +377,7 @@ func runWatch(ctx context.Context, path string) error {
 	}
 	w := watch.New(cfg, dial)
 	w.SetConfigPath(path)
+	w.SetVersion(version)
 	go func() {
 		for e := range w.Events() {
 			fmt.Printf("[%s] %-6s %s\n", e.Time.Format("15:04:05"), e.Level, e.Message)

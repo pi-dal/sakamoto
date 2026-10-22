@@ -117,6 +117,40 @@
                 tools:visibility="gone" />
         </LinearLayout>
 
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@color/surface"
+            android:paddingHorizontal="20dp"
+            android:paddingBottom="8dp">
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/repair_vpn"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="-12dp"
+                android:minHeight="48dp"
+                android:text="@string/repair_vpn" />
+            <TextView
+                android:id="@+id/repair_result"
+                style="@style/Text.Sakamoto.HomeDetail"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:accessibilityLiveRegion="polite"
+                android:textIsSelectable="true"
+                android:visibility="gone" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/reconnect_vpn"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="-12dp"
+                android:minHeight="48dp"
+                android:text="@string/repair_reconnect"
+                android:visibility="gone" />
+        </LinearLayout>
+
         <TextView
             style="@style/Text.Sakamoto.HomeSection"
             android:layout_width="match_parent"

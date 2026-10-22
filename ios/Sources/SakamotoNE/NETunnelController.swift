@@ -30,6 +30,7 @@ public enum TunnelControllerError: Error, Equatable, Sendable {
     /// The provider answered a ping without a state snapshot. Our provider
     /// always includes one; absence means an older/misbehaving provider.
     case responseMissingState
+    case providerTimedOut
 }
 
 public final class NETunnelController: TunnelControlling, @unchecked Sendable {
@@ -39,6 +40,7 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
     public let providerBundleIdentifier: String
     private var manager: NEVPNManager
     private var preferencesLoaded = false
+    private let requestFence = TunnelRequestFence()
 
     /// Hook for VPN-conflict detection (core: another VPN TUN active while
     /// ours runs). The app target wires this to real system VPN inspection.
@@ -58,8 +60,10 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
 
     // MARK: TunnelControlling
 
-    public func connect(options: TunnelStartOptions) async throws {
+    @MainActor public func connect(options: TunnelStartOptions) async throws {
+        let request = requestFence.begin()
         try await loadProviderPreferences(refresh: true)
+        try requestFence.check(request)
         manager.protocolConfiguration = Self.makeProviderProtocol(
             bundleIdentifier: providerBundleIdentifier,
             options: options
@@ -67,18 +71,21 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
         manager.localizedDescription = "sakamoto"
         manager.isEnabled = true
         try await savePreferences()
+        try requestFence.check(request)
         try await reloadPreferences()
-        try manager.connection.startVPNTunnel(options: options.startTunnelOptions)
+        try requestFence.perform(request) { try manager.connection.startVPNTunnel(options: options.startTunnelOptions) }
     }
 
-    public func disconnect() async throws {
+    @MainActor public func disconnect() async throws {
+        let request = requestFence.begin()
         try await loadProviderPreferences(refresh: true)
+        try requestFence.check(request)
         if manager.isOnDemandEnabled {
             manager.isOnDemandEnabled = false
             try await savePreferences()
             try await reloadPreferences()
         }
-        manager.connection.stopVPNTunnel()
+        try requestFence.perform(request) { manager.connection.stopVPNTunnel() }
     }
 
     public func status() async throws -> ServiceState {
@@ -274,27 +281,43 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
         }
         let data = try request.encode()
         return try await withCheckedThrowingContinuation { continuation in
-            let resumeWithData = { (responseData: Data?) in
-                guard let responseData = responseData else {
-                    continuation.resume(throwing: TunnelControllerError.emptyProviderResponse)
-                    return
-                }
-                do {
-                    continuation.resume(returning: try TunnelResponse.decode(responseData))
-                } catch {
-                    continuation.resume(throwing: error)
-                }
+            let reply = ProviderMessageReply(continuation)
+            // A provider may be alive but blocked in native code. Keep the
+            // app's independent system Disconnect path usable in that case.
+            let timeout: TimeInterval = request == .ping ? 3 : 60
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout) {
+                reply.finish(.failure(TunnelControllerError.providerTimedOut))
             }
-            // Swift import of sendProviderMessage(_:returnError:responseHandler:)
-            // is `throws` (the ObjC BOOL return becomes an error); queue
-            // rejection and transport failures both throw.
             do {
                 try session.sendProviderMessage(data) { responseData in
-                    resumeWithData(responseData)
+                    guard let responseData else { reply.finish(.failure(TunnelControllerError.emptyProviderResponse)); return }
+                    do { reply.finish(.success(try TunnelResponse.decode(responseData))) }
+                    catch { reply.finish(.failure(error)) }
                 }
-            } catch {
-                continuation.resume(throwing: error)
-            }
+            } catch { reply.finish(.failure(error)) }
         }
+    }
+}
+
+private final class ProviderMessageReply: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<TunnelResponse, Error>?
+    init(_ continuation: CheckedContinuation<TunnelResponse, Error>) { self.continuation = continuation }
+    func finish(_ result: Result<TunnelResponse, Error>) {
+        lock.lock(); let pending = continuation; continuation = nil; lock.unlock()
+        pending?.resume(with: result)
+    }
+}
+
+private final class TunnelRequestFence: @unchecked Sendable {
+    private let lock = NSRecursiveLock()
+    private var generation: UInt64 = 0
+    func begin() -> UInt64 { lock.lock(); defer { lock.unlock() }; generation &+= 1; return generation }
+    func check(_ ticket: UInt64) throws {
+        lock.lock(); defer { lock.unlock() }
+        guard ticket == generation else { throw CancellationError() }
+    }
+    func perform(_ ticket: UInt64, operation: () throws -> Void) throws {
+        lock.lock(); defer { lock.unlock() }; try check(ticket); try operation()
     }
 }

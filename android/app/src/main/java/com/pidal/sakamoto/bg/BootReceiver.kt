@@ -16,7 +16,7 @@ class BootReceiver : BroadcastReceiver() {
         if (VpnService.prepare(context) != null) return
         val config = ConfigRepository.load(context)
         if (config.generatedContent.isBlank() || config.sourceNeedsGenerate) return
-        try { TunnelBoxService.start(context) }
+        try { TunnelBoxService.start(context, manual = false) }
         catch (_: Exception) { MobilecoreRuntime.setNotice("Automatic VPN startup failed. Open Home to reconnect.") }
     }
 }

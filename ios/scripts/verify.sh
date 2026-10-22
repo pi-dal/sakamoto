@@ -33,7 +33,7 @@ else
     echo "gofmt: clean"
 fi
 
-if (cd "${REPO_ROOT}" && go test ./...); then
+if (cd "${REPO_ROOT}" && go test ./cmd/... ./internal/... ./pkg/... ./tools/...); then
     echo "go test ./...: PASS"
 else
     echo "go test ./...: FAIL"

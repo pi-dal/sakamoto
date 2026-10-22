@@ -46,10 +46,15 @@ def main():
                 shutil.copy2(root / filename, package / filename)
             for directory in ["scripts", "launchd", "docs"]:
                 shutil.copytree(root / directory, package / directory, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+            rescue = package / "scripts/sakamoto-rescue"
+            rescue_env = dict(env, CGO_ENABLED="0")
+            subprocess.run(["go", "build", "-trimpath", f"-ldflags=-s -w -X main.version={version}", "-o", str(rescue), "./cmd/sakamoto-rescue"], cwd=root, env=rescue_env, check=True)
+            subprocess.run(["codesign", "--force", "--sign", "-", str(rescue)], check=True)
+            subprocess.run(["codesign", "--verify", "--strict", str(rescue)], check=True)
             target = output / (name + ".tar.gz")
             with tarfile.open(target, "w:gz") as archive:
                 archive.add(package, arcname=name)
-            artifacts.append({"file": target.name, "arch": arch, "binaryBytes": binary.stat().st_size, "bytes": target.stat().st_size, "sha256": hashlib.sha256(target.read_bytes()).hexdigest()})
+            artifacts.append({"file": target.name, "arch": arch, "binaryBytes": binary.stat().st_size, "rescueBinaryBytes": rescue.stat().st_size, "rescueSHA256": hashlib.sha256(rescue.read_bytes()).hexdigest(), "bytes": target.stat().st_size, "sha256": hashlib.sha256(target.read_bytes()).hexdigest()})
             print(f"Packaged CLI/TUI ({arch}): {target}")
     (output / "SHA256SUMS").write_text("".join(f"{a['sha256']}  {a['file']}\n" for a in artifacts))
     (output / "release-metadata.json").write_text(json.dumps({

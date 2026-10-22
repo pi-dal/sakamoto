@@ -28,6 +28,8 @@ class NativeBindingSmokeTest : Instrumentation() {
     private var editors = false
     private var updates = false
     private var power = false
+    private var recovery = false
+    private var recoveryVpn = false
 
     override fun onCreate(arguments: Bundle?) {
         super.onCreate(arguments)
@@ -44,6 +46,8 @@ class NativeBindingSmokeTest : Instrumentation() {
         editors = arguments?.getString("editors") == "true"
         updates = arguments?.getString("updates") == "true"
         power = arguments?.getString("power") == "true"
+        recovery = arguments?.getString("recovery") == "true"
+        recoveryVpn = arguments?.getString("recoveryVpn") == "true"
         widgetToggle = arguments?.getString("toggle") == "true"
         if (widgetToggle) checkVpn = true
         holdMillis = arguments?.getString("holdMillis")?.toLongOrNull()?.coerceIn(0L, 30_000L) ?: 0L
@@ -385,6 +389,8 @@ class NativeBindingSmokeTest : Instrumentation() {
                 check(com.pidal.sakamoto.runtime.ConfigRepository.sourceFiles(targetContext).any { it.name == "chain.json" })
             }
             if (power) PowerObservationScenario.run(this)
+            if (recovery) RecoveryObservationScenario.run(this)
+            if (recoveryVpn) RecoveryObservationScenario.runVpn(this)
             if (navigation) checkNavigation()
             if (maps) LocationMapSmokeChecks(this).run()
             if (editors) NodeGroupSmokeChecks(this).run()
@@ -469,6 +475,7 @@ class NativeBindingSmokeTest : Instrumentation() {
             finish(Activity.RESULT_OK, results)
         } catch (error: Throwable) {
             if (power) java.io.File(targetContext.cacheDir, "power-learning-failure.txt").writeText(error.stackTraceToString())
+            if (recovery || recoveryVpn) java.io.File(targetContext.cacheDir, "mobile-recovery-failure.txt").writeText(error.stackTraceToString())
             val safe = error.message.orEmpty().replace(Regex("https?://\\S+"), "[URL]").take(200)
             results.putString("stream", "FAIL: smoke test: ${error.javaClass.simpleName}: $safe\n")
             finish(Activity.RESULT_CANCELED, results)

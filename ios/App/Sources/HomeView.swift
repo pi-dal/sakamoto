@@ -8,6 +8,7 @@ struct HomeView: View {
     @ObservedObject var model: HomeModel
     @State private var showRoutingModes = false
     @State private var showDisconnectConfirm = false
+    @State private var showRepairReconnect = false
 
     var body: some View {
         List {
@@ -21,6 +22,17 @@ struct HomeView: View {
                     Label("Sources changed — generate in Config",  systemImage: "exclamationmark.circle").font(.footnote).foregroundStyle(.secondary)
                 }
                 modeButton.sakamotoInspectTag("RoutingMode")
+                Button(model.repairing ? "Checking and repairing VPN…" : "Check and repair VPN") {
+                    Task { await model.repair() }
+                }
+                .disabled(model.busy || model.serviceState == .starting || model.serviceState == .stopping)
+                .accessibilityIdentifier("RepairVPN")
+                if let result = model.repairResult {
+                    Text(result.detail).font(.footnote).fixedSize(horizontal: false, vertical: true)
+                    if result.state == "degraded" {
+                        Button("Reconnect VPN…") { showRepairReconnect = true }.disabled(model.busy)
+                    }
+                }
                 if let notice = model.notice {
                     Text(notice.text)
                         .font(.footnote)
@@ -46,6 +58,8 @@ struct HomeView: View {
                     LabeledRow("VPN status", model.phase.rawValue)
                     LabeledRow("Command channel", model.commandChannelActive ? "Connected" : "Unavailable")
                     LabeledRow("Service", model.serviceState.rawValue)
+                    if let identity = model.repairIdentity { Text(identity).font(.footnote).textSelection(.enabled) }
+                    Button("Check core only") { Task { await model.repair(checkOnly: true) } }.disabled(model.busy)
                     Button {
                         Task { await model.runProbe() }
                     } label: {
@@ -78,6 +92,12 @@ struct HomeView: View {
         } message: {
             Text("The active tunnel and its network routing will stop.")
         }
+        .confirmationDialog("Reconnect VPN?", isPresented: $showRepairReconnect, titleVisibility: .visible) {
+            Button("Reconnect", role: .destructive) { Task { await model.repair(restart: true) } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Active connections will close. The app will wait for the VPN to stop before starting a verified saved configuration.")
+        }
         .confirmationDialog("Routing mode", isPresented: $showRoutingModes, titleVisibility: .visible) {
             ForEach([RoutingMode.rule, .global, .direct], id: \.self) { mode in
                 Button(mode.rawValue) { Task { await model.setRoutingMode(mode) } }
@@ -107,7 +127,7 @@ struct HomeView: View {
         .frame(minHeight: 44)
         .accessibilityValue("\(tunnelIsOn ? "On" : "Off"), \(model.phase.rawValue)")
         .accessibilityHint(tunnelIsOn ? "Disconnect tunnel" : "Connect tunnel")
-        .disabled(model.busy || model.serviceState == .stopping || (!tunnelIsOn && !model.store.canConnect))
+        .disabled((model.busy && !tunnelIsOn) || model.serviceState == .stopping || (!tunnelIsOn && !model.store.canConnect))
     }
 
     private var modeButton: some View {

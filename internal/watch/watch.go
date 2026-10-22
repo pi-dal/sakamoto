@@ -14,6 +14,7 @@ import (
 	"github.com/pi-dal/sakamoto/internal/config"
 	"github.com/pi-dal/sakamoto/internal/experiment"
 	"github.com/pi-dal/sakamoto/internal/icloud"
+	"github.com/pi-dal/sakamoto/internal/recovery"
 	"github.com/pi-dal/sakamoto/internal/s3sync"
 	"github.com/pi-dal/sakamoto/internal/sbclient"
 	"github.com/pi-dal/sakamoto/internal/svc"
@@ -43,6 +44,8 @@ type Watcher struct {
 	learningCooldown map[string]time.Time
 	learningBusy     atomic.Bool
 	learningWorkers  sync.WaitGroup
+	version          string
+	apiConnected     atomic.Bool
 }
 
 func New(cfg *config.Config, dialFn func(ctx context.Context) (*sbclient.Client, error)) *Watcher {
@@ -58,6 +61,7 @@ func New(cfg *config.Config, dialFn func(ctx context.Context) (*sbclient.Client,
 }
 
 func (w *Watcher) SetConfigPath(path string) { w.cfgPath = path }
+func (w *Watcher) SetVersion(version string) { w.version = version }
 
 // Events returns the read-only transition stream.
 func (w *Watcher) Events() <-chan Event { return w.events }
@@ -88,6 +92,14 @@ func (w *Watcher) Run(ctx context.Context) error {
 	go w.proxyLoop(ctx)
 	backoff := time.Second
 	for {
+		if recovery.Held(filepath.Dir(w.cfgPath)) {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(5 * time.Second):
+				continue
+			}
+		}
 		connectedAt := time.Now()
 		err := w.runOnce(ctx)
 		if ctx.Err() != nil {
@@ -115,6 +127,14 @@ func (w *Watcher) proxyLoop(ctx context.Context) {
 	var lastSync time.Time
 	var lastS3Sync time.Time
 	for {
+		if recovery.Held(filepath.Dir(w.cfgPath)) {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				continue
+			}
+		}
 		cfg, err := config.Load(w.cfgPath)
 		if err == nil {
 			if cfg.S3.Enabled && time.Since(lastS3Sync) >= time.Minute {
@@ -139,7 +159,7 @@ func (w *Watcher) proxyLoop(ctx context.Context) {
 					}
 				}
 			}
-			status, e := svc.Send("status")
+			status, e := svc.SendTo(filepath.Join(filepath.Dir(w.cfgPath), svc.SockName), "status")
 			connected := e == nil && strings.HasPrefix(status, "connected")
 			_, beforeErr := os.Stat(stateFile)
 			if err = sysproxy.Sync(stateFile, cfg, connected, sysproxy.Networksetup); err != nil {
@@ -172,6 +192,9 @@ func (w *Watcher) runOnce(ctx context.Context) error {
 		return err
 	}
 	defer c.Close()
+	defer w.apiConnected.Store(false)
+	maintenance := time.NewTicker(10 * time.Second)
+	defer maintenance.Stop()
 	w.lastSnap = nil // Never evaluate a stale snapshot from a prior API connection.
 	w.emit("info", "connected to sing-box API")
 
@@ -225,6 +248,9 @@ func (w *Watcher) runOnce(ctx context.Context) error {
 		roundAccepted = true
 		for _, chain := range w.cfg.Fallbacks {
 			for _, tag := range chain {
+				if recovery.Held(filepath.Dir(w.cfgPath)) {
+					return
+				}
 				testCtx, cancel := context.WithTimeout(ctx, sbclient.URLTestRequestTimeout)
 				err := c.URLTest(testCtx, tag)
 				cancel()
@@ -250,6 +276,10 @@ func (w *Watcher) runOnce(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-maintenance.C:
+			if recovery.Held(filepath.Dir(w.cfgPath)) {
+				return fmt.Errorf("maintenance hold")
+			}
 		case err := <-errCh:
 			return err
 		case err := <-connectionErrors:
@@ -293,6 +323,7 @@ func (w *Watcher) runOnce(ctx context.Context) error {
 				return fmt.Errorf("groups stream closed")
 			}
 			w.lastSnap = g // Consume results continuously; sleeping would stall the stream.
+			w.apiConnected.Store(true)
 		case req := <-w.recoveryCh:
 			if req.ctx.Err() != nil {
 				continue
@@ -355,6 +386,9 @@ func (w *Watcher) runOnce(ctx context.Context) error {
 
 // evaluate uses fresh group snapshots rather than stale cached delays.
 func (w *Watcher) evaluate(ctx context.Context, c *sbclient.Client, started int64) {
+	if recovery.Held(filepath.Dir(w.cfgPath)) {
+		return
+	}
 	snap := w.lastSnap
 	if snap == nil {
 		return
@@ -419,7 +453,7 @@ func (w *Watcher) evaluate(ctx context.Context, c *sbclient.Client, started int6
 // proxyHealthy requires a recent successful URL test of the selected exit
 // group; during a general outage a direct timeout must not poison routing.
 func (w *Watcher) experimentEnabled() bool {
-	return experimentEnabled(w.cfg)
+	return !recovery.Held(filepath.Dir(w.cfgPath)) && experimentEnabled(w.cfg)
 }
 
 func experimentEnabled(cfg *config.Config) bool {

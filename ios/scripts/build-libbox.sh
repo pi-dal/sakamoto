@@ -43,11 +43,15 @@ gofmt -w "${WORK}/sing-box/experimental/libbox/command_server.go" "${WORK}/sing-
     "${WORK}/sing-box/protocol/tailscale/endpoint.go" "${WORK}/sing-box/protocol/tailscale/sakamoto_transport.go" \
     "${WORK}/sing-box/daemon/sakamoto_service.go" "${WORK}/sing-box/route/rule/sakamoto_domains.go"
 
-python3 - "${WORK}/sing-box/cmd/internal/build_libbox/main.go" <<'PY'
+python3 - "${WORK}/sing-box/cmd/internal/build_libbox/main.go" "${DETECTED_VERSION#v}-sakamoto" <<'PY'
 from pathlib import Path
+import json
 import sys
 p = Path(sys.argv[1])
 s = p.read_text()
+anchor = 'currentTag, err := build_shared.ReadTag()\n\tif err != nil {\n\t\tcurrentTag = "unknown"\n\t}'
+assert s.count(anchor) == 1, "Upstream native version drift"
+s = s.replace(anchor, 'currentTag := ' + json.dumps(sys.argv[2]))
 anchor = '_ "github.com/sagernet/gomobile"'
 assert s.count(anchor) == 1, "Upstream builder import drift"
 s = s.replace(anchor, anchor + '\n\t_ "github.com/pi-dal/sakamoto/pkg/mobilecore"\n\t_ "github.com/pi-dal/sakamoto/pkg/mobileexperiment"\n\t_ "github.com/pi-dal/sakamoto/pkg/mobilegen"\n\t_ "github.com/pi-dal/sakamoto/pkg/mobilelocation"')

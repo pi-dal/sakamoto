@@ -90,6 +90,8 @@ task installs services or changes the live VPN.
 - **Settings:** clickable toggles and editable values; optional iCloud source sync includes the local conf and recursive relative includes, not just nodes. Reality fallback order can be set as `RealityAuto,OthersAuto`. Experimental unmatched policy supports `off` (direct unmatched), `on` (proxy unmatched) and `auto` (learn from corroborated repeated direct timeouts). See [privacy limits and ruleset reference](docs/configuration.md#experimental-unmatched-domain-policy). A manual node selection is respected by the fallback watcher.
 - **About → Copyright:** a terminal-safe block portrait and a tribute explaining the name, plus software copyright, portrait attribution, license and non-affiliation statement.
 
+**Core crash or failed update:** run `sakamoto repair` to detect and recover the core, then verify its native API and configured protected DNS. `sakamoto repair --check` only diagnoses; `sakamoto repair --restart` explicitly reconnects a live but unhealthy core. Healthy processes retain their PID. See [quick repair and offline recovery](docs/stability-recovery.md#quick-core-repair).
+
 **Fallback semantics:** `RealityAuto` gets fresh URL tests, then `OthersAuto` is selected when Reality is unavailable; switching back needs `recover_after` consecutive healthy checks. The watcher runs without an open TUI. Explicit node selection is not overridden. `sakamoto recover` requests an immediate watcher-owned test pass for a local integration such as [pi-proxy-guard](https://github.com/pi-dal/pi-proxy-guard); it does not restart the TUN or force a node. [Request statuses and limitations](docs/configuration.md#on-demand-recovery-trigger) are documented.
 
 **Browser routing on macOS:** some system DNS answers may be poisoned or cached. With `system_proxy.enabled: true` and `mixed_inbound.enabled: true`, the watcher enables the local HTTP/HTTPS system proxy while sakamoto is connected and restores prior settings when disconnected. TUN remains enabled for non-browser traffic and UDP. This behavior is opt-in in the example config. The initial user device has it enabled and was tested with Google, GitHub and Bing.
@@ -100,6 +102,8 @@ task installs services or changes the live VPN.
 - [S3 source sync across TUI, iOS and Android](docs/s3-sync.md)
 - [Configuration, fallback and privacy](docs/configuration.md)
 - [Native protected system DNS and administrative activation](docs/dns-protection.md)
+- [Desktop stability, offline rescue and known-working rollback](docs/stability-recovery.md)
+- [Mobile core stability, crash admission and local repair](docs/mobile-stability-recovery.md)
 - [Shadowrocket import and unsupported features](docs/import.md)
 - [macOS installation and legacy-directory migration](docs/migration.md)
 - [iCloud Drive sync (optional)](docs/icloud.md)

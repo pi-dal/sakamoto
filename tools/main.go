@@ -22,7 +22,9 @@ func main() {
 		AllowHosts: strings.Join(cfg.AllowHosts, ","), Cfg: cfg, OutDir: dir}); err != nil {
 		panic(err)
 	}
-	out, err := exec.Command("sing-box", "check", "-c", filepath.Join(dir, "config.json")).CombinedOutput()
+	// -D keeps runtime-relative rule paths (rules/*.srs) resolvable regardless
+	// of the caller's cwd, matching the daemon/import directory contract.
+	out, err := exec.Command("sing-box", "check", "-D", dir, "-c", filepath.Join(dir, "config.json")).CombinedOutput()
 	if err != nil {
 		panic(fmt.Errorf("sing-box check: %w: %s", err, out))
 	}

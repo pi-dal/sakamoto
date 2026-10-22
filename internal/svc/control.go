@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/pi-dal/sakamoto/internal/recovery"
 	"github.com/pi-dal/sakamoto/internal/sbclient"
 )
 
@@ -20,10 +21,13 @@ type controlRequest struct {
 }
 
 func (s *Server) apiClient(ctx context.Context) (*sbclient.Client, error) {
-	if err := validateAPIService(s.cfgPath); err != nil {
+	return apiClientAt(ctx, s.cfgPath)
+}
+func apiClientAt(ctx context.Context, path string) (*sbclient.Client, error) {
+	if err := validateAPIService(path); err != nil {
 		return nil, err
 	}
-	raw, err := os.ReadFile(s.cfgPath)
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -114,6 +118,14 @@ func (s *Server) control(verb, arguments string) string {
 func (s *Server) reload(ctx context.Context) string {
 	s.lifecycle.Lock()
 	defer s.lifecycle.Unlock()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	s.mu.Lock()
+	s.cancelStart = cancel
+	s.mu.Unlock()
+	if recovery.Held(s.workDir) {
+		return "error: maintenance hold"
+	}
 	s.mu.Lock()
 	running, child, dnsStatus := s.runningLocked(), s.child, s.dnsStatus
 	s.mu.Unlock()
@@ -131,8 +143,12 @@ func (s *Server) reload(ctx context.Context) string {
 		return "error: DNS protection changed; disconnect and reconnect to apply"
 	}
 	command := exec.CommandContext(ctx, singBoxExecutable(), "check", "-D", s.workDir, "-c", s.cfgPath)
+	command.Dir = s.workDir
 	if err := command.Run(); err != nil {
 		return "error: config validation failed; core was not reloaded"
+	}
+	if ctx.Err() != nil || recovery.Held(s.workDir) {
+		return "error: reload canceled"
 	}
 	if err := child.Process.Signal(syscall.SIGHUP); err != nil {
 		return "error: " + err.Error()

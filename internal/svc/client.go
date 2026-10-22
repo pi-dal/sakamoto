@@ -1,6 +1,7 @@
 package svc
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -20,7 +21,12 @@ func Send(cmd string) (string, error) {
 }
 
 func SendTo(socketPath, cmd string) (string, error) {
-	conn, err := net.DialTimeout("unix", socketPath, 3*time.Second)
+	return SendToContext(context.Background(), socketPath, cmd)
+}
+
+func SendToContext(ctx context.Context, socketPath, cmd string) (string, error) {
+	dialer := net.Dialer{Timeout: 3 * time.Second}
+	conn, err := dialer.DialContext(ctx, "unix", socketPath)
 	if err != nil {
 		return "", fmt.Errorf("supervisor is not running (start its LaunchDaemon first): %w", err)
 	}
@@ -30,13 +36,19 @@ func SendTo(socketPath, cmd string) (string, error) {
 	if verb == "state" || verb == "urltest" || verb == "select" || verb == "reload" {
 		timeout = 15 * time.Second
 	}
-	if cmd == "connect" {
+	if cmd == "connect" || verb == "repair" {
 		timeout = 70 * time.Second
 	}
 	if cmd == "disconnect" || cmd == "dns-restore" {
 		timeout = 30 * time.Second
 	}
-	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+	deadline := time.Now().Add(timeout)
+	if limit, ok := ctx.Deadline(); ok && limit.Before(deadline) {
+		deadline = limit
+	}
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+	if err := conn.SetDeadline(deadline); err != nil {
 		return "", err
 	}
 	if _, err := fmt.Fprintln(conn, cmd); err != nil {

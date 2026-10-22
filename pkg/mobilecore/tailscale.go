@@ -3,6 +3,7 @@ package mobilecore
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/netip"
 	"slices"
 
@@ -136,40 +137,88 @@ func PrepareTailscaleConnectivityJSON(configJSON string) (string, error) {
 	if err := json.Unmarshal(route["rules"], &rules); err != nil && route["rules"] != nil {
 		return "", fmt.Errorf("invalid route rules")
 	}
-	// Replace only our simple preferred-route rules; retain rules with extra
-	// user conditions. All endpoints are tried dynamically before the fallback.
+	// Keep the ordinary routes for DNS/UDP and for configurations that require
+	// customized sniffing. The TCP shortcuts below have the same ownership.
+	var connectivity []map[string]json.RawMessage
+	for _, tag := range tags {
+		connectivity = append(connectivity, map[string]json.RawMessage{"preferred_by": marshalJSON([]string{tag}), "action": marshalJSON("route"), "outbound": marshalJSON(tag)})
+	}
+	// Without a peer map, only a single endpoint can own the literal prefixes.
+	literalRoute := func(tag string) map[string]json.RawMessage {
+		return map[string]json.RawMessage{"ip_cidr": marshalJSON([]string{"100.64.0.0/10", "fd7a:115c:a1e0::/48"}), "action": marshalJSON("route"), "outbound": marshalJSON(tag)}
+	}
+	if len(tags) == 1 {
+		connectivity = append(connectivity, literalRoute(tags[0]))
+	}
+	tcpRoute := func(rule map[string]json.RawMessage) map[string]json.RawMessage {
+		tcp := maps.Clone(rule)
+		tcp["network"] = marshalJSON("tcp")
+		// DNS must still reach sniff/hijack-dns, including TCP DNS. UDP keeps
+		// its existing path entirely; server-first VNC/SSH can skip sniff.
+		tcp["port_range"] = marshalJSON([]string{"0:52", "54:65535"})
+		return tcp
+	}
+	var tcpConnectivity []map[string]json.RawMessage
+	for _, rule := range connectivity {
+		tcpConnectivity = append(tcpConnectivity, tcpRoute(rule))
+	}
+	// Rebuild only exact generated shapes, including shortcuts from a saved
+	// profile. Retain preferred/prefix routes with additional user conditions.
+	generatedRoutes := make(map[string]bool)
+	for _, rule := range append(slices.Clone(connectivity), tcpConnectivity...) {
+		generatedRoutes[string(marshalJSON(rule))] = true
+	}
+	// Adding a second endpoint must retire a formerly valid single-endpoint
+	// fallback instead of silently giving that endpoint ownership of both nets.
+	for _, tag := range tags {
+		literal := literalRoute(tag)
+		generatedRoutes[string(marshalJSON(literal))] = true
+		generatedRoutes[string(marshalJSON(tcpRoute(literal)))] = true
+	}
 	rules = slices.DeleteFunc(rules, func(rule map[string]json.RawMessage) bool {
+		if generatedRoutes[string(marshalJSON(rule))] {
+			return true
+		}
 		var preferred []string
 		var outbound, action string
 		_ = json.Unmarshal(rule["preferred_by"], &preferred)
 		_ = json.Unmarshal(rule["outbound"], &outbound)
 		_ = json.Unmarshal(rule["action"], &action)
-		return len(preferred) == 1 && preferred[0] == outbound && slices.Contains(tags, outbound) &&
-			(action == "route" && len(rule) == 3 || action == "" && len(rule) == 2)
+		return len(preferred) == 1 && preferred[0] == outbound && slices.Contains(tags, outbound) && action == "" && len(rule) == 2
 	})
-	at := 0
+	at, beforeSniff := 0, -1
+	requiresInspection := false
 	for at < len(rules) {
 		var action string
 		_ = json.Unmarshal(rules[at]["action"], &action)
 		if action != "sniff" && action != "hijack-dns" {
 			break
 		}
+		if action == "sniff" {
+			if len(rules[at]) != 1 {
+				requiresInspection = true
+			} else if beforeSniff < 0 {
+				beforeSniff = at
+			}
+		}
+		if action == "hijack-dns" && beforeSniff >= 0 {
+			var protocol string
+			_ = json.Unmarshal(rules[at]["protocol"], &protocol)
+			// Only cross the default DNS rule, whose standard TCP port is
+			// excluded above. An inbound/port/custom hijacker may need this
+			// very TCP connection even when its destination port is not 53.
+			if len(rules[at]) != 2 || protocol != "dns" {
+				requiresInspection = true
+			}
+		}
 		at++
 	}
-	var connectivity []map[string]json.RawMessage
-	for _, tag := range tags {
-		connectivity = append(connectivity, map[string]json.RawMessage{"preferred_by": marshalJSON([]string{tag}), "action": marshalJSON("route"), "outbound": marshalJSON(tag)})
-	}
-	// With one endpoint, literal tailnet addresses must never fall through to
-	// DIRECT/proxy just because the peer map is not ready or lacks that peer.
-	if len(tags) == 1 {
-		static := map[string]json.RawMessage{"ip_cidr": marshalJSON([]string{"100.64.0.0/10", "fd7a:115c:a1e0::/48"}), "action": marshalJSON("route"), "outbound": marshalJSON(tags[0])}
-		rules = slices.DeleteFunc(rules, func(rule map[string]json.RawMessage) bool {
-			return string(marshalJSON(rule)) == string(marshalJSON(static))
-		})
-		connectivity = append(connectivity, static)
-	}
 	rules = slices.Insert(rules, at, connectivity...)
+	// Only bypass the generated, unconfigured sniff prefix. Never jump over
+	// a configured sniff or an earlier routing/policy action to optimize it.
+	if beforeSniff >= 0 && !requiresInspection {
+		rules = slices.Insert(rules, beforeSniff, tcpConnectivity...)
+	}
 	route["rules"] = marshalJSON(rules)
 	root["route"] = marshalJSON(route)
 	return string(marshalJSON(root)), nil

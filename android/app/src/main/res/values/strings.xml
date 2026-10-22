@@ -584,4 +584,15 @@
     <string name="location_map_invalid_draft">The edited route contains invalid coordinates. Correct or clear Advanced route coordinates before opening the map.</string>
     <string name="location_map_position_selected">Location selected. Apply location to use this point.</string>
     <string name="location_map_route_selected">Route selected. Start route when you are ready to move.</string>
+    <string name="repair_vpn">Check and repair VPN</string>
+    <string name="repair_working">Checking and repairing VPN…</string>
+    <string name="repair_reconnect">Reconnect VPN…</string>
+    <string name="repair_reconnect_title">Reconnect VPN?</string>
+    <string name="repair_reconnect_detail">Active connections will close. The app will wait for the VPN to stop before starting a verified saved configuration.</string>
+    <string name="repair_reconnect_confirm">Reconnect</string>
+    <string name="repair_check_only">Check core only</string>
+    <string name="repair_core_library">Core library</string>
+    <string name="repair_core_instance">Core instance</string>
+    <string name="repair_protocol">Recovery protocol</string>
+    <string name="repair_status">Core check</string>
 </resources>

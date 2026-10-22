@@ -24,6 +24,20 @@ tunnel process; this is not a CLI probe and not an external-daemon count).
 | Control Center control | Native VPN toggle on iOS 18+, directly operates the saved profile without opening the app |
 | App Store Connect signing | distribution export verified with Team `6Y2YB464VU`, NetworkExtension, shared App Group and production iCloud entitlements; device VPN behavior still needs runtime verification |
 
+## Core stability and repair
+
+iOS **0.1.24 (33)** adds Home → **Check and repair VPN**, **Check core only** in
+Connection details, and a confirmed reconnect action for an unresponsive core.
+Healthy native instances are retained. NetworkExtension disconnect remains
+independent of provider IPC and cancels pending repair/start work. The shared
+Go bridge persists crash admission, bounded backoff and a manual-stop hold;
+a five-minute native-instance check can promote a private retained profile
+with immutable rule/TLS assets. Recovered profiles pause learning and are
+revalidated by the installed signed core. Core verification does not imply
+DNS/HTTPS reachability. See [mobile recovery scope and verification](../docs/mobile-stability-recovery.md).
+These capabilities require app/provider version 0.1.24 or later; they are not
+retroactive capabilities of an older installed release.
+
 ## Tailscale network recovery
 
 The iOS interface adapter supplies native IPv4/IPv6 prefixes, flags and MTU
@@ -62,6 +76,32 @@ DERP region, peer relay, or an unspecified relay. These changes target network
 recovery, but sustained SSH sessions across switching networks and background
 intervals still require physical-device verification. An explicit configuration
 reload or tunnel process termination still rebuilds the shared Tailscale core.
+
+## Tailscale TCP forwarding
+
+At app/provider preparation, `mobilecore.PrepareTailscaleConnectivityJSON`
+adds narrowly matched TCP routes before the leading generic `sniff` action.
+Known tailnet destinations can use the core's IP packet forwarding interface,
+avoiding a second TCP connection and the 300 ms client-payload wait for
+server-first protocols such as VNC. TCP destination port 53 and all UDP traffic
+retain the existing sniff/DNS path. Configured or conditional sniff actions
+retain their behavior. Dynamic endpoint ownership is tried before the literal
+IPv4/IPv6 fallback, which is added only for a single Tailscale endpoint.
+
+Old/imported configurations are repaired at the same boundary. Repeated
+preparation is idempotent, and disabling the endpoint removes the complete
+generated route shapes, including shortcuts in a previously prepared profile.
+Customized rules with extra conditions are retained. No MTU, DERP policy or
+TCP buffer tuning is applied.
+
+The native core regression command above also produces
+`tailscale-packet-routes.json` and `tailscale-rfb-startup.json`.
+`NativeTailscaleIntegrationTests` validates preparation, reapplication, endpoint
+removal and re-enabling through the built Go bridge and real core validator.
+Rebuild `Libbox.xcframework` to include the Go preparation change. These checks
+establish routing and local server-first startup behavior; sustained physical
+VNC throughput still requires testing on the same phone/network/Mac.
+See [verification scope](../docs/tailscale-packet-forwarding.md).
 
 ## Peer connectivity diagnostics
 

@@ -30,12 +30,19 @@ run = "go run ./tools/appicongen"
 [tasks."go:test"]
 description = "Run shared Go tests"
 tools.sing-box = "1.14.2"
-run = "go test ./..."
+run = "go test ./cmd/... ./internal/... ./pkg/... ./tools/..."
 
 [tasks."go:check"]
 description = "Run Go tests, vet, lint and executable build"
 tools.sing-box = "1.14.2"
-run = ["python3 scripts/check-english.py", "go test ./...", "go vet ./...", "go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run ./...", "go build ./cmd/sakamoto"]
+run = ["python3 scripts/check-english.py", "go test ./cmd/... ./internal/... ./pkg/... ./tools/...", "go vet ./cmd/... ./internal/... ./pkg/... ./tools/...", "go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run ./cmd/... ./internal/... ./pkg/... ./tools/...", "go build ./cmd/sakamoto"]
+
+[tasks."go:recovery"]
+description = "Run isolated recovery fault scenarios and save local JSON receipts"
+tools.sing-box = "1.14.2"
+run = '''
+SAKAMOTO_RECOVERY_ARTIFACT_DIR="$PWD/dist/recovery-e2e" go test -race ./cmd/sakamoto-rescue ./internal/recovery ./internal/restorepoint ./internal/svc ./internal/rescue ./internal/watch -run 'TestRecovery|TestMobileRecovery|TestOffline|TestMaintenance|TestRescueShell|TestRepair' -count=1 -timeout=90s
+'''
 
 [tasks."cli:build"]
 description = "Package optimized macOS arm64 and Intel CLI/TUI binaries with setup resources"
@@ -45,7 +52,7 @@ run = "python3 scripts/build-cli.py"
 description = "Validate Actions, shell scripts and repository text"
 tools.actionlint = "1.7.12"
 tools.shellcheck = "0.11.0"
-run = ["actionlint", "shellcheck android/scripts/*.sh ios/scripts/*.sh", "python3 scripts/test-mobile-go.py", "python3 scripts/check-english.py", "git diff --check"]
+run = ["actionlint", "shellcheck android/scripts/*.sh ios/scripts/*.sh scripts/install-rescue.sh", "python3 scripts/test-mobile-go.py", "python3 scripts/check-english.py", "git diff --check"]
 
 [tasks."ios:libbox"]
 description = "Build upstream iOS/simulator Libbox framework"

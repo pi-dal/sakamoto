@@ -11,6 +11,17 @@ SOURCE="${SING_BOX_SOURCE:-$(go env GOMODCACHE)/github.com/sagernet/sing-box@${V
 : "${ANDROID_HOME:?Run mise -E android run android:sdk first}"
 : "${ANDROID_NDK_HOME:?Set ANDROID_NDK_HOME to NDK 28.2.13676358}"
 [ -d "${SOURCE}" ] || { echo "Missing pinned sing-box source: run mise run mobile:tools" >&2; exit 1; }
+if [ -d "${SOURCE}/.git" ]; then
+    DETECTED_VERSION="$(git -C "${SOURCE}" describe --tags --abbrev=0 2>/dev/null || true)"
+else
+    case "$(basename "${SOURCE}")" in
+        *"@${VERSION}"*) DETECTED_VERSION="${VERSION}" ;;
+        *) DETECTED_VERSION=unknown ;;
+    esac
+fi
+[ "${DETECTED_VERSION}" = "${VERSION}" ] || [ "${LIBBOX_ALLOW_OTHER_VERSION:-0}" = 1 ] || {
+    echo "Expected sing-box ${VERSION}, found ${DETECTED_VERSION}" >&2; exit 1;
+}
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/sakamoto-android-bind.XXXXXX")"
 trap 'rm -rf "${WORK}"' EXIT
 # Apply the same compiler policy as iOS without changing installed Go tools.
@@ -30,11 +41,15 @@ gofmt -w "${WORK}/sing-box/experimental/libbox/command_server.go" "${WORK}/sing-
 
 # The Android bind keeps the official tags, linker flags, API levels and
 # io.nekohasekai package prefix. Its additional package is local project code.
-python3 - "${WORK}/sing-box/cmd/internal/build_libbox/main.go" <<'PY'
+python3 - "${WORK}/sing-box/cmd/internal/build_libbox/main.go" "${DETECTED_VERSION#v}-sakamoto" <<'PY'
 from pathlib import Path
+import json
 import sys
 p = Path(sys.argv[1])
 s = p.read_text()
+anchor = 'currentTag, err := build_shared.ReadTag()\n\tif err != nil {\n\t\tcurrentTag = "unknown"\n\t}'
+assert s.count(anchor) == 1, "Upstream native version drift"
+s = s.replace(anchor, 'currentTag := ' + json.dumps(sys.argv[2]))
 anchor = '_ "github.com/sagernet/gomobile"'
 assert s.count(anchor) == 1, "Upstream builder import drift"
 s = s.replace(anchor, anchor + '\n\t_ "github.com/pi-dal/sakamoto/pkg/mobilecore"\n\t_ "github.com/pi-dal/sakamoto/pkg/mobileexperiment"')

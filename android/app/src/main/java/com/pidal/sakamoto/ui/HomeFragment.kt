@@ -69,6 +69,16 @@ class HomeFragment : Fragment() {
             // Recovery stays on this page: retry the connection attempt itself.
             requestConnect()
         }
+        b.repairVpn.setOnClickListener {
+            viewLifecycleOwner.lifecycleScope.launch { com.pidal.sakamoto.runtime.TunnelRepair.run(requireContext().applicationContext) }
+        }
+        b.reconnectVpn.setOnClickListener {
+            MaterialAlertDialogBuilder(requireContext()).setTitle(R.string.repair_reconnect_title).setMessage(R.string.repair_reconnect_detail)
+                .setNegativeButton(android.R.string.cancel, null)
+                .setPositiveButton(R.string.repair_reconnect_confirm) { _, _ ->
+                    viewLifecycleOwner.lifecycleScope.launch { com.pidal.sakamoto.runtime.TunnelRepair.run(requireContext().applicationContext, restart = true) }
+                }.show()
+        }
         b.modeRow.setOnClickListener { chooseMode() }
         b.selectedValue.setOnClickListener { openProfiles() }
         b.urlTestButton.setOnClickListener {
@@ -206,7 +216,7 @@ class HomeFragment : Fragment() {
         val busy = state.serviceState == "Starting" || state.serviceState == "Stopping"
         renderingConnection = true
         b.connectionSwitch.isChecked = running || state.serviceState == "Starting"
-        b.connectionSwitch.isEnabled = !busy
+        b.connectionSwitch.isEnabled = state.serviceState != "Stopping"
         renderingConnection = false
 
         b.modeValue.text = when (state.routingMode) {
@@ -226,6 +236,13 @@ class HomeFragment : Fragment() {
             else -> getString(R.string.node_latency_untested)
         }
         b.urlTestButton.isEnabled = running && state.selectedNode.isNotEmpty() && !state.selectedNodeTesting
+        b.repairVpn.setText(if (state.repairing) R.string.repair_working else R.string.repair_vpn)
+        b.repairVpn.isEnabled = !state.repairing && !busy
+        val repair = state.repairResult?.let { runCatching { org.json.JSONObject(it) }.getOrNull() }
+        b.repairResult.text = repair?.optString("detail").orEmpty()
+        b.repairResult.visibility = if (repair == null) View.GONE else View.VISIBLE
+        b.reconnectVpn.visibility = if (repair?.optString("state") == "degraded") View.VISIBLE else View.GONE
+        b.reconnectVpn.isEnabled = !state.repairing
         b.noticeValue.text = state.notice.orEmpty()
         // Successful probe observations are not errors.
         b.noticePanel.visibility = if (state.notice.isNullOrEmpty()) View.GONE else View.VISIBLE

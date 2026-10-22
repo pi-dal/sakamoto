@@ -193,6 +193,30 @@ func checkLoadedSetupServices(state setupState) error {
 	return nil
 }
 
+func runRescueInstall(path, option string) error {
+	binary, err := setupBinary()
+	if err != nil {
+		return err
+	}
+	installer, err := setupScript(binary)
+	if err != nil {
+		return err
+	}
+	script := filepath.Join(filepath.Dir(installer), "install-rescue.sh")
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	args := []string{script}
+	if option != "" {
+		args = append(args, option)
+	}
+	cmd := exec.Command("/bin/bash", args...)
+	cmd.Env = append(os.Environ(), "SAKAMOTO_DIR="+filepath.Dir(absolute))
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	return cmd.Run()
+}
+
 func setupPlistExists(path string) (bool, error) {
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -224,7 +248,7 @@ func setupSupervisorStatus(path string) (string, error) {
 		return "", err
 	}
 	status := strings.TrimSpace(line)
-	if status != "disconnected" && !strings.HasPrefix(status, "connected ") {
+	if status != "disconnected" && !strings.HasPrefix(status, "disconnected ") && !strings.HasPrefix(status, "connected ") {
 		return "", fmt.Errorf("unexpected supervisor status %q", status)
 	}
 	return status, nil

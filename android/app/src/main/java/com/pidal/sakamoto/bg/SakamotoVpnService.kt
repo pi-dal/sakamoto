@@ -72,14 +72,16 @@ class SakamotoVpnService : VpnService(), PlatformInterface {
                 return START_NOT_STICKY
             }
         }
-        return service.onStartCommand()
+        return service.onStartCommand(intent?.getBooleanExtra(TunnelBoxService.EXTRA_MANUAL, false) == true,
+            intent?.getBooleanExtra(TunnelBoxService.EXTRA_REPAIR, false) == true,
+            intent?.getLongExtra(TunnelBoxService.EXTRA_REQUEST, 0L) ?: 0L)
     }
 
     override fun onBind(intent: Intent?): IBinder? = super.onBind(intent)
 
     override fun onDestroy() {
         actionScope.cancel()
-        service.stopService()
+        service.onDestroyed()
         super.onDestroy()
     }
 
@@ -205,8 +207,7 @@ class SakamotoVpnService : VpnService(), PlatformInterface {
         } catch (error: Exception) {
             throw IllegalStateException("establish VPN interface: ${error.message}", error)
         }
-        service.fileDescriptor = pfd
-        return pfd.fd
+        return service.acceptTun(pfd)
     }
 
     override fun useProcFS(): Boolean = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q

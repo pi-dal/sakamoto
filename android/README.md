@@ -17,7 +17,7 @@ signed with the project's dedicated Android certificate:
 SHA-256: a6fb9d4b3070023b52c0efcf254b2cad251fa3fa79cab6eeec2c378f6daa66bc
 ```
 
-The package is `com.pidal.sakamoto`, versionName `0.1.13`, versionCode `15`.
+The package is `com.pidal.sakamoto`, versionName `0.1.18`, versionCode `20`.
 Future official versions retain the signing certificate for upgrades.
 A development APK uses a different debug certificate and cannot be replaced
 in place by the official APK. Preserve/export configuration and credentials
@@ -229,6 +229,25 @@ CI builds debug artifacts on relevant commits. `android-v*` tags build officiall
 signed release APKs, verify the tag/version, and attach APK, SHA256SUMS and
 commit metadata to a prepared GitHub release. Private signing material exists
 only in repository secrets and a temporary runner file.
+
+## Core stability and repair
+
+Android **0.1.18 (20)** adds Home → **Check and repair VPN**, **Check core only** in
+VPN status, and confirmed reconnect after degraded core verification. It
+retains healthy native instances and reports a queued start as unverified.
+The same Go recovery bridge used by iOS owns the private persistent crash
+budget, stop hold, backoff and stable profile retention. Native configuration
+reload acknowledges completion; rejected preflight retains the current core,
+and a failed replacement can restore its captured profile and assets.
+
+Stop invalidates pending repair/start generations and removes the TUN fd before
+waiting for the native lifecycle worker. Late TUN publication is rejected.
+`START_NOT_STICKY` remains in effect; automatic process relaunch is Android's
+responsibility. An irrecoverably hung in-process core may require Android App
+info → Force stop, then reopening the app. Android VPN settings independently
+control routing and Always-on/lockdown. See [mobile recovery and repeatable emulator drills](../docs/mobile-stability-recovery.md).
+App version 0.1.18 or later is required; installed older releases do not gain
+this behavior from documentation or a desktop CLI upgrade.
 
 ## Verification and upstream
 

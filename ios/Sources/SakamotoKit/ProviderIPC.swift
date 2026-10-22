@@ -133,8 +133,12 @@ public struct TunnelStateSnapshot: Codable, Equatable, Sendable {
     public var serviceState: ServiceState
     /// Optional human-readable detail (e.g. the last error text).
     public var detail: String?
+    public var nativeInstanceID: Int64?
+    public var nativeVersion: String?
+    public var recoveryProtocol: Int32?
 
-    public init(serviceState: ServiceState, detail: String? = nil) {
+    public init(serviceState: ServiceState, detail: String? = nil, nativeInstanceID: Int64? = nil, nativeVersion: String? = nil, recoveryProtocol: Int32? = nil) {
+        self.nativeInstanceID = nativeInstanceID; self.nativeVersion = nativeVersion; self.recoveryProtocol = recoveryProtocol
         self.serviceState = serviceState
         self.detail = detail
     }

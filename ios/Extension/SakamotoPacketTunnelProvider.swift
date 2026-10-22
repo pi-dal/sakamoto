@@ -39,6 +39,10 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
     @MainActor private var experimentRunner: ProviderExperimentRunner?
     private let operationGate = TunnelOperationGate()
     @MainActor private var appliedFingerprint: String?
+    private var recoverySession: MobilecoreRecoverySession?
+    private var recoveryTicket: String?
+    @MainActor private var recoveryReady = false
+    @MainActor private var stableVerification: Task<Void, Never>?
 
     /// Preferences carried through start options (upstream Override-
     /// Preferences). Read by ExtensionPlatformInterface when the core opens
@@ -91,19 +95,38 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
         do {
             try await startTunnelService(options: startOptions)
         } catch {
+            let canceled = operationGate.state == .stopping
+            operationGate.stop()
+            if let recoveryTicket { try? recoverySession?.failed(recoveryTicket) }
+            await cancelStableVerification()
             TunnelDiagnostics.record(stage: "VPN startup", error: error)
             await stopExperiments()
             locationRuntime.close()
+            try? commandServer?.closeService()
             commandServer?.close(); commandServer = nil
+            recoverySession?.releaseSnapshots()
             platformInterface.reset()
-            SystemSurfaceStore.write(SystemSurfaceSnapshot(serviceState: .unavailable, phase: .unavailable))
-            reloadSystemSurfaces()
+            if !canceled {
+                SystemSurfaceStore.write(SystemSurfaceSnapshot(serviceState: .unavailable, phase: .unavailable))
+                reloadSystemSurfaces()
+            }
             throw error
         }
     }
 
     private func startTunnelService(options startOptions: [String: NSObject]?) async throws {
         let sharedDirectory = try Paths.sharedDirectory()
+        var recoveryError: NSError?
+        recoverySession = MobilecoreNewRecoverySession(sharedDirectory, &recoveryError)
+        if let recoveryError { throw recoveryError }
+        var recoveryDirectory = URL(fileURLWithPath: sharedDirectory).appendingPathComponent("recovery", isDirectory: true)
+        var recoveryResources = URLResourceValues(); recoveryResources.isExcludedFromBackup = true
+        try recoveryDirectory.setResourceValues(recoveryResources)
+        guard let recoverySession else { throw ProviderStartupError("Recovery journal unavailable") }
+        guard operationGate.state != .stopping else { try recoverySession.stop(); throw CancellationError() }
+        // Explicit payloads originate in an app/system control action. Cold
+        // on-demand starts must respect the persisted budget and stop hold.
+        recoveryTicket = try checkedNativeValue { recoverySession.begin(startOptions?["configContent"] != nil, error: $0) }
         let workingDirectory = sharedDirectory + "/Working"
         let cacheDirectory = sharedDirectory + "/Library/Caches"
         try FileManager.default.createDirectory(atPath: workingDirectory, withIntermediateDirectories: true)
@@ -148,9 +171,26 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
         try commandServer!.start()
         locationRuntime.restore(server: commandServer!)
 
-        try await applyProfile(options)
-        SystemSurfaceStore.write(SystemSurfaceSnapshot(serviceState: .running, phase: .tunRunning))
-        reloadSystemSurfaces()
+        do {
+            try await applyProfile(options)
+        } catch {
+            guard operationGate.state != .stopping, let failedTicket = recoveryTicket else { throw error }
+            try recoverySession.failed(failedTicket)
+            // Retained assets and metadata are checksum verified in Go. Current
+            // signed libbox validates them again; recovery pauses learning.
+            let retainedContent = try checkedNativeValue { recoverySession.retainedConfig($0) }
+            let retainedMetadata = try checkedNativeValue { recoverySession.retainedMetadata($0) }
+            var retained = try JSONDecoder().decode(TunnelStartOptions.self, from: Data(retainedMetadata.utf8))
+            retained.configContent = retainedContent; retained.experimentJSON = nil
+            recoveryTicket = try checkedNativeValue { recoverySession.beginFallback($0) }
+            try await applyProfile(retained)
+            TunnelDiagnostics.record(stage: "Configuration recovered", error: ProviderStartupError("Using the verified saved configuration; learning paused. Review Config before applying changes."))
+        }
+        guard operationGate.state != .stopping, commandServer?.isServiceRunning() == true else { throw CancellationError() }
+        guard operationGate.publishIfActive({
+            SystemSurfaceStore.write(SystemSurfaceSnapshot(serviceState: .running, phase: .tunRunning))
+            reloadSystemSurfaces()
+        }) else { throw CancellationError() }
         writeTunnelMessage("(packet-tunnel): Here I stand")
     }
 
@@ -163,6 +203,10 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
 
     override open func stopTunnel(with reason: NEProviderStopReason) async {
         operationGate.stop()
+        if reason == .userInitiated || reason == .configurationDisabled || reason == .configurationRemoved {
+            try? recoverySession?.stop()
+        } else if let recoveryTicket { try? recoverySession?.failed(recoveryTicket) }
+        await cancelStableVerification()
         SystemSurfaceStore.write(SystemSurfaceSnapshot(serviceState: .stopping, phase: .stopping))
         defer {
             SystemSurfaceStore.write(SystemSurfaceSnapshot(serviceState: .stopped, phase: .disconnected))
@@ -183,6 +227,7 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
             commandServer.close()
             self.commandServer = nil
         }
+        recoverySession?.releaseSnapshots()
     }
 
     override open func handleAppMessage(_ messageData: Data) async -> Data? {
@@ -202,7 +247,9 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
         case .ping:
             let snapshot = TunnelStateSnapshot(
                 serviceState: operationGate.state ?? (commandServer?.isServiceRunning() == true ? .running : .unavailable),
-                detail: nil
+                detail: TunnelDiagnostics.latest().map { "\($0.stage): \($0.message)" },
+                nativeInstanceID: commandServer?.isServiceRunning() == true ? commandServer?.runningInstanceID() : nil,
+                nativeVersion: LibboxVersion(), recoveryProtocol: MobilecoreRecoveryProtocol()
             )
             return try? TunnelResponse(ok: true, state: snapshot).encode()
         case .recoverExperiment:
@@ -307,12 +354,26 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
         _ = LibboxCheckConfig(content, &error)
         if let error { throw error }
         let previous = tunnelStartOptions
+        var capturedContent = content
+        if let recoverySession, let recoveryTicket {
+            let metadata = String(decoding: try JSONEncoder().encode(options), as: UTF8.self)
+            capturedContent = try await Task.detached(priority: .utility) {
+                try recoverySession.prepare(recoveryTicket, content: content, metadata: metadata, workingDirectory: root.appendingPathComponent("Working").path)
+                return try checkedNativeValue { recoverySession.preparedConfig($0) }
+            }.value
+        }
+        cancelStableVerification()
         await stopExperiments()
         guard operationGate.isCurrent(ticket) else { throw CancellationError() }
         do {
-            try await startService(content: content, forceDERP: options.forceTailscaleDERP == true, ticket: ticket)
+            try await startService(content: capturedContent, forceDERP: options.forceTailscaleDERP == true, ticket: ticket)
             guard operationGate.isCurrent(ticket) else { throw CancellationError() }
             try startExperiments(options: options, settings: settings, content: content, root: root)
+            let instance = commandServer?.runningInstanceID() ?? 0
+            guard instance > 0, let recoverySession, let recoveryTicket else { throw ProviderStartupError("Core recovery identity unavailable") }
+            if recoveryReady { try recoverySession.replaced(recoveryTicket, instance: String(instance), version: LibboxVersion()) }
+            else { try recoverySession.ready(recoveryTicket, instance: String(instance), version: LibboxVersion()); recoveryReady = true }
+            scheduleStableVerification(ticket: recoveryTicket, instance: instance)
             tunnelStartOptions = options
             appliedFingerprint = fingerprint
             TunnelConfigurationReceiptStore.record(options)
@@ -324,9 +385,21 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
                 do {
                     await stopExperiments()
                     let (oldContent, oldSettings) = try ProviderExperimentRunner.prepared(previous, root: root)
-                    try await startService(content: oldContent, forceDERP: previous.forceTailscaleDERP == true, ticket: ticket)
+                    var capturedPrevious = oldContent
+                    if let recoverySession, let recoveryTicket {
+                        let metadata = String(decoding: try JSONEncoder().encode(previous), as: UTF8.self)
+                        capturedPrevious = try await Task.detached(priority: .utility) {
+                            try recoverySession.prepare(recoveryTicket, content: oldContent, metadata: metadata, workingDirectory: root.appendingPathComponent("Working").path)
+                            return try checkedNativeValue { recoverySession.preparedConfig($0) }
+                        }.value
+                    }
+                    try await startService(content: capturedPrevious, forceDERP: previous.forceTailscaleDERP == true, ticket: ticket)
                     guard operationGate.isCurrent(ticket) else { throw CancellationError() }
                     try startExperiments(options: previous, settings: oldSettings, content: oldContent, root: root)
+                    if let recoverySession, let recoveryTicket, let instance = commandServer?.runningInstanceID(), instance > 0 {
+                        try recoverySession.replaced(recoveryTicket, instance: String(instance), version: LibboxVersion())
+                        scheduleStableVerification(ticket: recoveryTicket, instance: instance)
+                    }
                 } catch {
                     TunnelDiagnostics.record(stage: "VPN reload rollback", error: error)
                     throw ProviderStartupError("VPN reload rollback failed; disconnect and reconnect")
@@ -383,15 +456,34 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
         writeTunnelMessage("(packet-tunnel) core apply completed; elapsed_ms=\(Int(Date().timeIntervalSince(started) * 1000))")
     }
 
+    @MainActor private func cancelStableVerification() { stableVerification?.cancel(); stableVerification = nil }
+
+    @MainActor private func scheduleStableVerification(ticket: String, instance: Int64) {
+        stableVerification?.cancel()
+        stableVerification = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: UInt64(MobilecoreRecoveryStableSeconds()) * NSEC_PER_SEC)
+                guard let self, !Task.isCancelled, self.operationGate.state == nil,
+                      let server = self.commandServer, server.isServiceRunning(), server.runningInstanceID() == instance,
+                      let session = self.recoverySession else { return }
+                try await Task.detached(priority: .utility) { try session.stable(ticket, instance: String(instance)) }.value
+            } catch is CancellationError { }
+            catch { self?.writeTunnelMessage("(packet-tunnel) stable recovery receipt was not promoted") }
+        }
+    }
+
     /// CommandServerHandler.serviceStop entry point (ExtensionPlatformInterface).
     func stopTunnelService() {
         operationGate.stop()
+        try? recoverySession?.stop()
+        Task { @MainActor [weak self] in self?.cancelStableVerification() }
         locationRuntime.close()
         do {
             try commandServer?.closeService()
         } catch {
             writeTunnelMessage("(packet-tunnel) stop service: \(error.localizedDescription)")
         }
+        recoverySession?.releaseSnapshots()
         platformInterface.reset()
     }
 

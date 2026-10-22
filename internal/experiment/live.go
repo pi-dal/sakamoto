@@ -1,12 +1,16 @@
 package experiment
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
+
+	"github.com/pi-dal/sakamoto/internal/recovery"
 )
 
 const LiveRuleSetTag = "sakamoto-auto-proxy"
@@ -119,29 +123,54 @@ func LiveRulesReady(raw []byte, dir string) bool {
 	return false
 }
 
-func WriteLiveRules(dir string, domains []string) error {
+var ErrLiveRulesChanged = errors.New("live rules belong to a newer runtime transaction")
+
+func liveRulesBytes(domains []string) ([]byte, error) {
 	if len(domains) > 1000 {
-		return fmt.Errorf("learned domain limit reached")
+		return nil, fmt.Errorf("learned domain limit reached")
 	}
 	for _, domain := range domains {
 		if Domain(domain) != domain {
-			return fmt.Errorf("invalid learned domain")
+			return nil, fmt.Errorf("invalid learned domain")
 		}
 	}
 	rules := []any{}
 	if len(domains) > 0 {
 		rules = append(rules, map[string]any{"domain": domains})
 	}
-	raw, err := json.Marshal(map[string]any{"version": 4, "rules": rules})
+	return json.Marshal(map[string]any{"version": 4, "rules": rules})
+}
+func writeLiveRules(dir string, domains []string) error {
+	raw, err := liveRulesBytes(domains)
 	if err != nil {
 		return err
 	}
 	return writeAtomic(filepath.Join(dir, LiveRuleFileName), raw)
 }
+func WriteLiveRules(dir string, domains []string) error {
+	raw, err := liveRulesBytes(domains)
+	if err != nil {
+		return err
+	}
+	unlock, err := recovery.LockRules(dir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if _, err = recovery.AdvanceRulesGeneration(dir); err != nil {
+		return err
+	}
+	return writeAtomic(filepath.Join(dir, LiveRuleFileName), raw)
+}
 
-// StageLiveRules changes only the owned file. Committed state is written after
-// origin verification; a watcher restart restores the last committed file.
+// StageLiveRules changes only the owned file. The rollback and commit compare
+// their staged bytes under the same lock used by runtime restoration.
 func StageLiveRules(dir, domain string) (State, func() error, error) {
+	unlock, err := recovery.LockRules(dir)
+	if err != nil {
+		return State{}, nil, err
+	}
+	defer unlock()
 	previous, err := Load(dir)
 	if err != nil {
 		return State{}, nil, err
@@ -155,8 +184,60 @@ func StageLiveRules(dir, domain string) (State, func() error, error) {
 	}
 	next := State{Domains: append(slices.Clone(previous.Domains), domain)}
 	sort.Strings(next.Domains)
-	if err := WriteLiveRules(dir, next.Domains); err != nil {
+	staged, err := liveRulesBytes(next.Domains)
+	if err != nil {
 		return State{}, nil, err
 	}
-	return next, func() error { return WriteLiveRules(dir, previous.Domains) }, nil
+	next.generation, err = recovery.AdvanceRulesGeneration(dir)
+	if err != nil {
+		return State{}, nil, err
+	}
+	next.staged = true
+	if err = writeAtomic(filepath.Join(dir, LiveRuleFileName), staged); err != nil {
+		return State{}, nil, err
+	}
+	return next, func() error {
+		unlock, err := recovery.LockRules(dir)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+		generation, err := recovery.RulesGeneration(dir)
+		if err != nil {
+			return err
+		}
+		if generation != next.generation {
+			return ErrLiveRulesChanged
+		}
+		current, err := os.ReadFile(filepath.Join(dir, LiveRuleFileName))
+		if err != nil || !bytes.Equal(current, staged) {
+			return ErrLiveRulesChanged
+		}
+		return writeLiveRules(dir, previous.Domains)
+	}, nil
+}
+
+// CommitLiveRules cannot save an old worker's metadata after runtime rollback.
+func CommitLiveRules(dir string, next State) error {
+	unlock, err := recovery.LockRules(dir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	generation, err := recovery.RulesGeneration(dir)
+	if err != nil {
+		return err
+	}
+	if !next.staged || generation != next.generation {
+		return ErrLiveRulesChanged
+	}
+	staged, err := liveRulesBytes(next.Domains)
+	if err != nil {
+		return err
+	}
+	current, err := os.ReadFile(filepath.Join(dir, LiveRuleFileName))
+	if err != nil || !bytes.Equal(current, staged) {
+		return ErrLiveRulesChanged
+	}
+	return saveState(dir, next)
 }

@@ -147,8 +147,9 @@ public enum TailscaleEndpointProvisioning {
                 dnsRules.insert(["preferred_by":[dnsTag], "action":"route", "server":dnsTag], at: 0)
             }
             if !routeRules.contains(where: { $0["preferred_by"] as? [String] == [tag] && $0["outbound"] as? String == tag }) {
-                // Sniff/DNS interception keep priority; endpoint preferred
-                // routes precede the generic private-address direct bypass.
+                // Saved-config connectivity keeps sniff/DNS priority. The
+                // shared mobilecore preparation boundary adds TCP packet
+                // shortcuts before generic sniff, excluding DNS port 53.
                 let at = routeRules.firstIndex(where: { $0["action"] as? String != "sniff" && $0["action"] as? String != "hijack-dns" }) ?? routeRules.endIndex
                 routeRules.insert(["preferred_by":[tag],"action":"route","outbound":tag], at: at)
             }
@@ -232,7 +233,7 @@ public enum TailscaleEndpointProvisioning {
         guard var root = raw as? [String: Any] else {
             throw TailscaleEndpointError.rootNotObject
         }
-        guard var endpoints = root["endpoints"] as? [[String: Any]] else {
+        guard let endpoints = root["endpoints"] as? [[String: Any]] else {
             return configJSON
         }
         let remaining = endpoints.filter { ($0["type"] as? String) != "tailscale" }
@@ -242,8 +243,22 @@ public enum TailscaleEndpointProvisioning {
         let removed = Set(endpoints.filter { $0["type"] as? String == "tailscale" }.compactMap { $0["tag"] as? String })
         if var route = root["route"] as? [String: Any], let rules = route["rules"] as? [[String: Any]] {
             route["rules"] = rules.filter { rule in
-                guard let tag = rule["outbound"] as? String else { return true }
-                return !(removed.contains(tag) && rule["preferred_by"] as? [String] == [tag])
+                guard let tag = rule["outbound"] as? String, removed.contains(tag) else { return true }
+                var base = rule
+                if base["network"] as? String == "tcp",
+                   base["port_range"] as? [String] == ["0:52", "54:65535"] {
+                    base.removeValue(forKey: "network")
+                    base.removeValue(forKey: "port_range")
+                }
+                // Remove only complete generated shapes, including the
+                // runtime packet shortcuts in an imported/prepared profile.
+                // Extra user conditions remain the operator's own rules.
+                let action = base["action"] as? String
+                let preferred = base["preferred_by"] as? [String] == [tag]
+                    && ((action == "route" && base.count == 3) || (action == nil && base.count == 2))
+                let literal = action == "route" && base.count == 3
+                    && base["ip_cidr"] as? [String] == ["100.64.0.0/10", "fd7a:115c:a1e0::/48"]
+                return !(preferred || literal)
             }
             root["route"] = route
         }
