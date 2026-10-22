@@ -186,9 +186,15 @@ func ConnectWithPending(path string) (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
+	socketPath := filepath.Join(filepath.Dir(path), svc.SockName)
+	send := func(command string) (string, error) { return svc.SendTo(socketPath, command) }
 	if currentCfg.DNSGuard.Enabled {
-		if err := svc.RequireDNSLifecycle(); err != nil {
+		reply, err := send("capabilities")
+		if err != nil {
 			return "", false, err
+		}
+		if strings.TrimSpace(reply) != "native-dns-v1" {
+			return "", false, errors.New("root daemon lacks native DNS lifecycle support; upgrade it while disconnected")
 		}
 	}
 	secret, err := readPending(path)
@@ -196,10 +202,10 @@ func ConnectWithPending(path string) (string, bool, error) {
 		return "", false, err
 	}
 	if secret == "" {
-		reply, err := svc.Send("connect")
+		reply, err := send("connect")
 		return reply, false, err
 	}
-	status, err := svc.Send("status")
+	status, err := send("status")
 	if err != nil {
 		return "", false, err
 	}
@@ -213,7 +219,7 @@ func ConnectWithPending(path string) (string, bool, error) {
 	if err := p.install(path); err != nil {
 		return "", false, err
 	}
-	reply, connectErr := svc.Send("connect")
+	reply, connectErr := send("connect")
 	verified := false
 	if connectErr == nil && strings.HasPrefix(reply, "already running") {
 		// Another caller started the core concurrently. Do not disconnect it.
@@ -238,7 +244,7 @@ func ConnectWithPending(path string) (string, bool, error) {
 		if restoreErr := p.restore(path); restoreErr != nil {
 			return reply, false, fmt.Errorf("API activation failed (%w); safe staged credential kept: %w", connectErr, restoreErr)
 		}
-		if restoreErr := svc.Reconnect(); restoreErr != nil {
+		if restoreErr := svc.ReconnectAt(path); restoreErr != nil {
 			return reply, false, fmt.Errorf("API activation failed (%w); previous files restored but reconnect failed: %w", connectErr, restoreErr)
 		}
 		return reply, false, fmt.Errorf("API activation failed; previous configuration restored: %w", connectErr)

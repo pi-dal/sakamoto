@@ -45,6 +45,19 @@ The optional iOS location HTTPS adapter uses [elazarl/goproxy](https://github.co
 - Android tiles/styles: [OpenFreeMap](https://openfreemap.org/), using [OpenMapTiles](https://openmaptiles.org/) and © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright) data under ODbL. The SDK's attribution control is retained and the map editor also names the providers.
 - Android place search: the public [Photon](https://github.com/komoot/photon) service by komoot; © OpenStreetMap contributors. Its implementation is not vendored. Explicit searches are throttled and cached.
 
+## macOS menu bar client
+
+The independent `desktop` module uses these UI libraries:
+
+- [MyGo](https://github.com/egoist/mygo), v0.6.2, Copyright (c) 2026 MyGo contributors, MIT.
+- [Onevra](https://github.com/oneo-me/onevra), source/v0.2026.14, Copyright (c) 2026 ONEO, MIT; its complete grant is preserved in `desktop/LICENSE.onevra`.
+- Onevra's adapted MyGo UI components retain their upstream MIT grant, shipped as `Contents/Resources/licenses/MyGo-components-MIT.txt`.
+- [Lucide](https://lucide.dev/), ISC, including the retained Feather MIT notice; the complete notice ships as `Contents/Resources/licenses/Lucide.txt`.
+
+The app bundle includes these license files alongside the project's GPL license.
+The desktop app icon resizes the existing owner-provided `assets/app-icon.png`.
+The menu bar template icon is original geometric drawing in `desktop/internal/menubar/icon.go`.
+
 ## About-page portrait
 
 - Source photograph: [RyuichiSakamoto2007.jpg](https://commons.wikimedia.org/wiki/File:RyuichiSakamoto2007.jpg) by **Joi Ito**; the Wikimedia Commons portrait was cropped by **Solid State Survivor**.

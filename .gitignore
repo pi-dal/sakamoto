@@ -19,6 +19,9 @@ __pycache__/
 # Local build outputs
 /sakamoto
 /async
+/desktop/sakamoto-menubar
+/desktop/build/
+/.impeccable/
 
 # OS/editor
 .DS_Store
