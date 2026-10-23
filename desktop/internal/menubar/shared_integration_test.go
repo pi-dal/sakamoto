@@ -88,4 +88,16 @@ func TestSharedDesktopExternalWorkflow(t *testing.T) {
 			}
 		}
 	}
+	if err := tt.Click("Check & repair"); err != nil {
+		t.Fatal(err)
+	}
+	if tt.HasText("Repair core") || tt.HasText("Reconnect core…") || tt.HasText("Test automatic route") || !tt.HasText("Managed externally") {
+		t.Fatal("external repair view exposed unsupported operations")
+	}
+	if err := tt.Click("Check health"); err != nil {
+		t.Fatal(err)
+	}
+	if !panel.snapshot.Health.Verified || !tt.HasText("Demo core API responds. The external service manages the tunnel and DNS.") {
+		t.Fatal("external API check did not explain service ownership")
+	}
 }

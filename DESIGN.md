@@ -128,6 +128,17 @@ result. Nodes show a readable name and latency status, with accessible labels
 for icon actions. Appearance and node group choices use labeled select controls.
 Settings and the home panel share the same title, spacing and footer vocabulary.
 
+Check & repair uses the same back navigation, section spacing and native buttons.
+A timestamp accompanies the public health summary. Check and ordinary repair are
+adjacent; reconnect is a separate secondary action with an inline interruption
+warning and explicit confirmation. Route recovery names the watcher response and
+never turns a queued request into a verified recovery. External-core mode shows
+API diagnosis and its ownership boundary. Service recovery opens a bundled repair
+terminal only after its named button is pressed. All sections stay in the existing
+panel; longer failure/maintenance states scroll. Closing the panel discards a
+pending reconnect confirmation and cancels observation. Reopening shows refreshing
+status until current service state is available.
+
 ## Do's and Don'ts
 
 - Do preserve system light/dark appearance and the native popover frame.

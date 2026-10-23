@@ -68,12 +68,14 @@ jobs:
             dist/desktop/sakamoto-desktop.rb
           if-no-files-found: error
           compression-level: 0
-      - name: Preserve notarization diagnostics
+      - name: Preserve release diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: desktop-notarization-diagnostics
-          path: dist/desktop/notary-*.json
+          path: |
+            dist/desktop/*.zip
+            dist/desktop/*.json
           if-no-files-found: ignore
       - name: Remove temporary signing credentials
         if: always()

@@ -72,6 +72,7 @@ func TestMenuBarControllerEndToEnd(t *testing.T) {
 	probe := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
 	defer probe.Close()
 	c := desktop.New(cfgPath, desktop.Options{PollInterval: 30 * time.Millisecond, ProbeURLs: []string{probe.URL}, ConflictCheck: func(context.Context) bool { return false }})
+	c.SetVisible(true)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { c.Run(ctx); close(done) }()
@@ -109,10 +110,6 @@ func TestMenuBarControllerEndToEnd(t *testing.T) {
 	eventually(t, c, func(s desktop.Snapshot) bool {
 		return s.APIReady && s.Phase == core.PhaseReachable && len(s.Groups) == 3
 	})
-	if f.traffic.Load() != 0 {
-		t.Fatal("hidden panel started traffic stream")
-	}
-	c.SetVisible(true)
 	eventually(t, c, func(s desktop.Snapshot) bool { return s.Traffic.Available && s.Traffic.Downlink == 4096 })
 	if err := c.SetMode(ctx, "global"); err != nil {
 		t.Fatal(err)
@@ -167,6 +164,7 @@ func TestMenuBarControllerEndToEnd(t *testing.T) {
 	if err := c.Disconnect(ctx); err != nil {
 		t.Fatal(err)
 	}
+	c.SetVisible(true)
 	eventually(t, c, func(s desktop.Snapshot) bool {
 		return s.Phase == core.PhaseDisconnected && s.Probe == core.ProbeIdle && !s.APIReady && len(s.Groups) == 0
 	})

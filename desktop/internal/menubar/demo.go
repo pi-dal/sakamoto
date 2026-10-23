@@ -2,6 +2,7 @@ package menubar
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -28,7 +29,7 @@ func NewDemo() *Demo {
 		{Tag: "Demo San Francisco", Type: "test", UrlTestDelay: 145, UrlTestTime: now},
 	}
 	return &Demo{changes: make(chan struct{}, 1), state: desktop.Snapshot{
-		Service: core.ServiceRunning, Phase: core.PhaseReachable, Probe: core.ProbeReachable, ProbePath: core.PathBoth,
+		Observing: true, Service: core.ServiceRunning, Phase: core.PhaseReachable, Probe: core.ProbeReachable, ProbePath: core.PathBoth,
 		ConfigReady: true, APIReady: true, DNS: "protected", Mode: "Rule", Modes: []string{"Rule", "Global", "Direct"}, Tests: map[string]core.NodeStatus{},
 		Traffic: desktop.Traffic{Available: true, Downlink: 6 * 1024 * 1024, Uplink: 384 * 1024, DownlinkTotal: 235 * 1024 * 1024, UplinkTotal: 12 * 1024 * 1024},
 		Groups: []*daemon.Group{
@@ -107,6 +108,43 @@ func (d *Demo) SelectNode(_ context.Context, group, tag string) error {
 		s.Notice = core.Successf("Selected %s", tag)
 	})
 }
+func (d *Demo) CheckHealth(context.Context) error {
+	return d.update(func(s *desktop.Snapshot) {
+		summary := "Demo core health verified. Existing process retained."
+		if s.ExternalCore {
+			summary = "Demo core API responds. The external service manages the tunnel and DNS."
+		}
+		s.Health = desktop.HealthReport{State: "healthy", Action: "none", Verified: true, CheckedAt: time.Now(), Summary: summary}
+		s.Notice = core.Successf("%s", s.Health.Summary)
+	})
+}
+func (d *Demo) Repair(_ context.Context, restart bool) error {
+	if d.Snapshot().ExternalCore {
+		return errors.New("the external service owns repair")
+	}
+	return d.update(func(s *desktop.Snapshot) {
+		action, summary := "none", "Demo core health verified. Existing process retained."
+		if restart {
+			action, summary = "restarted", "Demo core reconnected and verified."
+		}
+		state := "healthy"
+		if restart {
+			state = "repaired"
+		}
+		s.Health = desktop.HealthReport{State: state, Action: action, Verified: true, CheckedAt: time.Now(), Summary: summary}
+		s.Notice = core.Successf("%s", summary)
+	})
+}
+func (d *Demo) RecoverRoute(context.Context) error {
+	if d.Snapshot().ExternalCore {
+		return errors.New("the external service owns route recovery")
+	}
+	return d.update(func(s *desktop.Snapshot) {
+		s.Recovery = desktop.RecoveryReport{State: "queued", Summary: "Route tests requested. Recovery is not yet verified.", RequestedAt: time.Now()}
+		s.Notice = core.Progressf("%s", s.Recovery.Summary)
+	})
+}
+
 func (d *Demo) Test(_ context.Context, tag string) error {
 	return d.update(func(s *desktop.Snapshot) {
 		for _, g := range s.Groups {

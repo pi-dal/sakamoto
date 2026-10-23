@@ -9,15 +9,15 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/pi-dal/sakamoto/internal/recovery"
+	"github.com/pi-dal/sakamoto/internal/watchcontrol"
 	"github.com/sagernet/sing-box/daemon"
 )
 
-const recoverySocketName = "watch.sock"
+const recoverySocketName = watchcontrol.SocketName
 const recoveryLockName = "watch.lock"
 const recoveryCooldown = 90 * time.Second
 
@@ -62,28 +62,7 @@ func recoveryDecision(cfgEnabled bool, chain []string, snap *daemon.Groups, sett
 // It does not contact the root supervisor, reveal the API secret or switch a
 // selector itself. The short reply reports acceptance, not network recovery.
 func RequestRecovery(cfgPath string) (string, error) {
-	conn, err := net.DialTimeout("unix", recoveryPath(cfgPath), 2*time.Second)
-	if err != nil {
-		return "", fmt.Errorf("sakamoto watcher is unavailable: %w", err)
-	}
-	defer func() { _ = conn.Close() }()
-	if err := conn.SetDeadline(time.Now().Add(4 * time.Second)); err != nil {
-		return "", err
-	}
-	if _, err := fmt.Fprintln(conn, "recover"); err != nil {
-		return "", err
-	}
-	line, err := bufio.NewReaderSize(conn, 128).ReadString('\n')
-	if err != nil {
-		return "", fmt.Errorf("read watcher response: %w", err)
-	}
-	status := strings.TrimSpace(line)
-	switch status {
-	case "queued", "busy", "cooldown", "manual", "disabled", "unavailable", "maintenance":
-		return status, nil
-	default:
-		return "", fmt.Errorf("unrecognized watcher response %q", status)
-	}
+	return watchcontrol.Request(context.Background(), cfgPath)
 }
 
 // serveRecovery owns the user-only socket for the lifetime of the watcher.

@@ -28,11 +28,15 @@ type Backend interface {
 	SetMode(context.Context, string) error
 	SelectNode(context.Context, string, string) error
 	Test(context.Context, string) error
+	CheckHealth(context.Context) error
+	Repair(context.Context, bool) error
+	RecoverRoute(context.Context) error
 }
 
 type Actions struct {
 	Dispatch      func(func(context.Context) error)
 	OpenTUI       func() error
+	OpenRecovery  func() error
 	RevealConfig  func() error
 	SetAppearance func(string) error
 	SetLogin      func(bool) error
@@ -42,18 +46,21 @@ type Actions struct {
 	Demo          bool
 }
 
-// Panel owns view state only. Operations and service observations outlive it.
+// Panel owns view state only. Explicit actions and the independent service can
+// outlive it; live observations are scoped to visibility.
 type Panel struct {
-	backend      Backend
-	actions      Actions
-	snapshot     desktop.Snapshot
-	settings     bool
-	query, group string
-	listFilter   string
-	list         ui.ListState
-	appearance   string
-	openAtLogin  bool
-	localNotice  string
+	backend        Backend
+	actions        Actions
+	snapshot       desktop.Snapshot
+	settings       bool
+	recovery       bool
+	confirmRestart bool
+	query, group   string
+	listFilter     string
+	list           ui.ListState
+	appearance     string
+	openAtLogin    bool
+	localNotice    string
 }
 
 func NewPanel(backend Backend, actions Actions) *Panel {
@@ -118,7 +125,9 @@ func (p *Panel) View(c *ui.Context) {
 	}
 	body.Padding(20).Gap(14).Children(func() {
 		p.header(c)
-		if p.settings {
+		if p.recovery {
+			p.recoveryView(c)
+		} else if p.settings {
 			p.settingsView(c)
 		} else {
 			p.home(c)
@@ -129,9 +138,13 @@ func (p *Panel) View(c *ui.Context) {
 
 func (p *Panel) header(c *ui.Context) {
 	ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-		if p.settings {
-			components.IconButton(c, lucide.ArrowLeft(), "Back", components.IconButtonPlain).OnClick(func() { p.settings = false; p.localNotice = "" })
-			ui.Text(c, "Settings").FontSize(17).Bold().Grow(1)
+		if p.settings || p.recovery {
+			components.IconButton(c, lucide.ArrowLeft(), "Back", components.IconButtonPlain).OnClick(func() { p.settings = false; p.recovery = false; p.confirmRestart = false; p.localNotice = "" })
+			title := "Settings"
+			if p.recovery {
+				title = "Check & repair"
+			}
+			ui.Text(c, title).FontSize(17).Bold().Grow(1)
 			if p.actions.Demo {
 				ui.Text(c, "Demo session").FontSize(11).TextColor(c.Theme().TextMuted)
 			}
@@ -164,7 +177,7 @@ func (p *Panel) home(c *ui.Context) {
 			if s.Busy == "Connecting" || s.Busy == "Disconnecting" {
 				text = s.Busy + "…"
 			}
-			disabled := s.Busy != "" || s.Service == core.ServiceUnavailable || (s.Service != core.ServiceRunning && (!s.ConfigReady || s.Conflict))
+			disabled := !s.Observing || s.Busy != "" || s.Service == core.ServiceUnavailable || (s.Service != core.ServiceRunning && (!s.ConfigReady || s.Conflict))
 			components.Button(c, text, variant).MinWidth(88).Height(32).Disabled(disabled).OnClick(func() {
 				if s.Service == core.ServiceRunning {
 					p.submitAction(p.backend.Disconnect)
@@ -185,6 +198,9 @@ func (p *Panel) home(c *ui.Context) {
 }
 
 func phasePresentation(s desktop.Snapshot, t *ui.Theme) (string, string, *ui.SVG, ui.Color) {
+	if !s.Observing {
+		return "Refreshing status", "Checking the connection service…", lucide.Activity(), t.TextMuted
+	}
 	if s.ExternalCore {
 		if !s.ConfigReady {
 			return "Configuration needed", "Open your core configuration folder.", lucide.CircleAlert(), t.Warning
@@ -217,7 +233,7 @@ func phasePresentation(s desktop.Snapshot, t *ui.Theme) (string, string, *ui.SVG
 	case core.PhaseConflict:
 		return "VPN conflict", "Disconnect Shadowrocket before reconnecting.", lucide.TriangleAlert(), t.Danger
 	case core.PhaseUnavailable:
-		return "Service unavailable", "Open the TUI and run setup --check.", lucide.CircleAlert(), t.Warning
+		return "Service unavailable", "Open Check & repair for service recovery.", lucide.CircleAlert(), t.Warning
 	default:
 		if s.Conflict {
 			return "Disconnected", "Disconnect Shadowrocket before connecting.", lucide.WifiOff(), t.Warning
@@ -476,6 +492,9 @@ func (p *Panel) settingsView(c *ui.Context) {
 func (p *Panel) footer(c *ui.Context) {
 	ui.Divider(c)
 	notice := p.snapshot.Notice.Text
+	if p.recovery && (notice == p.snapshot.Health.Summary || notice == p.snapshot.Recovery.Summary) {
+		notice = ""
+	}
 	if p.localNotice != "" {
 		notice = p.localNotice
 	}
@@ -487,8 +506,8 @@ func (p *Panel) footer(c *ui.Context) {
 		ui.Text(c, notice).FontSize(11).TextColor(color).MaxHeight(32).Label(notice)
 	}
 	ui.Row(c).AlignItems(ui.Center).Children(func() {
-		if !p.settings && p.actions.OpenTUI != nil {
-			components.Button(c, "Open TUI", components.ButtonGhost).Disabled(p.actions.Demo).OnClick(func() { p.local(p.actions.OpenTUI) })
+		if !p.recovery {
+			components.Button(c, "Check & repair", components.ButtonGhost).OnClick(func() { p.settings = false; p.recovery = true; p.confirmRestart = false; p.localNotice = "" })
 		} else {
 			ui.Spacer(c)
 		}

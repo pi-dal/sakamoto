@@ -31,6 +31,9 @@ type fixture struct {
 	commands       []string
 	connectGate    chan struct{}
 	connectEntered chan struct{}
+	groupSubs      atomic.Int32
+	modes          atomic.Int32
+	repair         func(string) string
 	traffic        atomic.Int32
 }
 
@@ -86,6 +89,8 @@ func (f *fixture) groups() *daemon.Groups {
 	}}
 }
 func (f *fixture) SubscribeGroups(_ *emptypb.Empty, stream grpc.ServerStreamingServer[daemon.Groups]) error {
+	f.groupSubs.Add(1)
+	defer f.groupSubs.Add(-1)
 	tick := time.NewTicker(30 * time.Millisecond)
 	defer tick.Stop()
 	for {
@@ -100,6 +105,8 @@ func (f *fixture) SubscribeGroups(_ *emptypb.Empty, stream grpc.ServerStreamingS
 	}
 }
 func (f *fixture) SubscribeClashMode(_ *emptypb.Empty, stream grpc.ServerStreamingServer[daemon.ClashMode]) error {
+	f.modes.Add(1)
+	defer f.modes.Add(-1)
 	tick := time.NewTicker(30 * time.Millisecond)
 	defer tick.Stop()
 	for {
@@ -134,7 +141,12 @@ func (f *fixture) serveSupervisor(conn net.Conn) {
 	command := strings.TrimSpace(line)
 	f.mu.Lock()
 	f.commands = append(f.commands, command)
+	repair := f.repair
 	f.mu.Unlock()
+	if strings.HasPrefix(command, "repair ") && repair != nil {
+		_, _ = conn.Write([]byte(repair(strings.TrimPrefix(command, "repair ")) + "\n"))
+		return
+	}
 	if command == "connect" && f.connectGate != nil {
 		select {
 		case f.connectEntered <- struct{}{}:

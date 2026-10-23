@@ -12,7 +12,10 @@ import (
 	"strings"
 )
 
-func (a *application) openTUI() error {
+func (a *application) openTUI() error      { return a.openTerminal() }
+func (a *application) openRecovery() error { return a.openTerminal("repair") }
+
+func (a *application) openTerminal(arguments ...string) error {
 	if a.opts.Demo {
 		return nil
 	}
@@ -38,7 +41,11 @@ func (a *application) openTUI() error {
 		return err
 	}
 	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
-	body := fmt.Sprintf("#!/bin/sh\nrm -f -- %s\nexec %s --config %s\n", quote(file.Name()), quote(binary), quote(a.opts.ConfigPath))
+	command := quote(binary) + " --config " + quote(a.opts.ConfigPath)
+	for _, argument := range arguments {
+		command += " " + quote(argument)
+	}
+	body := fmt.Sprintf("#!/bin/sh\nrm -f -- %s\nexec %s\n", quote(file.Name()), command)
 	if _, err := file.WriteString(body); err != nil {
 		_ = file.Close()
 		_ = os.Remove(file.Name())

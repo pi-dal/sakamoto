@@ -7,12 +7,19 @@ from pathlib import Path
 import plistlib
 import re
 import subprocess
+import sys
 import tempfile
 import zipfile
 
 
 def capture(command):
-    return subprocess.check_output(command, stderr=subprocess.STDOUT, text=True)
+    try:
+        return subprocess.check_output(command, stderr=subprocess.STDOUT, text=True)
+    except subprocess.CalledProcessError as error:
+        # These verification commands contain no signing/notary credentials.
+        # Preserve the actual failure instead of only a Python exit-code trace.
+        print(error.output, file=sys.stderr, end="")
+        raise
 
 
 def verify_signature(path, team):

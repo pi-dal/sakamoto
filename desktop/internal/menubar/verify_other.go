@@ -25,7 +25,8 @@ func (a *application) verifyContent() {
 		name     string
 		theme    mygo.ThemeSource
 		settings bool
-	}{{"desktop-light.png", mygo.ThemeLight, false}, {"desktop-dark.png", mygo.ThemeDark, false}, {"desktop-settings.png", mygo.ThemeLight, true}} {
+		recovery bool
+	}{{"desktop-light.png", mygo.ThemeLight, false, false}, {"desktop-dark.png", mygo.ThemeDark, false, false}, {"desktop-settings.png", mygo.ThemeLight, true, false}, {"desktop-repair-light.png", mygo.ThemeLight, false, true}, {"desktop-repair-dark.png", mygo.ThemeDark, false, true}} {
 		var window *mygo.Window
 		mygo.RunOnMain(func() {
 			if a.window != nil {
@@ -33,6 +34,7 @@ func (a *application) verifyContent() {
 			}
 			mygo.Theme.SetSource(shot.theme)
 			a.panel.settings = shot.settings
+			a.panel.recovery = shot.recovery
 			a.show()
 			window = a.window
 		})
@@ -61,6 +63,7 @@ func (a *application) verifyContent() {
 		}
 		survived = a.window == nil
 		a.panel.settings = false
+		a.panel.recovery = false
 		a.show()
 		reopened = a.window != nil
 	})

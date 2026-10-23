@@ -8,4 +8,8 @@ import "errors"
 // this action and offers the configuration directory instead.
 func (a *application) openTUI() error { return errors.New("the TUI is not bundled on this platform") }
 
+func (a *application) openRecovery() error {
+	return errors.New("the external core service owns recovery")
+}
+
 func (a *application) verify() { a.verifyContent() }

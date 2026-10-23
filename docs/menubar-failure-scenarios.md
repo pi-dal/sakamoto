@@ -22,7 +22,25 @@ Written before implementation and integration tests.
 - Search, selected rows, test feedback and settings must remain legible in both themes, with long Unicode names and empty results.
 - Reopening the panel must preserve search/group choice while creating new engine-owned list state.
 
+## Minimal residency and repair failure scenarios
+
+Written before implementation and end-to-end verification.
+
+- A hidden or never-opened panel must perform no status/config polling, conflict subprocess checks, API subscriptions or network probes.
+- Hiding must cancel in-flight observations, reject late stream results and retain only cached, explicitly stale display state. Reopening must immediately refresh and create fresh subscriptions.
+- An explicitly requested bounded repair may finish after the panel closes; neither hiding nor quitting may disconnect the independent tunnel.
+- Check health is read-only. Ordinary repair must retain a healthy process, recover a stopped core through the existing supervisor policy and respect maintenance holds.
+- Reconnect requires an explicit in-panel confirmation and must not be issued by cancel, opening the repair page, or a repeated click while another operation is active.
+- A watcher acknowledgement of queued/busy/cooldown/manual/disabled/maintenance is not proof of restored connectivity. Unknown replies must fail safely.
+- Repair failures, API credentials and private server errors must never appear verbatim in the GUI or receipts.
+- External-core mode can diagnose its API but must not repair/restart a service or contact macOS supervisor/watcher sockets.
+- An unavailable supervisor must offer a deliberate service-recovery terminal action using the bundled CLI; opening that terminal must be explicit and paths must remain shell-quoted.
+- The idle tray must not offer stale Connect/Disconnect actions; Linux must remain hidden at startup when a tray is available.
+
 ## Signed desktop release failure scenarios
+
+- A stapled ticket must survive final ZIP creation and extraction; source-bundle validation alone is insufficient.
+- Failed signature/stapler/Gatekeeper checks must retain their tool output and public ZIP diagnostics. Never restaple the extracted archive merely to hide a packaging failure.
 
 Written before release implementation and verification.
 

@@ -11,6 +11,8 @@ unchanged. No JavaScript frontend is used.
 | --- | --- | --- | --- |
 | Shared panel, themes, search, node selection, latency, traffic | Yes | Yes | Yes |
 | Routing mode through the authenticated native API | Yes | Yes | Yes |
+| Core health check | Core API and configured DNS | Core API only | Core API only |
+| Repair, confirmed reconnect and watcher recovery | Existing supervisor/watcher | External service owns recovery | External service owns recovery |
 | Resident entry point | Menu bar status item | Notification area | AppIndicator menu |
 | Panel placement | Native NSPopover | Taskbar flyout | Desktop/compositor-managed utility panel |
 | Tunnel connect/disconnect | Existing sakamoto supervisor | External core service | External core service |
@@ -32,7 +34,8 @@ service. If no tray library is available, the app opens a regular window and
 closing that window quits the client.
 
 Linux AppIndicator reports neither normal clicks nor icon coordinates. Its
-persistent menu offers Open Sakamoto, Settings and Quit. The utility panel follows
+persistent menu offers Open Sakamoto, Check & repair, Settings and Quit. With a
+working tray it starts hidden, like macOS/Windows. The utility panel follows
 the compositor's positioning rather than pretending it can anchor to a tray icon.
 A Linux desktop needs GTK 3, Cairo, Pango and a graphical session. Ayatana
 AppIndicator/AppIndicator plus a compatible status area enables residency;
@@ -111,23 +114,55 @@ scroll, avoiding a stale partial row after a search is cleared.
 
 Selecting a leaf in an automatic group first selects it in `ManualPick`, then
 routes `MainProxy` to `ManualPick`, preserving watcher behavior. Mode changes are
-confirmed by reading the API back. Hiding a panel cancels its traffic stream;
-application-owned observations and actions continue. List view state is recreated
-for every new popover engine so a reopened panel cannot reuse an invalid engine.
+confirmed by reading the API back. A hidden panel performs no config/status
+polling, VPN conflict subprocess checks, API subscriptions or network probes.
+Reopening immediately refreshes and creates new observations; cached state is
+not presented as current connectivity. Explicitly requested bounded operations
+can finish after hiding. The independent supervisor/watcher keep their own
+responsibilities. List view state is recreated for every new popover engine so a
+reopened panel cannot reuse an invalid engine.
 
 Settings includes System/Light/Dark appearance, opt-in login startup and a config
 folder action. The TUI entry appears where a native CLI bundle is available.
 Configuration remains user-owned; appearance is a separate application preference.
+
+## Check and repair
+
+The footer and tray menu open **Check & repair** without initiating a repair.
+On macOS, **Check health** runs the existing read-only supervisor diagnosis;
+**Repair core** retains a healthy process and can start a stopped core or recover
+its last working configuration. **Reconnect core…** requires a separate inline
+confirmation because it interrupts active connections. Maintenance holds remain
+explicit and cannot be bypassed by these actions. Safe summaries and check times
+are shown; private server errors and credentials are discarded.
+
+**Test automatic route** asks the independent watcher for fresh group tests. It
+shows queued, busy, cooldown, manual, disabled, maintenance or unavailable states.
+Acknowledgement never claims that network recovery has been verified, and manual
+routes remain under the watcher's existing policy. The GUI does not run another
+fallback loop. Its shared watcher client is a small protocol package with a
+four-second timeout and cancellation; it does not link a watcher runtime.
+
+If the supervisor itself is unavailable, **Open service recovery** deliberately
+opens the bundled `sakamoto --config <path> repair` command in Terminal, where
+administrator authorization can be obtained. It does not launch automatically.
+Windows/Linux and explicit external-core mode offer API diagnosis and the config
+folder; lifecycle repair remains with that service's manager.
 
 ## Verification and limits
 
 `gui:check` uses temporary config, a Unix supervisor fixture on Unix hosts, a local
 native gRPC service and an HTTP probe fixture. It covers duplicate connect
 rejection, ordered manual selection, API-confirmed/refused modes, redacted errors,
-fresh latency, hidden-panel traffic unsubscription and quit without disconnect.
+fresh latency, cancellation of all hidden-panel observation and quit without
+disconnect. A separate resident/repair workflow checks a never-opened app,
+reopening, healthy/stopped/degraded/rollback/maintenance repair results, duplicate
+repair rejection, all watcher acknowledgements, unknown reply redaction, and a
+requested repair finishing after hiding.
 The external-core workflow works without a supervisor socket and verifies that
-connect/disconnect cannot cross that capability boundary. Its generic fixture
-also compiles on Windows.
+connect/disconnect/repair/reconnect/route-recovery cannot cross that capability
+boundary, while its API-only health check works. Its generic fixture also
+compiles on Windows.
 
 The shared view workflow drives pointer and keyboard events, settings, Unicode
 search, long names, node selection, test feedback, empty results and both themes.
@@ -137,6 +172,8 @@ a local cross-build.
 
 Artifacts under `dist/menubar-verification/` include:
 
+- `resident-repair-e2e.json`: idle observations and public repair/recovery protocol results.
+- `repair-view-e2e.json`, `repair-*.png`: input-driven checks, reconnect confirmation and repair content.
 - `controller-e2e.json`, `external-core-e2e.json`: service/API boundaries.
 - `panel-workflow.json`, `panel-*.png`: shared event workflow and renders.
 - `shared-external-*.png`: Unicode/long-name and external ownership renders.
