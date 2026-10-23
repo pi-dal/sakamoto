@@ -39,6 +39,8 @@ Written before implementation and end-to-end verification.
 
 ## Signed desktop release failure scenarios
 
+- Homebrew's online audit must use authenticated GitHub requests rather than a shared runner IP quota. A Homebrew-only replay must validate an existing stable release tag and its signed public archives, reject mismatched versions/downgrades, and never rebuild or republish that release.
+
 - A stapled ticket must survive final ZIP creation and extraction; source-bundle validation alone is insufficient.
 - Apple CloudKit transport failures during stapling/validation must retry a bounded number of times, then fail closed. A retry must never restaple an extracted release ZIP or skip signature/Gatekeeper checks.
 - Failed signature/stapler/Gatekeeper checks must retain their tool output and public ZIP diagnostics. Never restaple the extracted archive merely to hide a packaging failure.
