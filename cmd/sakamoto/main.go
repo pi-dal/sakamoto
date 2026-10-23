@@ -23,7 +23,7 @@ import (
 	"github.com/pi-dal/sakamoto/internal/watch"
 )
 
-const version = "0.2.20"
+const version = "0.2.21"
 
 const usage = `sakamoto — a macOS sing-box controller inspired by Shadowrocket
 
@@ -33,6 +33,8 @@ Usage:
   sakamoto link --check  Read-only check against the installed Homebrew executable
   sakamoto setup        Interactively install macOS daemon/watch services (no VPN start)
   sakamoto setup --check  Read-only service/config preflight (no changes)
+  sakamoto service-update --check  Inspect the installed background service
+  sakamoto service-update --reconnect  Update its executable with a controlled reconnect
   sakamoto daemon       Root supervisor (LaunchDaemon); manages sing-box and
                         accepts connect/disconnect commands on a Unix socket
   sakamoto watch        LaunchAgent for automatic proxy group fallback
@@ -47,6 +49,8 @@ Usage:
   sakamoto repair       Detect and repair a crashed core; verify API and protected DNS
   sakamoto repair --check  Diagnose without changing the core or services
   sakamoto repair --restart  Explicitly reconnect a live but unhealthy core
+  sakamoto repair --fallback [--restart]  Restore the verified working runtime
+  sakamoto repair --regenerate [--restart]  Build and check configuration from sources
   sakamoto recover      Ask the user-level watcher for fresh MainProxy tests
   sakamoto dns-restore  Restore an orphaned DNS snapshot (core must be stopped)
   sakamoto dns-prepare  Build a private protected-DNS candidate; do not activate
@@ -200,20 +204,25 @@ func main() {
 		if err := runLearningStatus(*cfgPath); err != nil {
 			fatal("learning", err)
 		}
+	case "service-update":
+		if err := runServiceUpdate(ctx, *cfgPath, args[1:]); err != nil {
+			fatal("service-update", err)
+		}
 	case "repair":
 		options := svc.RepairOptions{}
-		if len(args) > 2 {
-			fatal("repair", fmt.Errorf("choose --check or --restart"))
+		repairFlags := flag.NewFlagSet("repair", flag.ContinueOnError)
+		repairFlags.BoolVar(&options.CheckOnly, "check", false, "diagnose without changes")
+		repairFlags.BoolVar(&options.Restart, "restart", false, "allow reconnecting a live core")
+		repairFlags.BoolVar(&options.Fallback, "fallback", false, "restore the verified working runtime")
+		repairFlags.BoolVar(&options.Regenerate, "regenerate", false, "build and check configuration from sources")
+		if err := repairFlags.Parse(args[1:]); err != nil {
+			fatal("repair", err)
 		}
-		if len(args) == 2 {
-			switch args[1] {
-			case "--check":
-				options.CheckOnly = true
-			case "--restart":
-				options.Restart = true
-			default:
-				fatal("repair", fmt.Errorf("choose --check or --restart"))
-			}
+		if repairFlags.NArg() != 0 {
+			fatal("repair", fmt.Errorf("repair takes no positional arguments"))
+		}
+		if err := options.Validate(); err != nil {
+			fatal("repair", err)
 		}
 		if err := runRepair(ctx, *cfgPath, options); err != nil {
 			fatal("repair", err)

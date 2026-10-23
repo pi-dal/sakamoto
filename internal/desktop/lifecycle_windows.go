@@ -13,6 +13,11 @@ func runtimeRepair(context.Context, string, bool, bool) (HealthReport, error) {
 	return HealthReport{State: "unavailable", Summary: "The external service manages core recovery."}, errExternalLifecycle
 }
 
-func runtimeStatus(context.Context, string) (string, error)     { return "", errExternalLifecycle }
-func runtimeDisconnect(context.Context, string) (string, error) { return "", errExternalLifecycle }
-func runtimeConnect(string) (string, error)                     { return "", errExternalLifecycle }
+func runtimeConfigurationRepair(context.Context, string, bool) (HealthReport, error) {
+	return HealthReport{State: "unavailable", Summary: "The external service manages configuration recovery."}, errExternalLifecycle
+}
+
+func runtimeRecoveryStatus(context.Context, string) (bool, bool, bool) { return false, false, false }
+func runtimeStatus(context.Context, string) (string, error)            { return "", errExternalLifecycle }
+func runtimeDisconnect(context.Context, string) (string, error)        { return "", errExternalLifecycle }
+func runtimeConnect(string) (string, error)                            { return "", errExternalLifecycle }

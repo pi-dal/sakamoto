@@ -16,6 +16,7 @@ import (
 type repairViewFixture struct {
 	*Demo
 	checks, repairs, restarts, recoveries int
+	fallbacks, regenerations              int
 }
 
 func (f *repairViewFixture) CheckHealth(ctx context.Context) error {
@@ -29,6 +30,14 @@ func (f *repairViewFixture) Repair(ctx context.Context, restart bool) error {
 		f.repairs++
 	}
 	return f.Demo.Repair(ctx, restart)
+}
+func (f *repairViewFixture) RepairConfiguration(ctx context.Context, fallback bool) error {
+	if fallback {
+		f.fallbacks++
+	} else {
+		f.regenerations++
+	}
+	return f.Demo.RepairConfiguration(ctx, fallback)
 }
 func (f *repairViewFixture) RecoverRoute(ctx context.Context) error {
 	f.recoveries++
@@ -80,6 +89,24 @@ func TestPanelRepairEndToEnd(t *testing.T) {
 	if backend.recoveries != 1 || !tt.HasText("Route tests queued.") {
 		t.Fatal("queued tests were presented as recovered", tt.Texts())
 	}
+	click("Restore working configuration…")
+	if backend.fallbacks != 0 {
+		t.Fatal("fallback bypassed confirmation")
+	}
+	click("Cancel configuration recovery")
+	click("Regenerate configuration…")
+	if backend.regenerations != 0 {
+		t.Fatal("generation bypassed confirmation")
+	}
+	click("Regenerate and reconnect")
+	if backend.regenerations != 1 || panel.snapshot.Health.Action != "regenerated" {
+		t.Fatal("confirmed generation missing")
+	}
+	click("Restore working configuration…")
+	click("Restore and reconnect")
+	if backend.fallbacks != 1 || panel.snapshot.Health.Action != "rolled_back" {
+		t.Fatal("confirmed fallback missing")
+	}
 	dir := os.Getenv("SAKAMOTO_MENUBAR_ARTIFACT_DIR")
 	if dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -106,6 +133,10 @@ func TestPanelRepairEndToEnd(t *testing.T) {
 	}
 	save("repair-light.png", false)
 	save("repair-dark.png", true)
+	click("Regenerate configuration…")
+	save("configuration-confirm-light.png", false)
+	save("configuration-confirm-dark.png", true)
+	click("Cancel configuration recovery")
 	click("Reconnect core…")
 	save("repair-confirm-light.png", false)
 	save("repair-confirm-dark.png", true)
@@ -120,11 +151,21 @@ func TestPanelRepairEndToEnd(t *testing.T) {
 	}
 	save("repair-service-unavailable.png", false)
 	if dir != "" {
-		raw, _ := json.MarshalIndent(map[string]any{"schema": 1, "passed": true, "checkActions": backend.checks, "repairActions": backend.repairs, "confirmedRestarts": backend.restarts, "queuedRecoveryAcknowledged": true, "cancelPreservesConnection": true, "serviceRecoveryFallbackVisible": true}, "", "  ")
+		raw, _ := json.MarshalIndent(map[string]any{"schema": 1, "passed": true, "checkActions": backend.checks, "repairActions": backend.repairs, "confirmedRestarts": backend.restarts, "confirmedFallbacks": backend.fallbacks, "confirmedRegenerations": backend.regenerations, "queuedRecoveryAcknowledged": true, "cancelPreservesConnection": true, "serviceRecoveryFallbackVisible": true}, "", "  ")
 		if err := os.WriteFile(filepath.Join(dir, "repair-view-e2e.json"), append(raw, '\n'), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
+	_ = backend.update(func(s *desktop.Snapshot) {
+		s.Health = desktop.HealthReport{State: "healthy", Verified: true, UpgradeRequired: true, CheckedAt: time.Now(), Summary: "Core API and DNS verified."}
+	})
+	panel.Refresh()
+	tt.Frame()
+	if !tt.HasText("Update background service…") {
+		t.Fatal("legacy service has no update path")
+	}
+	save("repair-service-update-light.png", false)
+	save("repair-service-update-dark.png", true)
 	click("Back")
 	if !tt.HasText("Search nodes") {
 		t.Fatal("cannot return to connection panel")

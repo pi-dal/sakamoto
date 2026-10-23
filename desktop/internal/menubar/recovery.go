@@ -6,11 +6,13 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/oneo-me/onevra/source/components"
 	"github.com/oneo-me/onevra/source/icons/lucide"
+	"github.com/pi-dal/sakamoto/internal/core"
 )
 
 func (p *Panel) recoveryView(c *ui.Context) {
 	s, t := p.snapshot, c.Theme()
 	busy := s.Busy != ""
+	confirming := p.confirmRestart || p.confirmConfig != ""
 	ui.Scroll(c).Grow(1).Gap(20).Children(func() {
 		ui.Column(c).Gap(8).Children(func() {
 			ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
@@ -35,20 +37,20 @@ func (p *Panel) recoveryView(c *ui.Context) {
 				if s.Busy == "Checking health" {
 					label = "Checking…"
 				}
-				panelButton(c, label, components.ButtonPrimary, busy || p.confirmRestart).OnClick(func() { p.submitAction(p.backend.CheckHealth) })
+				panelButton(c, label, components.ButtonPrimary, busy || confirming).OnClick(func() { p.submitAction(p.backend.CheckHealth) })
 				if !s.ExternalCore {
 					label := "Repair core"
 					if s.Busy == "Repairing core" {
 						label = "Repairing…"
 					}
-					panelButton(c, label, components.ButtonSecondary, busy || p.confirmRestart).OnClick(func() { p.submitAction(func(ctx context.Context) error { return p.backend.Repair(ctx, false) }) })
+					panelButton(c, label, components.ButtonSecondary, busy || confirming).OnClick(func() { p.submitAction(func(ctx context.Context) error { return p.backend.Repair(ctx, false) }) })
 				}
 			})
 			if !s.ExternalCore {
 				if p.confirmRestart {
 					ui.Text(c, "Active connections will be interrupted.").FontSize(fontSmall)
 					ui.Row(c).Gap(8).Children(func() {
-						panelButton(c, "Cancel", components.ButtonSecondary, false).Label("Cancel reconnect").OnClick(func() { p.confirmRestart = false })
+						panelButton(c, "Cancel", components.ButtonSecondary, busy).Label("Cancel reconnect").OnClick(func() { p.confirmRestart = false })
 						panelButton(c, "Reconnect now", components.ButtonPrimary, busy).OnClick(func() {
 							p.confirmRestart = false
 							p.submitAction(func(ctx context.Context) error { return p.backend.Repair(ctx, true) })
@@ -59,7 +61,7 @@ func (p *Panel) recoveryView(c *ui.Context) {
 					if s.Busy == "Reconnecting core" {
 						label = "Reconnecting…"
 					}
-					panelButton(c, label, components.ButtonSecondary, busy).OnClick(func() { p.confirmRestart = true })
+					panelButton(c, label, components.ButtonSecondary, busy || p.confirmConfig != "").OnClick(func() { p.confirmRestart = true })
 				}
 			}
 		})
@@ -71,6 +73,53 @@ func (p *Panel) recoveryView(c *ui.Context) {
 			})
 			return
 		}
+		ui.Column(c).Gap(8).Children(func() {
+			ui.Row(c).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "Configuration").Bold().Grow(1)
+				if !s.Health.CheckedAt.IsZero() && !s.Health.FallbackAvailable && !s.Health.UpgradeRequired {
+					ui.Text(c, "No saved configuration").FontSize(fontSmall).TextColor(t.TextMuted)
+				}
+			})
+			if p.confirmConfig != "" {
+				text := "The current configuration will be replaced."
+				if s.Service == core.ServiceRunning {
+					text = "Active connections will be interrupted."
+				}
+				ui.Text(c, text).FontSize(fontSmall)
+				ui.Row(c).Gap(8).Children(func() {
+					panelButton(c, "Cancel", components.ButtonSecondary, busy).Label("Cancel configuration recovery").OnClick(func() { p.confirmConfig = "" })
+					fallback := p.confirmConfig == "fallback"
+					label := "Regenerate and reconnect"
+					if fallback {
+						label = "Restore and reconnect"
+					}
+					if s.Service != core.ServiceRunning {
+						label = "Regenerate and connect"
+						if fallback {
+							label = "Restore and connect"
+						}
+					}
+					panelButton(c, label, components.ButtonPrimary, busy).OnClick(func() {
+						p.confirmConfig = ""
+						p.submitAction(func(ctx context.Context) error { return p.backend.RepairConfiguration(ctx, fallback) })
+					})
+				})
+			} else if s.Health.UpgradeRequired {
+				panelButton(c, "Update background service…", components.ButtonSecondary, busy || confirming || p.actions.Demo || p.actions.UpdateService == nil).OnClick(func() { p.local(p.actions.UpdateService) })
+			} else {
+				label := "Restore working configuration…"
+				if s.Busy == "Restoring configuration" {
+					label = "Restoring…"
+				}
+				panelButton(c, label, components.ButtonSecondary, busy || confirming || !s.Health.FallbackAvailable || s.Health.UpgradeRequired).OnClick(func() { p.confirmConfig = "fallback" })
+				label = "Regenerate configuration…"
+				if s.Busy == "Regenerating configuration" {
+					label = "Regenerating…"
+				}
+				panelButton(c, label, components.ButtonSecondary, busy || confirming || s.Health.UpgradeRequired).OnClick(func() { p.confirmConfig = "regenerate" })
+			}
+		})
+		panelHairline(c)
 		ui.Column(c).Gap(8).Children(func() {
 			ui.Text(c, "Automatic route").Bold()
 			if s.Recovery.Summary != "" {
@@ -84,17 +133,16 @@ func (p *Panel) recoveryView(c *ui.Context) {
 			if s.Busy == "Requesting route tests" {
 				label = "Requesting tests…"
 			}
-			panelButton(c, label, components.ButtonSecondary, busy || p.confirmRestart).OnClick(func() { p.submitAction(p.backend.RecoverRoute) })
+			panelButton(c, label, components.ButtonSecondary, busy || confirming).OnClick(func() { p.submitAction(p.backend.RecoverRoute) })
 		})
-		if s.Health.State == "unavailable" || s.Health.State == "failed" || s.Health.State == "maintenance" {
+		if s.Health.State == "unavailable" || (s.Health.State == "failed" && !s.Health.UpgradeRequired) || s.Health.State == "maintenance" {
 			panelHairline(c)
 			ui.Column(c).Gap(8).Children(func() {
-				ui.Text(c, "Background service").Bold()
 				if s.Health.State == "maintenance" {
 					ui.Text(c, "Resume with sakamoto ctl resume using this configuration.").FontSize(fontSmall).TextColor(t.TextMuted)
-					panelButton(c, "Open configuration folder", components.ButtonSecondary, busy || p.confirmRestart || p.actions.Demo || p.actions.RevealConfig == nil).OnClick(func() { p.local(p.actions.RevealConfig) })
+					panelButton(c, "Open configuration folder", components.ButtonSecondary, busy || confirming || p.actions.Demo || p.actions.RevealConfig == nil).OnClick(func() { p.local(p.actions.RevealConfig) })
 				} else {
-					panelButton(c, "Open recovery terminal", components.ButtonSecondary, busy || p.confirmRestart || p.actions.Demo || p.actions.OpenRecovery == nil).OnClick(func() { p.local(p.actions.OpenRecovery) })
+					panelButton(c, "Open recovery terminal", components.ButtonSecondary, busy || confirming || p.actions.Demo || p.actions.OpenRecovery == nil).OnClick(func() { p.local(p.actions.OpenRecovery) })
 				}
 			})
 		}

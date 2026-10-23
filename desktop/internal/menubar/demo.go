@@ -30,7 +30,7 @@ func NewDemo() *Demo {
 	}
 	return &Demo{changes: make(chan struct{}, 1), state: desktop.Snapshot{
 		Observing: true, Service: core.ServiceRunning, Phase: core.PhaseReachable, Probe: core.ProbeReachable, ProbePath: core.PathBoth,
-		ConfigReady: true, APIReady: true, DNS: "protected", Mode: "Rule", Modes: []string{"Rule", "Global", "Direct"}, Tests: map[string]core.NodeStatus{},
+		ConfigReady: true, APIReady: true, DNS: "protected", Health: desktop.HealthReport{FallbackAvailable: true}, Mode: "Rule", Modes: []string{"Rule", "Global", "Direct"}, Tests: map[string]core.NodeStatus{},
 		Traffic: desktop.Traffic{Available: true, Downlink: 6 * 1024 * 1024, Uplink: 384 * 1024, DownlinkTotal: 235 * 1024 * 1024, UplinkTotal: 12 * 1024 * 1024},
 		Groups: []*daemon.Group{
 			{Tag: "MainProxy", Selectable: true, Selected: "RealityAuto", Items: []*daemon.GroupItem{{Tag: "RealityAuto"}, {Tag: "OthersAuto"}, {Tag: "ManualPick"}}},
@@ -114,7 +114,7 @@ func (d *Demo) CheckHealth(context.Context) error {
 		if s.ExternalCore {
 			summary = "Core API verified."
 		}
-		s.Health = desktop.HealthReport{State: "healthy", Action: "none", Verified: true, CheckedAt: time.Now(), Summary: summary}
+		s.Health = desktop.HealthReport{State: "healthy", Action: "none", Verified: true, CheckedAt: time.Now(), Summary: summary, FallbackAvailable: !s.ExternalCore}
 		s.Notice = core.Successf("%s", s.Health.Summary)
 	})
 }
@@ -131,7 +131,20 @@ func (d *Demo) Repair(_ context.Context, restart bool) error {
 		if restart {
 			state = "repaired"
 		}
-		s.Health = desktop.HealthReport{State: state, Action: action, Verified: true, CheckedAt: time.Now(), Summary: summary}
+		s.Health = desktop.HealthReport{State: state, Action: action, Verified: true, CheckedAt: time.Now(), Summary: summary, FallbackAvailable: true}
+		s.Notice = core.Successf("%s", summary)
+	})
+}
+func (d *Demo) RepairConfiguration(_ context.Context, fallback bool) error {
+	if d.Snapshot().ExternalCore {
+		return errors.New("the external service owns configuration recovery")
+	}
+	return d.update(func(s *desktop.Snapshot) {
+		action, summary := "regenerated", "Configuration regenerated. Core API and DNS verified."
+		if fallback {
+			action, summary = "rolled_back", "Restored the last working configuration. Core API and DNS verified."
+		}
+		s.Health = desktop.HealthReport{State: "repaired", Action: action, Verified: true, CheckedAt: time.Now(), Summary: summary, FallbackAvailable: true}
 		s.Notice = core.Successf("%s", summary)
 	})
 }

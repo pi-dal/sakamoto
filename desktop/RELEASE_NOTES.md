@@ -1,51 +1,48 @@
-# Desktop 0.2.20
+# Desktop 0.2.21
 
-The shared tray panel now uses Radix UI Colors in both appearances, three text
-sizes and 0.5-point borders. Home, Settings and Check & repair use shorter copy,
-fewer helper paragraphs and consistent alignment. Popup/segment corners are
-concentric; content shadows and animated glass have been removed.
+Check & repair now separates health diagnosis, core reconnect and configuration
+recovery. Failed actions display a useful public reason without exposing private
+paths, source URLs, credentials or raw engine diagnostics.
 
-- Neutral Slate surfaces, Indigo actions/selections, and semantic Green/Amber/Red
-  status colors follow Radix scale roles. Primary text stays readable on hover.
-- Routine results appear in their controls. Reconnect keeps its inline interruption
-  warning and explicit confirmation; queued route tests remain pending.
-- Search retains Unicode input, keyboard editing, Escape-to-clear and a named clear
-  action. Routing, node groups, appearance and login remain keyboard accessible.
-- Partially verified network paths keep their qualification. An external API can
-  be online while network verification is pending or retrying.
-- Every package includes Radix's MIT attribution.
+- **Restore working configuration…** restores the complete verified runtime,
+  including its matching engine and checked local assets. Corrupt current JSON
+  or YAML does not prevent fallback. A saved working copy is required.
+- **Regenerate configuration…** reads saved settings and configured sources,
+  requires supported proxy nodes, preserves API identity/DNS policy, and checks
+  a private candidate before replacing anything. A failed preparation retains
+  the live process and active files.
+- Configuration replacement requires a separate confirmation. Manual stop,
+  maintenance and newer edits supersede stale work. Failed activation can use
+  one verified working fallback; repeated failure blocks automatic attempts.
+- Older supervisors show **Update background service…**. The bundled CLI
+  requests local confirmation/administrator authorization, stages independent
+  rescue before disconnecting, retains service executables outside Homebrew,
+  and verifies the approved reconnect. Installing the GUI alone does not
+  replace the running service.
+- API settings that differ between the GUI sidecar and core configuration now
+  produce a configuration-mismatch result. TUI generation also validates an
+  independent candidate before changing active rules.
 
-The native menu bar/tray client shares node selection, routing modes, latency,
-traffic and appearance across macOS, Windows and Linux.
+A working fallback is promoted only after the existing unchanged-runtime
+stability/readiness checks. An app update or successful configuration check
+alone does not create one. Health verification covers the native API and
+configured protected DNS, not every remote destination.
 
-- macOS: arm64 and Intel apps signed with Developer ID Application, notarized
-  by Apple and stapled before ZIP packaging. Includes the CLI and offline rescue helper.
-- Windows/Linux: arm64 and amd64 portable previews. These packages are unsigned.
-  They control an existing compatible core; privileged tunnel/DNS service adapters
-  are not included.
-- Hidden and never-opened panels do no observation polling, API subscriptions or
-  network probes. Reopening refreshes current state; hiding drops live node and
-  list-engine buffers.
-- Check & repair offers read-only health checks, healthy-process-preserving repair,
-  explicitly confirmed reconnect and watcher route-test requests on macOS.
-  External cores expose API diagnosis and retain their service manager's ownership.
-  Watcher acknowledgement is distinct from verified recovery; maintenance holds
-  remain deliberate. A missing supervisor offers an explicit recovery terminal.
-- Opening the client never connects a tunnel. Closing the panel keeps it resident;
-  quitting preserves the independent service.
+The shared tray client retains Radix colors, 16/13/12 typography, 0.5-point
+borders, explicit reconnect confirmation and idle observation while hidden.
+Opening the app never connects a tunnel; quitting preserves its service.
 
-Install the macOS GUI after the release workflow updates the tap:
+- macOS: arm64/Intel apps signed with Developer ID Application, notarized and
+  stapled. The app includes the matching CLI and independent offline rescue.
+- Windows/Linux: unsigned arm64/amd64 portable previews for an existing core.
+  API diagnosis is available; configuration/lifecycle recovery stays with the
+  external service manager.
 
 ```sh
-brew install --cask pi-dal/tap/sakamoto-desktop
+brew update
+brew upgrade --cask pi-dal/tap/sakamoto-desktop
 ```
 
-The CLI formula remains `brew install pi-dal/tap/sakamoto`. GUI installation does
-not create privileged services or change user configuration. Use the bundled TUI
-or CLI setup workflow to configure services separately.
-
-Each download has a SHA-256 entry in `SHA256SUMS`. `release-metadata.json` records
-platform capabilities and macOS signing/notarization evidence. macOS
-`verification.json` records checks of the actual final ZIP contents. See
-[desktop documentation](https://github.com/pi-dal/sakamoto/blob/main/desktop/README.md)
-for setup and platform verification limits.
+The separate CLI formula is `pi-dal/tap/sakamoto`. Check its version before using
+new terminal commands. See [configuration repair](https://github.com/pi-dal/sakamoto/blob/main/docs/configuration-repair.md)
+for service activation, offline behavior and verification limits.

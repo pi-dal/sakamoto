@@ -30,6 +30,7 @@ type Backend interface {
 	Test(context.Context, string) error
 	CheckHealth(context.Context) error
 	Repair(context.Context, bool) error
+	RepairConfiguration(context.Context, bool) error
 	RecoverRoute(context.Context) error
 }
 
@@ -37,6 +38,7 @@ type Actions struct {
 	Dispatch      func(func(context.Context) error)
 	OpenTUI       func() error
 	OpenRecovery  func() error
+	UpdateService func() error
 	RevealConfig  func() error
 	SetAppearance func(string) error
 	SetLogin      func(bool) error
@@ -55,6 +57,7 @@ type Panel struct {
 	settings       bool
 	recovery       bool
 	confirmRestart bool
+	confirmConfig  string
 	query, group   string
 	listFilter     string
 	list           ui.ListState
@@ -137,7 +140,13 @@ func (p *Panel) View(c *ui.Context) {
 func (p *Panel) header(c *ui.Context) {
 	ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
 		if p.settings || p.recovery {
-			panelIconButton(c, lucide.ArrowLeft(), "Back", false).OnClick(func() { p.settings = false; p.recovery = false; p.confirmRestart = false; p.localNotice = "" })
+			panelIconButton(c, lucide.ArrowLeft(), "Back", false).OnClick(func() {
+				p.settings = false
+				p.recovery = false
+				p.confirmRestart = false
+				p.confirmConfig = ""
+				p.localNotice = ""
+			})
 			title := "Settings"
 			if p.recovery {
 				title = "Check & repair"
@@ -512,7 +521,13 @@ func (p *Panel) footer(c *ui.Context) {
 	}
 	ui.Row(c).AlignItems(ui.Center).Children(func() {
 		if !p.recovery {
-			panelButton(c, "Check & repair", components.ButtonGhost, false).Padding(6, 0).Border(0, ui.Transparent).OnClick(func() { p.settings = false; p.recovery = true; p.confirmRestart = false; p.localNotice = "" })
+			panelButton(c, "Check & repair", components.ButtonGhost, false).Padding(6, 0).Border(0, ui.Transparent).OnClick(func() {
+				p.settings = false
+				p.recovery = true
+				p.confirmRestart = false
+				p.confirmConfig = ""
+				p.localNotice = ""
+			})
 		}
 		ui.Spacer(c)
 		panelButton(c, "Quit app", components.ButtonGhost, false).Padding(6, 0).Border(0, ui.Transparent).OnClick(func() {
