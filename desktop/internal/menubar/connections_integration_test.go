@@ -97,6 +97,12 @@ func TestConnectionsPanelEndToEnd(t *testing.T) {
 	if !tt.HasText("No active connections") {
 		t.Fatal("empty active state missing")
 	}
+	_ = backend.update(func(s *desktop.Snapshot) { s.ConfigReady = false; s.ConnectionsState = "" })
+	panel.Refresh()
+	tt.Frame()
+	if !tt.HasText("Configuration needed") {
+		t.Fatal("invalid configuration left the page loading indefinitely", tt.Texts())
+	}
 	click("Check & repair")
 	if panel.connections {
 		t.Fatal("repair navigation left connections view active")

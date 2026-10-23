@@ -57,6 +57,8 @@ func (p *Panel) connectionsView(c *ui.Context) {
 			if len(items) == 0 {
 				text := "Loading connections…"
 				switch {
+				case !s.ConfigReady:
+					text = "Configuration needed"
 				case s.Service != core.ServiceRunning:
 					text = "Connect to view connections."
 					if s.ExternalCore {
