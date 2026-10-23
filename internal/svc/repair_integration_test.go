@@ -31,7 +31,7 @@ func TestRepairNativeCoreCrashUpdateAndRollback(t *testing.T) {
 	recoveryOK(t, listener.Close())
 	raw := []byte(fmt.Sprintf(`{"log":{"disabled":true},"services":[{"type":"api","listen":"127.0.0.1","listen_port":%d,"secret":"%s"}],"outbounds":[{"type":"direct","tag":"direct"}],"route":{"final":"direct"}}`, port, strings.Repeat("r", 48)))
 	cfgPath := filepath.Join(dir, "sakamoto.yaml")
-	recoveryOK(t, os.WriteFile(cfgPath, []byte("dns_guard:\n  enabled: false\n"), 0600))
+	recoveryOK(t, os.WriteFile(cfgPath, []byte(fmt.Sprintf("api:\n  url: http://127.0.0.1:%d\n  secret: %s\ndns_guard:\n  enabled: false\n", port, strings.Repeat("r", 48))), 0600))
 	recoveryOK(t, os.WriteFile(filepath.Join(dir, "config.json"), raw, 0600))
 	t.Setenv("SAKAMOTO_SING_BOX", native)
 	s := NewServer(filepath.Join(dir, "config.json"), dir)
@@ -84,6 +84,7 @@ func TestRepairNativeCoreCrashUpdateAndRollback(t *testing.T) {
 	changed["services"].([]any)[0].(map[string]any)["secret"] = strings.Repeat("s", 48)
 	staged, _ := json.Marshal(changed)
 	recoveryOK(t, os.WriteFile(s.cfgPath, staged, 0600))
+	recoveryOK(t, os.WriteFile(cfgPath, []byte(fmt.Sprintf("api:\n  url: http://127.0.0.1:%d\n  secret: %s\ndns_guard:\n  enabled: false\n", port, strings.Repeat("s", 48))), 0600))
 	degraded, err := RepairAt(ctx, cfgPath, RepairOptions{})
 	if err == nil || degraded.State != "degraded" || degraded.PID != recovered.PID {
 		t.Fatal("API-only failure restarted live core", degraded, err)

@@ -12,8 +12,9 @@ import (
 	"strings"
 )
 
-func (a *application) openTUI() error      { return a.openTerminal() }
-func (a *application) openRecovery() error { return a.openTerminal("repair") }
+func (a *application) openTUI() error       { return a.openTerminal() }
+func (a *application) openRecovery() error  { return a.openTerminal("repair") }
+func (a *application) updateService() error { return a.openTerminal("service-update", "--reconnect") }
 
 func (a *application) openTerminal(arguments ...string) error {
 	if a.opts.Demo {

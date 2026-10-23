@@ -288,12 +288,20 @@ func (c *Controller) refresh(ctx context.Context) (*config.Config, string) {
 	checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	conflict := c.opts.ConflictCheck(checkCtx)
 	cancel()
+	known, supported, fallback := false, false, false
+	if !c.opts.ExternalCore && service != core.ServiceUnavailable {
+		known, supported, fallback = runtimeRecoveryStatus(ctx, c.path)
+	}
 	c.update(func(s *Snapshot) {
 		if !c.visible || ctx.Err() != nil {
 			return
 		}
 		s.Observing = true
 		s.Service, s.DNS, s.Conflict, s.ConfigReady = service, dns, conflict, ready
+		if known {
+			s.Health.UpgradeRequired = !supported
+			s.Health.FallbackAvailable = fallback
+		}
 		if service != core.ServiceRunning {
 			s.APIReady = false
 			s.Groups = nil

@@ -41,7 +41,7 @@ run = ["python3 scripts/check-english.py", "go test ./cmd/... ./internal/... ./p
 description = "Run isolated recovery fault scenarios and save local JSON receipts"
 tools.sing-box = "1.14.2"
 run = '''
-SAKAMOTO_RECOVERY_ARTIFACT_DIR="$PWD/dist/recovery-e2e" go test -race ./cmd/sakamoto-rescue ./internal/recovery ./internal/restorepoint ./internal/svc ./internal/rescue ./internal/watch -run 'TestRecovery|TestMobileRecovery|TestOffline|TestMaintenance|TestRescueShell|TestRepair' -count=1 -timeout=90s
+SAKAMOTO_RECOVERY_ARTIFACT_DIR="$PWD/dist/recovery-e2e" go test -race ./cmd/sakamoto-rescue ./internal/recovery ./internal/restorepoint ./internal/svc ./internal/rescue ./internal/tui ./internal/watch -run 'TestRecovery|TestMobileRecovery|TestOffline|TestMaintenance|TestRescueShell|TestRepair|TestRegenerate' -count=1 -timeout=90s
 '''
 
 [tasks."cli:build"]

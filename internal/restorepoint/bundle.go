@@ -356,12 +356,21 @@ func Load(dir string) (*Point, error) {
 	}
 	return p, nil
 }
-func (p *Point) Apply(dir string) error {
+func (p *Point) Apply(dir string) error { return p.ApplyChecked(dir, nil) }
+
+// ApplyChecked checks the caller's preparation receipt inside the same short
+// transaction that fences learning writers and replaces the runtime files.
+func (p *Point) ApplyChecked(dir string, check func() error) error {
 	unlock, err := recovery.LockRules(dir)
 	if err != nil {
 		return err
 	}
 	defer unlock()
+	if check != nil {
+		if err := check(); err != nil {
+			return err
+		}
+	}
 	if _, err = recovery.AdvanceRulesGeneration(dir); err != nil {
 		return err
 	}

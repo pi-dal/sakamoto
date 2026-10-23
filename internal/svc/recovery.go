@@ -21,13 +21,15 @@ import (
 func (s *Server) SetVersion(version string) { s.mu.Lock(); s.version = version; s.mu.Unlock() }
 func (s *Server) info() string {
 	s.mu.Lock()
-	value := map[string]any{"version": s.version, "protocol": 2, "capabilities": []string{"native-dns-v1", "offline-recovery-v1", "lifecycle-cancel-v1", "runtime-bundle-v1", "quick-repair-v1"}, "circuit": s.circuit, "state_error": s.stateErr != nil}
+	value := map[string]any{"version": s.version, "protocol": 2, "capabilities": []string{"native-dns-v1", "offline-recovery-v1", "lifecycle-cancel-v1", "runtime-bundle-v1", "quick-repair-v1", configRepairCapability}, "circuit": s.circuit, "state_error": s.stateErr != nil}
 	if s.child != nil {
 		value["core"] = map[string]any{"pid": s.child.Process.Pid, "executable": s.child.Path, "started": s.started, "alive": s.runningLocked(), "applied_input_sha256": s.activeConfigHash}
 	}
 	stableWindow := s.stablePeriod.Seconds()
 	s.mu.Unlock()
 	_, receiptErr := os.Lstat(filepath.Join(s.workDir, "recovery", "last-good.json"))
+	executable, _ := os.Executable()
+	value["supervisor"] = map[string]any{"pid": os.Getpid(), "executable": executable}
 	value["known_working"] = map[string]any{"receipt_present": receiptErr == nil, "stable_window_seconds": stableWindow}
 	if build, ok := debug.ReadBuildInfo(); ok {
 		identity := map[string]string{"go": build.GoVersion}

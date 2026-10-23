@@ -28,7 +28,9 @@ aligned traffic precede a tighter node-group/search/list region. The selected
 node has both a check and a bold name. Settings replaces the panel body with a
 back action. Check & repair also replaces the body, with a read-only check,
 ordinary repair, explicitly confirmed reconnect and watcher acknowledgement.
-Opening this page does not initiate a repair. An unavailable supervisor offers
+Opening this page does not initiate a repair. Configuration replacement uses
+separate restore/regenerate confirmation; a legacy service shows its bundled
+update terminal action in that section. An unavailable supervisor offers
 a deliberate bundled repair terminal action; external cores only expose API
 checks and their configuration folder. Long labels truncate visually while
 action names stay complete.

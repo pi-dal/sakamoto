@@ -2,6 +2,8 @@
 
 The desktop recovery mechanisms in this document ship in CLI/TUI **0.2.18**. Installing a CLI does not replace an already-running supervisor or watcher. Use `sakamoto doctor` from the new build to inspect actual running capabilities before claiming activation.
 
+**0.2.21** adds explicit configuration fallback/regeneration and a controlled supervisor update. The [configuration repair guide](configuration-repair.md) covers commands, GUI confirmation, version boundaries and verification evidence.
+
 The owner must be able to recover locally when the proxy, DNS, watcher, native API, or root supervisor is unavailable. Recovery must not require a working proxy, online package manager, rebuild, or online assistant.
 
 ## Quick core repair

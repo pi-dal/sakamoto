@@ -12,4 +12,7 @@ func (a *application) openRecovery() error {
 	return errors.New("the external core service owns recovery")
 }
 
+func (a *application) updateService() error {
+	return errors.New("the external service manages its own updates")
+}
 func (a *application) verify() { a.verifyContent() }

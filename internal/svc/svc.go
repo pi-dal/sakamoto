@@ -291,17 +291,25 @@ func shadowrocketVPNConnected() bool {
 func (s *Server) start() string { return s.startGeneration(nil, 0) }
 
 func (s *Server) startGeneration(expected *exec.Cmd, generation int) string {
+	return s.startChecked(expected, generation, expected != nil, expected != nil)
+}
+
+func (s *Server) startChecked(expected *exec.Cmd, generation int, guardGeneration, guardInputs bool) string {
 	s.lifecycle.Lock()
 	defer s.lifecycle.Unlock()
 	if recovery.Held(s.workDir) {
 		return "start failed: maintenance hold; run sakamoto ctl resume, then connect explicitly"
 	}
 	s.mu.Lock()
+	if s.repairing && (!guardGeneration || guardInputs) {
+		s.mu.Unlock()
+		return "start canceled: repair in progress"
+	}
 	if s.stateErr != nil || s.circuit.Blocked {
 		s.mu.Unlock()
 		return "start failed: recovery blocked; inspect sakamoto doctor, then ctl rollback or ctl resume"
 	}
-	if expected != nil && (s.child != expected || s.restarts != generation) {
+	if guardGeneration && (s.child != expected || s.restarts != generation || s.stopRequested) {
 		s.mu.Unlock()
 		return "restart canceled"
 	}
@@ -345,7 +353,7 @@ func (s *Server) startGeneration(expected *exec.Cmd, generation int) string {
 	if err != nil {
 		return "start failed: " + err.Error()
 	}
-	if expected != nil {
+	if guardInputs {
 		if s.runtimeHash() != s.activeConfigHash {
 			return "start failed: staged configuration differs from the applied runtime; explicit activation required"
 		}
@@ -493,9 +501,18 @@ func (s *Server) waitLoop(cmd *exec.Cmd, done chan struct{}) {
 }
 
 func (s *Server) stop() string {
+	reply, _ := s.stopChecked(nil, 0, false)
+	return reply
+}
+func (s *Server) stopChecked(expected *exec.Cmd, generation int, guard bool) (string, int) {
 	// Cancel readiness and invalidate retries before waiting for lifecycle work.
 	s.mu.Lock()
+	if guard && (s.child != expected || s.restarts != generation) {
+		s.mu.Unlock()
+		return "disconnect canceled", 0
+	}
 	s.restarts++
+	requestGeneration := s.restarts
 	s.stopRequested = true
 	if s.cancelStart != nil {
 		s.cancelStart()
@@ -503,35 +520,48 @@ func (s *Server) stop() string {
 	s.mu.Unlock()
 	s.lifecycle.Lock()
 	defer s.lifecycle.Unlock()
+	s.mu.Lock()
+	changed := guard && s.restarts != requestGeneration
+	s.mu.Unlock()
+	if changed {
+		return "disconnect canceled", 0
+	}
 	// Restore before killing the only loopback DNS listener. If restoration
 	// fails, retain the core and snapshot rather than strand the machine.
 	if err := s.restoreDNS(); err != nil {
 		s.mu.Lock()
+		if guard && s.restarts != requestGeneration {
+			s.mu.Unlock()
+			return "disconnect canceled", 0
+		}
 		s.stopRequested = false
 		child, gen, alive := s.child, s.restarts, s.runningLocked()
 		s.mu.Unlock()
 		if child != nil && !alive && !recovery.Held(s.workDir) {
 			go s.retryCore(child, gen)
 		}
-		return "disconnect failed: " + err.Error()
+		return "disconnect failed: " + err.Error(), 0
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if guard && s.restarts != requestGeneration {
+		return "disconnect canceled", 0
+	}
 	if !s.runningLocked() {
 		s.restarts++
 		s.child = nil
 		s.dnsStatus = "off"
-		return "not running"
+		return "not running", s.restarts
 	}
 	s.restarts++ // Invalidate waitLoop's generation to prevent auto-restart.
 	pid := s.child.Process.Pid
 	// SIGTERM lets sing-box release TUN routes and DNS cleanly.
 	if err := s.child.Process.Signal(syscall.SIGTERM); err != nil {
-		return "disconnect failed: " + err.Error()
+		return "disconnect failed: " + err.Error(), 0
 	}
 	s.child = nil
 	s.dnsStatus = "off"
-	return fmt.Sprintf("disconnected (pid %d)", pid)
+	return fmt.Sprintf("disconnected (pid %d)", pid), s.restarts
 }
 
 func (s *Server) status() string {

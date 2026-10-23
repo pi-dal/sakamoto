@@ -28,7 +28,7 @@ func TestRepairLegacySupervisorStartsAndVerifiesNativeCore(t *testing.T) {
 	recoveryOK(t, portListener.Close())
 	raw := fmt.Sprintf(`{"log":{"disabled":true},"services":[{"type":"api","listen":"127.0.0.1","listen_port":%d,"secret":"%s"}],"outbounds":[{"type":"direct","tag":"direct"}]}`, port, strings.Repeat("l", 48))
 	path := filepath.Join(dir, "sakamoto.yaml")
-	recoveryOK(t, os.WriteFile(path, []byte("dns_guard:\n  enabled: false\n"), 0600))
+	recoveryOK(t, os.WriteFile(path, []byte(fmt.Sprintf("api:\n  url: http://127.0.0.1:%d\n  secret: %s\ndns_guard:\n  enabled: false\n", port, strings.Repeat("l", 48))), 0600))
 	recoveryOK(t, os.WriteFile(filepath.Join(dir, "config.json"), []byte(raw), 0600))
 	socket, err := net.Listen("unix", filepath.Join(dir, SockName))
 	recoveryOK(t, err)
@@ -78,6 +78,10 @@ func TestRepairLegacySupervisorStartsAndVerifiesNativeCore(t *testing.T) {
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	legacyMode, legacyErr := RepairAt(ctx, path, RepairOptions{Regenerate: true, Restart: true})
+	if legacyErr == nil || legacyMode.Problem != "service_upgrade_required" {
+		t.Fatal("legacy supervisor accepted configuration recovery", legacyMode, legacyErr)
+	}
 	result, err := RepairAt(ctx, path, RepairOptions{})
 	recoveryOK(t, err)
 	again, err := RepairAt(ctx, path, RepairOptions{CheckOnly: true})
@@ -85,5 +89,8 @@ func TestRepairLegacySupervisorStartsAndVerifiesNativeCore(t *testing.T) {
 	if !result.Verified || result.PID == 0 || again.PID != result.PID || again.Action != "none" {
 		t.Fatal("legacy repair failed or restarted a healthy core", result, again)
 	}
-	writeRecoveryArtifact(t, map[string]any{"scenario": "quick-repair-legacy-supervisor", "real_unix_socket": true, "native_api_verified": true, "healthy_pid_retained": true})
+	if !result.UpgradeRequired || !again.UpgradeRequired {
+		t.Fatal("legacy service identity was hidden")
+	}
+	writeRecoveryArtifact(t, map[string]any{"scenario": "quick-repair-legacy-supervisor", "advanced_repair_refused_before_disconnect": true, "service_update_reported": true, "real_unix_socket": true, "native_api_verified": true, "healthy_pid_retained": true})
 }

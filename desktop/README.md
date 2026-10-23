@@ -139,6 +139,20 @@ confirmation because it interrupts active connections. Maintenance holds remain
 explicit and cannot be bypassed by these actions. Safe summaries and check times
 are shown; private server errors and credentials are discarded.
 
+**Restore working configuration…** restores the full verified runtime and its
+matching retained engine. **Regenerate configuration…** builds saved sources in
+a private directory and checks the candidate before replacement. Each action
+requires confirmation; preparation failures retain the active process and files.
+No usable working copy disables restoration. A new working receipt follows the
+existing five-minute stability requirements.
+
+A legacy supervisor shows **Update background service…**, which opens the bundled
+CLI's locally confirmed update in Terminal. It stages independent rescue before
+disconnecting, retains the old executable outside Homebrew, verifies restored
+network settings, and checks API/DNS after an approved reconnect. Updating the
+app alone does not activate the new service capability. See
+[configuration repair](../docs/configuration-repair.md).
+
 **Test route**, under Automatic route, asks the independent watcher for fresh group tests. It
 shows queued, busy, cooldown, manual, disabled, maintenance or unavailable states.
 Acknowledgement never claims that network recovery has been verified, and manual

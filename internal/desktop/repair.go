@@ -14,11 +14,14 @@ import (
 // HealthReport is a public projection. Supervisor detail, credentials, private
 // paths and raw errors never enter the view model.
 type HealthReport struct {
-	State     string
-	Action    string
-	Verified  bool
-	Summary   string
-	CheckedAt time.Time
+	State             string
+	Action            string
+	Verified          bool
+	Summary           string
+	CheckedAt         time.Time
+	Problem           string
+	UpgradeRequired   bool
+	FallbackAvailable bool
 }
 
 type RecoveryReport struct {
@@ -66,6 +69,22 @@ func (c *Controller) Repair(ctx context.Context, restart bool) error {
 	if restart {
 		name = "Reconnecting core"
 	}
+	return c.performRepair(ctx, name, func(ctx context.Context) (HealthReport, error) { return runtimeRepair(ctx, c.path, false, restart) })
+}
+
+func (c *Controller) RepairConfiguration(ctx context.Context, fallback bool) error {
+	if c.opts.ExternalCore {
+		return errors.New("the external service owns configuration recovery")
+	}
+	name := "Regenerating configuration"
+	if fallback {
+		name = "Restoring configuration"
+	}
+	return c.performRepair(ctx, name, func(ctx context.Context) (HealthReport, error) {
+		return runtimeConfigurationRepair(ctx, c.path, fallback)
+	})
+}
+func (c *Controller) performRepair(ctx context.Context, name string, repair func(context.Context) (HealthReport, error)) error {
 	return c.perform(ctx, name, func(ctx context.Context) error {
 		checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
@@ -76,7 +95,7 @@ func (c *Controller) Repair(ctx context.Context, restart bool) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		report, err := runtimeRepair(ctx, c.path, false, restart)
+		report, err := repair(ctx)
 		c.publishHealth(report)
 		return err
 	})

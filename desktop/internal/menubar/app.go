@@ -103,12 +103,12 @@ func (a *application) ready() error {
 		login = mygo.App.OpenAtLogin()
 	}
 	mygo.Theme.SetSource(mygo.ThemeSource(strings.ToLower(appearance)))
-	var tui, recovery func() error
+	var tui, recovery, updateService func() error
 	if runtime.GOOS == "darwin" {
-		tui, recovery = a.openTUI, a.openRecovery
+		tui, recovery, updateService = a.openTUI, a.openRecovery, a.updateService
 	}
 	a.panel = NewPanel(a.backend, Actions{
-		Dispatch: a.dispatchAction, OpenTUI: tui, OpenRecovery: recovery, RevealConfig: a.revealConfig,
+		Dispatch: a.dispatchAction, OpenTUI: tui, OpenRecovery: recovery, UpdateService: updateService, RevealConfig: a.revealConfig,
 		SetAppearance: a.setAppearance, SetLogin: mygo.App.SetOpenAtLogin, Quit: mygo.App.Quit,
 		Appearance: appearance, OpenAtLogin: login, Demo: a.opts.Demo,
 	})
@@ -165,6 +165,7 @@ func (a *application) show() {
 		a.panel.list = ui.ListState{}
 		a.panel.listFilter = ""
 		a.panel.confirmRestart = false
+		a.panel.confirmConfig = ""
 		a.window = nil
 		a.backend.SetVisible(false)
 		if a.tray == nil && a.opts.VerifyDirectory == "" {
@@ -246,12 +247,14 @@ func (a *application) menu() *mygo.Menu {
 			a.panel.settings = false
 			a.panel.recovery = false
 			a.panel.confirmRestart = false
+			a.panel.confirmConfig = ""
 			a.show()
 		}},
 		{Label: "Check & repair…", Click: func(*mygo.MenuItem, *mygo.Window) {
 			a.panel.settings = false
 			a.panel.recovery = true
 			a.panel.confirmRestart = false
+			a.panel.confirmConfig = ""
 			a.show()
 		}},
 		mygo.Separator(),
@@ -259,6 +262,7 @@ func (a *application) menu() *mygo.Menu {
 			a.panel.recovery = false
 			a.panel.settings = true
 			a.panel.confirmRestart = false
+			a.panel.confirmConfig = ""
 			a.show()
 		}},
 		{Role: mygo.RoleQuit, Label: "Quit Sakamoto"},

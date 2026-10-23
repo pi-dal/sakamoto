@@ -8,9 +8,11 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,6 +24,8 @@ import (
 // ---------------- Main generation pipeline ----------------
 
 type Options struct {
+	Context           context.Context
+	RequireNodes      bool // recovery must not replace proxy routing with an empty placeholder
 	ConfPath          string
 	SRJSONPath        string
 	NodesFile         string // optional share-link file
@@ -71,10 +75,24 @@ func Run(o Options) error {
 		return err
 	}
 
+	ctx := o.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	hc := o.HTTPClient
 	if hc == nil {
 		hc = &http.Client{Timeout: 30 * time.Second}
-	} // Honors HTTP(S)_PROXY from the environment.
+	}
+	client := *hc
+	transport := client.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	client.Transport = contextTransport{ctx, transport}
+	hc = &client
 
 	p, err := parseConf(o.ConfPath, hc)
 	if err != nil {
@@ -105,6 +123,9 @@ func Run(o Options) error {
 	outbounds, nodes, exitTag, mainMembers, err := buildOutbounds(o, cfg, hc)
 	if err != nil {
 		return err
+	}
+	if o.RequireNodes && len(nodes) == 0 {
+		return fmt.Errorf("no supported proxy nodes; restore source files before regenerating")
 	}
 
 	// 6) Map [General] dns-server entries to UDP, HTTPS, or TLS resolvers.
@@ -152,7 +173,7 @@ func Run(o Options) error {
 			return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
 		}
 	}
-	resolveContext, cancelResolve := context.WithTimeout(context.Background(), 3*time.Second)
+	resolveContext, cancelResolve := context.WithTimeout(ctx, 3*time.Second)
 	serverRoutes, unresolved := mobileconf.ResolveProxyServerRoutes(resolveContext, outbounds, lookup)
 	cancelResolve()
 	bypass = append(bypass, serverRoutes...)
@@ -223,6 +244,14 @@ func Run(o Options) error {
 			routeRules[at] = map[string]any{"domain": learned.Domains, "action": "route", "outbound": exitTag}
 		}
 	}
+	endpoint, err := url.Parse(cfg.API.URL)
+	if err != nil {
+		return err
+	}
+	apiPort, err := strconv.Atoi(endpoint.Port())
+	if err != nil || apiPort < 1 || apiPort > 65535 {
+		return fmt.Errorf("api.url must use a valid TCP port")
+	}
 	config := map[string]any{
 		"log": map[string]any{"level": cfg.LogLevel, "timestamp": true},
 		"dns": map[string]any{
@@ -238,7 +267,7 @@ func Run(o Options) error {
 			"default_domain_resolver": map[string]any{"server": dns.ordinaryResolver, "strategy": "ipv4_only"},
 		},
 		"services": []map[string]any{{
-			"type": "api", "listen": "127.0.0.1", "listen_port": 9090,
+			"type": "api", "listen": endpoint.Hostname(), "listen_port": apiPort,
 			"secret": cfg.API.Secret, "dashboard": map[string]any{"enabled": false},
 		}},
 	}
