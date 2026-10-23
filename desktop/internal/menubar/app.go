@@ -251,6 +251,7 @@ func (a *application) menu() *mygo.Menu {
 		{Label: "Open Sakamoto", Click: func(*mygo.MenuItem, *mygo.Window) {
 			a.panel.setConnections(false)
 			a.panel.settings = false
+			a.panel.configuration = false
 			a.panel.recovery = false
 			a.panel.confirmRestart = false
 			a.panel.confirmConfig = ""
@@ -259,6 +260,7 @@ func (a *application) menu() *mygo.Menu {
 		{Label: "Check & repair…", Click: func(*mygo.MenuItem, *mygo.Window) {
 			a.panel.setConnections(false)
 			a.panel.settings = false
+			a.panel.configuration = false
 			a.panel.recovery = true
 			a.panel.confirmRestart = false
 			a.panel.confirmConfig = ""
@@ -268,6 +270,7 @@ func (a *application) menu() *mygo.Menu {
 		{Label: "Settings…", Click: func(*mygo.MenuItem, *mygo.Window) {
 			a.panel.setConnections(false)
 			a.panel.recovery = false
+			a.panel.configuration = false
 			a.panel.settings = true
 			a.panel.confirmRestart = false
 			a.panel.confirmConfig = ""

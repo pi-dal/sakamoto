@@ -14,9 +14,11 @@ import (
 
 // Demo never reads runtime files, opens an API connection or controls a tunnel.
 type Demo struct {
-	mu      sync.Mutex
-	state   desktop.Snapshot
-	changes chan struct{}
+	mu                 sync.Mutex
+	state              desktop.Snapshot
+	changes            chan struct{}
+	configuration      desktop.Configuration
+	configurationSaved bool
 }
 
 func NewDemo() *Demo {
@@ -28,7 +30,16 @@ func NewDemo() *Demo {
 		{Tag: "Demo Frankfurt", Type: "test", UrlTestDelay: -1, UrlTestTime: now},
 		{Tag: "Demo San Francisco", Type: "test", UrlTestDelay: 145, UrlTestTime: now},
 	}
-	return &Demo{changes: make(chan struct{}, 1), state: desktop.Snapshot{
+	return &Demo{changes: make(chan struct{}, 1), configuration: desktop.Configuration{Fields: []desktop.ConfigurationField{
+		{Section: "Network", Key: "chain_enabled", Label: "Chain SOCKS exit", Kind: desktop.ConfigBool, Value: "on"},
+		{Section: "Network", Key: "strict_route", Label: "Strict routing", Kind: desktop.ConfigBool, Value: "off"},
+		{Section: "Network", Key: "tun_stack", Label: "TUN stack", Kind: desktop.ConfigChoice, Value: "gvisor", Choices: []string{"system", "gvisor", "mixed"}},
+		{Section: "DNS", Key: "dns_enabled", Label: "Protected system DNS", Kind: desktop.ConfigBool, Value: "off"},
+		{Section: "DNS", Key: "dns_service", Label: "DNS network service", Kind: desktop.ConfigText, Value: "Wi-Fi"},
+		{Section: "Traffic policy", Key: "experiment_mode", Label: "Unmatched policy", Kind: desktop.ConfigChoice, Value: "off", Choices: []string{"off", "on", "auto"}},
+		{Section: "Advanced", Key: "log_level", Label: "Log level", Kind: desktop.ConfigChoice, Value: "info", Choices: []string{"error", "warn", "info", "debug"}},
+		{Section: "Fallback", Key: "fallback_enabled", Label: "Automatic fallback", Kind: desktop.ConfigBool, Value: "on"},
+	}, SubscriptionCount: 2, PolicyCount: 1, NodesPath: "~/.sakamoto/nodes.txt"}, state: desktop.Snapshot{
 		Observing: true, Service: core.ServiceRunning, Phase: core.PhaseReachable, Probe: core.ProbeReachable, ProbePath: core.PathBoth,
 		ConfigReady: true, APIReady: true, DNS: "protected", Health: desktop.HealthReport{FallbackAvailable: true}, Mode: "Rule", Modes: []string{"Rule", "Global", "Direct"}, Tests: map[string]core.NodeStatus{},
 		Traffic:          desktop.Traffic{Available: true, Downlink: 6 * 1024 * 1024, Uplink: 384 * 1024, DownlinkTotal: 235 * 1024 * 1024, UplinkTotal: 12 * 1024 * 1024},
@@ -46,6 +57,27 @@ func NewDemo() *Demo {
 		},
 	}}
 }
+func (d *Demo) Configuration() (desktop.Configuration, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	value := d.configuration
+	value.Fields = append([]desktop.ConfigurationField(nil), d.configuration.Fields...)
+	return value, nil
+}
+func (d *Demo) ConfigurationChanged() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.configurationSaved
+}
+func (d *Demo) SaveConfiguration(_ context.Context, value desktop.Configuration) error {
+	return d.update(func(s *desktop.Snapshot) {
+		d.configuration = value
+		d.configuration.Fields = append([]desktop.ConfigurationField(nil), value.Fields...)
+		d.configurationSaved = true
+		s.Notice = core.Successf("Configuration saved")
+	})
+}
+
 func (d *Demo) Snapshot() desktop.Snapshot {
 	d.mu.Lock()
 	defer d.mu.Unlock()

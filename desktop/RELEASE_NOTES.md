@@ -1,3 +1,34 @@
+# Desktop 0.2.23
+
+The menu bar GUI now includes a validated editor for persistent settings that were
+previously available only in the TUI.
+
+- Edit Network, DNS, Traffic policy, Privacy, Local proxy, Advanced, Cloud sync
+  and Fallback settings from Settings, then Edit configuration.
+- Save validates the complete candidate and atomically replaces the sidecar only
+  after it can be loaded again. Invalid ports, DNS services, durations, paths,
+  modes and source lists leave the active configuration unchanged.
+- API URL and secret remain hidden and the existing API identity is preserved.
+- Saving does not restart the core. Check & repair provides the explicit
+  regenerate and reconnect boundary for applying saved changes.
+- Nodes, subscription sources and policy rule collections continue to use the TUI
+  list editors. The GUI exposes Open TUI for those workflows.
+- Light and dark configuration renders, save feedback and configuration failure
+  states are covered by the shared desktop E2E workflow.
+
+The feature does not replace the running supervisor, change the active service or
+connect a tunnel merely by opening or saving the editor.
+
+```sh
+brew update
+brew upgrade --cask pi-dal/tap/sakamoto-desktop
+```
+
+The separate CLI formula remains independent. See [desktop configuration](https://github.com/pi-dal/sakamoto/blob/main/docs/desktop-configuration.md)
+for the field groups, validation boundary and repeatable verification.
+
+---
+
 # Desktop 0.2.22
 
 The home header now opens **Connections**, a searchable live list of active

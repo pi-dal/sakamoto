@@ -84,6 +84,27 @@ func TestPanelControlsEndToEnd(t *testing.T) {
 	if backend.Snapshot().Mode != "Rule" || len(appearances) != 0 || len(logins) != 0 {
 		t.Fatal("navigation changed settings")
 	}
+	click("Edit configuration")
+	if !tt.HasText("Network") || !tt.HasText("Chain SOCKS exit") || !tt.HasText("Protected system DNS") {
+		t.Fatal("configuration groups or TUI settings are missing", tt.Texts())
+	}
+	save("configuration-light.png")
+	tt.SetDark(true)
+	tt.Frame()
+	save("configuration-dark.png")
+	tt.SetDark(false)
+	click("Chain SOCKS exit")
+	click("Save configuration")
+	if !backend.ConfigurationChanged() {
+		t.Fatal("configuration save was not dispatched")
+	}
+	if !tt.HasText("Configuration saved") {
+		t.Fatal("configuration save acknowledgement missing")
+	}
+	click("Back")
+	if !tt.HasText("Appearance") {
+		t.Fatal("configuration page did not return to settings")
+	}
 	click("System")
 	save("settings-select-light.png")
 	tt.Key(0, ui.KeyEnd)

@@ -136,13 +136,22 @@ events. Leaving it, hiding the panel or losing its stream clears live rows;
 reopening reads a fresh snapshot. Inspecting connections never closes them.
 See [protocol handling and repeatable verification](../docs/desktop-connections.md).
 
-Settings includes System/Light/Dark appearance, opt-in login startup and a config
-folder action. The TUI entry appears where a native CLI bundle is available.
+Settings includes System/Light/Dark appearance, opt-in login startup and a
+configuration editor. The editor exposes the persistent TUI settings grouped as
+Network, DNS, Traffic policy, Privacy, Local proxy, Advanced, Cloud sync and
+Fallback. Changes are validated and atomically saved without replacing the API
+identity. Saving does not restart the core; the page links to Check & repair for
+an explicit regenerate and reconnect. Nodes, subscription sources and routing
+policy collections remain in the TUI because they need list editors and secret-
+aware input. The TUI entry appears where a native CLI bundle is available.
 Configuration remains user-owned; appearance is a separate application preference.
 
 ## Check and repair
 
 The footer and tray menu open **Check & repair** without initiating a repair.
+Configuration edits use the same page and preserve the active file on validation
+failure. A saved edit is not treated as active runtime state until the user
+explicitly regenerates and reconnects.
 On macOS, **Check health** runs the existing read-only supervisor diagnosis;
 **Repair core** retains a healthy process and can start a stopped core or recover
 its last working configuration. **Reconnect core…** requires a separate inline
