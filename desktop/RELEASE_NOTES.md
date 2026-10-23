@@ -1,4 +1,19 @@
-# Desktop release
+# Desktop 0.2.20
+
+The shared tray panel now uses Radix UI Colors in both appearances, three text
+sizes and 0.5-point borders. Home, Settings and Check & repair use shorter copy,
+fewer helper paragraphs and consistent alignment. Popup/segment corners are
+concentric; content shadows and animated glass have been removed.
+
+- Neutral Slate surfaces, Indigo actions/selections, and semantic Green/Amber/Red
+  status colors follow Radix scale roles. Primary text stays readable on hover.
+- Routine results appear in their controls. Reconnect keeps its inline interruption
+  warning and explicit confirmation; queued route tests remain pending.
+- Search retains Unicode input, keyboard editing, Escape-to-clear and a named clear
+  action. Routing, node groups, appearance and login remain keyboard accessible.
+- Partially verified network paths keep their qualification. An external API can
+  be online while network verification is pending or retrying.
+- Every package includes Radix's MIT attribution.
 
 The native menu bar/tray client shares node selection, routing modes, latency,
 traffic and appearance across macOS, Windows and Linux.

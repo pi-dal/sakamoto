@@ -1,8 +1,10 @@
 # Shared desktop client
 
 Sakamoto uses one native Go view and controller across macOS, Windows and Linux.
-MyGo v0.6.2 owns the OS shell; Onevra v0.2026.14 supplies themed controls and
-Lucide icons. This separate Go module leaves the CLI/mobile dependency graph
+MyGo v0.6.2 owns input, accessibility and the OS shell; Onevra v0.2026.14 supplies
+Lucide icons. The shared panel styles MyGo bases with Radix UI Colors and concise
+operational copy, three text sizes (16/13/12), 0.5-point borders and immediate
+state changes. This separate Go module leaves the CLI/mobile dependency graph
 unchanged. No JavaScript frontend is used.
 
 ## Platform behavior
@@ -137,14 +139,14 @@ confirmation because it interrupts active connections. Maintenance holds remain
 explicit and cannot be bypassed by these actions. Safe summaries and check times
 are shown; private server errors and credentials are discarded.
 
-**Test automatic route** asks the independent watcher for fresh group tests. It
+**Test route**, under Automatic route, asks the independent watcher for fresh group tests. It
 shows queued, busy, cooldown, manual, disabled, maintenance or unavailable states.
 Acknowledgement never claims that network recovery has been verified, and manual
 routes remain under the watcher's existing policy. The GUI does not run another
 fallback loop. Its shared watcher client is a small protocol package with a
 four-second timeout and cancellation; it does not link a watcher runtime.
 
-If the supervisor itself is unavailable, **Open service recovery** deliberately
+If the supervisor itself is unavailable, **Open recovery terminal** deliberately
 opens the bundled `sakamoto --config <path> repair` command in Terminal, where
 administrator authorization can be obtained. It does not launch automatically.
 Windows/Linux and explicit external-core mode offer API diagnosis and the config
@@ -176,6 +178,7 @@ Artifacts under `dist/menubar-verification/` include:
 - `resident-repair-e2e.json`: idle observations and public repair/recovery protocol results.
 - `repair-view-e2e.json`, `repair-*.png`: input-driven checks, reconnect confirmation and repair content.
 - `controller-e2e.json`, `external-core-e2e.json`: service/API boundaries.
+- `controls-view-e2e.json`, `settings-*.png`: routing/group keyboard choices, appearance persistence, login switching, search clearing, popup themes and opaque Radix backgrounds.
 - `panel-workflow.json`, `panel-*.png`: shared event workflow and renders.
 - `shared-external-*.png`: Unicode/long-name and external ownership renders.
 - `native-app.json`, `macos-*.png` or `desktop-*.png`: packaged demo lifecycle/capture provenance.

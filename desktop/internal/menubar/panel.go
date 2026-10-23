@@ -110,19 +110,17 @@ func (p *Panel) local(action func() error) {
 		return
 	}
 	if err := action(); err != nil {
-		p.localNotice = "The action could not be completed. Check permissions and try again."
+		p.localNotice = "Could not complete this action. Try again."
 	} else {
 		p.localNotice = ""
 	}
 }
 
 func (p *Panel) View(c *ui.Context) {
+	c.SetTheme(radixTheme(c.Theme().Dark))
 	t := c.Theme()
-	c.Root().Background(ui.Transparent)
-	body := ui.Column(c).Fill()
-	if !c.Vibrancy() {
-		body.Background(t.Background)
-	}
+	c.Root().Background(t.Background)
+	body := ui.Column(c).Fill().Background(t.Background)
 	body.Padding(20).Gap(14).Children(func() {
 		p.header(c)
 		if p.recovery {
@@ -139,21 +137,20 @@ func (p *Panel) View(c *ui.Context) {
 func (p *Panel) header(c *ui.Context) {
 	ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
 		if p.settings || p.recovery {
-			components.IconButton(c, lucide.ArrowLeft(), "Back", components.IconButtonPlain).OnClick(func() { p.settings = false; p.recovery = false; p.confirmRestart = false; p.localNotice = "" })
+			panelIconButton(c, lucide.ArrowLeft(), "Back", false).OnClick(func() { p.settings = false; p.recovery = false; p.confirmRestart = false; p.localNotice = "" })
 			title := "Settings"
 			if p.recovery {
 				title = "Check & repair"
 			}
-			ui.Text(c, title).FontSize(17).Bold().Grow(1)
-			if p.actions.Demo {
-				ui.Text(c, "Demo session").FontSize(11).TextColor(c.Theme().TextMuted)
-			}
+			ui.Text(c, title).FontSize(fontTitle).Bold().Grow(1)
 		} else {
-			ui.Text(c, "sakamoto").FontSize(17).Bold().Grow(1)
-			if p.actions.Demo {
-				ui.Text(c, "Demo session").FontSize(11).TextColor(c.Theme().TextMuted)
-			}
-			components.IconButton(c, lucide.Settings(), "Settings", components.IconButtonPlain).OnClick(func() { p.settings = true })
+			ui.Text(c, "sakamoto").FontSize(fontTitle).Bold().Grow(1)
+		}
+		if p.actions.Demo {
+			ui.Text(c, "Demo session").FontSize(fontSmall).TextColor(c.Theme().TextMuted)
+		}
+		if !p.settings && !p.recovery {
+			panelIconButton(c, lucide.Settings(), "Settings", false).OnClick(func() { p.settings = true })
 		}
 	})
 }
@@ -164,8 +161,10 @@ func (p *Panel) home(c *ui.Context) {
 	ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
 		components.Icon(c, icon).Size(22, 22).TextColor(color)
 		ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
-			ui.Text(c, label).FontSize(14).Bold()
-			ui.Text(c, detail).FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, label).Bold()
+			if detail != "" {
+				ui.Text(c, detail).FontSize(fontSmall).TextColor(t.TextMuted)
+			}
 		})
 		if !s.ExternalCore {
 			text := "Connect"
@@ -178,7 +177,7 @@ func (p *Panel) home(c *ui.Context) {
 				text = s.Busy + "…"
 			}
 			disabled := !s.Observing || s.Busy != "" || s.Service == core.ServiceUnavailable || (s.Service != core.ServiceRunning && (!s.ConfigReady || s.Conflict))
-			components.Button(c, text, variant).MinWidth(88).Height(32).Disabled(disabled).OnClick(func() {
+			panelButton(c, text, variant, disabled).MinWidth(88).OnClick(func() {
 				if s.Service == core.ServiceRunning {
 					p.submitAction(p.backend.Disconnect)
 				} else {
@@ -188,57 +187,68 @@ func (p *Panel) home(c *ui.Context) {
 		}
 	})
 	if s.ExternalCore {
-		ui.Text(c, "Managed externally").FontSize(11).TextColor(t.TextMuted)
+		ui.Text(c, "Managed externally").FontSize(fontSmall).TextColor(t.TextMuted)
 	}
 	p.modeControl(c)
 	p.route(c)
 	p.traffic(c)
-	ui.Divider(c)
+	panelHairline(c)
 	p.nodes(c)
 }
 
 func phasePresentation(s desktop.Snapshot, t *ui.Theme) (string, string, *ui.SVG, ui.Color) {
 	if !s.Observing {
-		return "Refreshing status", "Checking the connection service…", lucide.Activity(), t.TextMuted
+		return "Refreshing status…", "", lucide.Activity(), t.TextMuted
 	}
 	if s.ExternalCore {
 		if !s.ConfigReady {
-			return "Configuration needed", "Open your core configuration folder.", lucide.CircleAlert(), t.Warning
+			return "Configuration needed", "Check the configuration in Settings.", lucide.CircleAlert(), t.Warning
 		}
 		if s.Service != core.ServiceRunning {
-			return "Core unavailable", "Check the service and API credentials.", lucide.WifiOff(), t.TextMuted
+			return "Core unavailable", "Check the service and API settings.", lucide.WifiOff(), t.TextMuted
 		}
 		if !s.APIReady {
-			return "Connecting to core", "Waiting for the native API…", lucide.Activity(), t.Accent
+			return "Connecting to core…", "", lucide.Activity(), t.Accent
 		}
 		if s.Probe == core.ProbeReachable {
-			return "Core online", "API connected · network reachable", lucide.CircleCheck(), t.Success
+			detail := "Network reachable"
+			if s.ProbePath == core.PathSystemOnly || s.ProbePath == core.PathProxyOnly {
+				detail = "Reachable via " + s.ProbePath
+			}
+			return "Core online", detail, lucide.CircleCheck(), t.Success
 		}
-		return "Core online", "API connected · checking network…", lucide.Activity(), t.Accent
+		if s.Probe == core.ProbeUnverified {
+			return "Core online", "Network unverified. Retrying…", lucide.CircleAlert(), t.Warning
+		}
+		return "Core online", "Checking network…", lucide.Activity(), t.Accent
 	}
 	if !s.ConfigReady && s.Service != core.ServiceRunning {
-		return "Configuration needed", "Open the TUI to finish setup.", lucide.CircleAlert(), t.Warning
+		return "Configuration needed", "Open the TUI from Settings.", lucide.CircleAlert(), t.Warning
 	}
 	switch s.Phase {
 	case core.PhaseReachable:
-		return "Network reachable", s.ProbePath, lucide.CircleCheck(), t.Success
+		detail := ""
+		if s.ProbePath == core.PathSystemOnly || s.ProbePath == core.PathProxyOnly {
+			detail = s.ProbePath
+		}
+		return "Network reachable", detail, lucide.CircleCheck(), t.Success
 	case core.PhaseStarting:
-		return "Connecting…", "Waiting for the tunnel to start.", lucide.Power(), t.Accent
+		return "Connecting…", "", lucide.Power(), t.Accent
 	case core.PhaseStopping:
-		return "Disconnecting…", "Waiting for the tunnel to stop.", lucide.Power(), t.TextMuted
+		return "Disconnecting…", "", lucide.Power(), t.TextMuted
 	case core.PhaseTUNRunning:
-		return "Tunnel running", "Checking network reachability…", lucide.Activity(), t.Accent
+		return "Tunnel running", "Checking network…", lucide.Activity(), t.Accent
 	case core.PhaseUnverified:
-		return "Tunnel running", "Network unverified; retrying the probe.", lucide.CircleAlert(), t.Warning
+		return "Tunnel running", "Network unverified. Retrying…", lucide.CircleAlert(), t.Warning
 	case core.PhaseConflict:
-		return "VPN conflict", "Disconnect Shadowrocket before reconnecting.", lucide.TriangleAlert(), t.Danger
+		return "VPN conflict", "Disconnect Shadowrocket to continue.", lucide.TriangleAlert(), t.Danger
 	case core.PhaseUnavailable:
-		return "Service unavailable", "Open Check & repair for service recovery.", lucide.CircleAlert(), t.Warning
+		return "Service unavailable", "Open Check & repair.", lucide.CircleAlert(), t.Warning
 	default:
 		if s.Conflict {
-			return "Disconnected", "Disconnect Shadowrocket before connecting.", lucide.WifiOff(), t.Warning
+			return "Disconnected", "Disconnect Shadowrocket to connect.", lucide.WifiOff(), t.Warning
 		}
-		return "Disconnected", "Ready when you are.", lucide.WifiOff(), t.TextMuted
+		return "Disconnected", "", lucide.WifiOff(), t.TextMuted
 	}
 }
 
@@ -255,7 +265,6 @@ func (p *Panel) modeControl(c *ui.Context) {
 		}
 	}
 	if len(labels) == 0 {
-		ui.Text(c, "Routing mode available when connected").FontSize(12).TextColor(c.Theme().TextMuted)
 		return
 	}
 	selected := -1
@@ -264,7 +273,7 @@ func (p *Panel) modeControl(c *ui.Context) {
 			selected = i
 		}
 	}
-	if ui.Segmented(c.Key("routing"), &selected, labels...).Label("Routing mode").Disabled(!s.APIReady || s.Busy != "").Changed() && selected >= 0 && selected < len(values) {
+	if panelSegmented(c.Key("routing"), &selected, labels, !s.APIReady || s.Busy != "").Label("Routing mode").Changed() && selected >= 0 && selected < len(values) {
 		mode := values[selected]
 		p.submitAction(func(ctx context.Context) error { return p.backend.SetMode(ctx, mode) })
 	}
@@ -292,22 +301,21 @@ func (p *Panel) route(c *ui.Context) {
 		return
 	}
 	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "Route").FontSize(11).TextColor(c.Theme().TextMuted)
-		ui.Text(c, strings.Join(chain, " → ")).Grow(1).MinWidth(0).FontSize(12).SingleLine().TextColor(c.Theme().Text).Label("Active route: " + strings.Join(chain, ", "))
+		ui.Text(c, "Route").FontSize(fontSmall).TextColor(c.Theme().TextMuted)
+		ui.Text(c, strings.Join(chain, " → ")).Grow(1).MinWidth(0).FontSize(fontSmall).SingleLine().TextColor(c.Theme().Text).Label("Active route: " + strings.Join(chain, ", "))
 	})
 }
 
 func (p *Panel) traffic(c *ui.Context) {
 	t := p.snapshot.Traffic
 	if !t.Available {
-		ui.Text(c, "Traffic —").FontSize(12).TextColor(c.Theme().TextMuted)
 		return
 	}
 	ui.Row(c).Gap(12).Children(func() {
 		for _, value := range []struct{ label, value string }{{"Download", formatBytes(t.Downlink/2) + "/s"}, {"Upload", formatBytes(t.Uplink/2) + "/s"}, {"Transferred", formatBytes(t.DownlinkTotal + t.UplinkTotal)}} {
-			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
-				ui.Text(c, value.label).FontSize(11).TextColor(c.Theme().TextMuted)
-				ui.Text(c, value.value).FontSize(13).SingleLine()
+			ui.Column(c).Width(0).Grow(1).MinWidth(0).Gap(4).Children(func() {
+				ui.Text(c, value.label).FontSize(fontSmall).TextColor(c.Theme().TextMuted)
+				ui.Text(c, value.value).SingleLine()
 			})
 		}
 	})
@@ -334,14 +342,14 @@ func (p *Panel) nodes(c *ui.Context) {
 	if !s.APIReady {
 		ui.Column(c).Grow(1).Gap(6).Padding(12, 0).Children(func() {
 			ui.Text(c, "Nodes").Bold()
-			message := "Connect to choose a node and test latency."
+			message := "Connect to load nodes."
 			if s.ExternalCore {
 				message = "Start the core service to load nodes."
 			}
 			if s.Service == core.ServiceRunning {
-				message = "Reconnecting to the native API…"
+				message = "Waiting for core API…"
 			}
-			ui.Text(c, message).FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, message).FontSize(fontSmall).TextColor(t.TextMuted)
 		})
 		return
 	}
@@ -357,15 +365,14 @@ func (p *Panel) nodes(c *ui.Context) {
 			}
 		}
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-			ui.Text(c, "Nodes").FontSize(14).Bold().Grow(1)
-			ui.Select(c.Key("group"), &p.group, groupTags).Label("Node group").MaxWidth(210)
-		})
-		ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
-			ui.SearchField(c.Key("query"), &p.query).Placeholder("Search nodes").Label("Search nodes").Grow(1)
-			if p.query != "" {
-				components.IconButton(c, lucide.X(), "Clear search", components.IconButtonCompact).OnClick(func() { p.query = "" })
+			ui.Text(c, "Nodes").Bold().Grow(1)
+			if len(groupTags) > 1 {
+				panelSelect(c.Key("group"), &p.group, groupTags).Label("Node group").MaxWidth(210)
+			} else if len(groupTags) == 1 {
+				ui.Text(c, groupTags[0]).FontSize(fontSmall).TextColor(t.TextMuted).MaxWidth(210).SingleLine()
 			}
 		})
+		panelSearch(c.Key("query"), &p.query)
 		group = nil
 		for _, g := range s.Groups {
 			if g.Tag == p.group {
@@ -390,7 +397,11 @@ func (p *Panel) nodes(c *ui.Context) {
 		p.list.Label = func(i int) string { return items[i].Tag }
 		ui.List(c.Key("nodes"), &p.list, len(items), func(i int) { p.node(c, group, items[i]) }).Grow(1).MinHeight(90).Children(func() {
 			if len(items) == 0 {
-				ui.Text(c, "No matching nodes").FontSize(12).TextColor(t.TextMuted).Padding(12, 0)
+				message := "No nodes available"
+				if p.query != "" {
+					message = "No matching nodes"
+				}
+				ui.Text(c, message).FontSize(fontSmall).TextColor(t.TextMuted).Padding(12, 0)
 			}
 		})
 	})
@@ -407,91 +418,89 @@ func (p *Panel) node(c *ui.Context, group *daemon.Group, item *daemon.GroupItem)
 	case core.NodeTesting:
 		status = "Testing…"
 	case core.NodeReachable:
-		status = fmt.Sprintf("Reachable %d ms", item.UrlTestDelay)
+		status = fmt.Sprintf("%d ms", item.UrlTestDelay)
 	case core.NodeFailed:
-		status = "Failed / timed out"
+		status = "Test failed"
 	}
 	ui.Row(c.Key(group.Tag + "/" + item.Tag)).AlignItems(ui.Center).Gap(4).Children(func() {
-		components.Button(c, "", components.ButtonGhost).Label("Use "+item.Tag).Disabled(p.snapshot.Busy != "").Grow(1).MinWidth(0).Height(44).Padding(8, 5).Children(func() {
+		panelButton(c, "", components.ButtonGhost, p.snapshot.Busy != "").Label("Use "+item.Tag).Grow(1).MinWidth(0).Height(44).Padding(4, 0).Border(0, ui.Transparent).Gap(8).Children(func() {
 			if group.Selected == item.Tag {
-				components.Icon(c, lucide.Check()).Size(15, 15).TextColor(t.Accent).Label("Selected in " + group.Tag)
+				_, ink := selectedColors(c)
+				components.Icon(c, lucide.Check()).Size(16, 16).TextColor(ink).Label("Selected in " + group.Tag)
 			} else {
-				ui.Box(c).Size(15, 15)
+				ui.Box(c).Size(16, 16)
 			}
-			ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
-				name := ui.Text(c, item.Tag).SingleLine().FontSize(13)
+			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+				name := ui.Text(c, item.Tag).SingleLine()
 				if group.Selected == item.Tag {
 					name.Bold()
 				}
-				ui.Text(c, status).FontSize(11).TextColor(t.TextMuted)
+				ui.Text(c, status).FontSize(fontSmall).TextColor(t.TextMuted)
 			})
 		}).OnClick(func() {
 			p.submitAction(func(ctx context.Context) error { return p.backend.SelectNode(ctx, group.Tag, item.Tag) })
 		})
-		components.IconButton(c, lucide.Activity(), "Test "+item.Tag, components.IconButtonPlain).Disabled(p.snapshot.Busy != "" || state == core.NodeTesting).OnClick(func() { p.submitAction(func(ctx context.Context) error { return p.backend.Test(ctx, item.Tag) }) })
+		panelIconButton(c, lucide.Activity(), "Test "+item.Tag, p.snapshot.Busy != "" || state == core.NodeTesting).OnClick(func() { p.submitAction(func(ctx context.Context) error { return p.backend.Test(ctx, item.Tag) }) })
 	})
 }
 
 func (p *Panel) settingsView(c *ui.Context) {
 	t := c.Theme()
-	ui.Scroll(c).Grow(1).Gap(16).Children(func() {
-		ui.Column(c).Gap(6).Children(func() {
-			ui.Text(c, "Appearance").Bold()
-			if ui.Select(c.Key("appearance"), &p.appearance, []string{"System", "Light", "Dark"}).Label("Appearance").Changed() {
-				p.local(func() error {
-					if p.actions.SetAppearance != nil {
-						return p.actions.SetAppearance(p.appearance)
-					}
-					return nil
-				})
-			}
-		})
-		ui.Column(c).Gap(6).Children(func() {
+	ui.Scroll(c).Grow(1).Gap(20).Children(func() {
+		ui.Column(c).Gap(12).Children(func() {
+			ui.Row(c).AlignItems(ui.Center).Gap(12).Children(func() {
+				ui.Text(c, "Appearance").Grow(1)
+				if panelSelect(c.Key("appearance"), &p.appearance, []string{"System", "Light", "Dark"}).Label("Appearance").Changed() {
+					p.local(func() error {
+						if p.actions.SetAppearance != nil {
+							return p.actions.SetAppearance(p.appearance)
+						}
+						return nil
+					})
+				}
+			})
 			value := p.openAtLogin
-			if components.Switch(c.Key("login"), &value, "Open at login").Disabled(p.actions.Demo).Changed() {
+			if panelSwitch(c.Key("login"), &value, "Open at login", p.actions.Demo).Changed() {
 				if p.actions.SetLogin != nil {
 					if err := p.actions.SetLogin(value); err != nil {
-						p.localNotice = "Login launch could not be changed. Check your startup settings."
+						p.localNotice = "Could not change login startup. Check system startup settings."
 					} else {
 						p.openAtLogin = value
 					}
 				}
 			}
-			ui.Text(c, "Opening the app never connects the VPN.").FontSize(12).TextColor(t.TextMuted)
 		})
-		ui.Divider(c)
+		panelHairline(c)
 		ui.Column(c).Gap(8).Children(func() {
 			ui.Text(c, "Configuration").Bold()
 			if p.actions.OpenTUI != nil {
-				ui.Text(c, "Sources, rules and advanced settings are available in the TUI.").FontSize(12).TextColor(t.TextMuted)
-				components.Button(c, "Open TUI", components.ButtonSecondary).Disabled(p.actions.Demo).OnClick(func() { p.local(p.actions.OpenTUI) })
-			} else {
-				ui.Text(c, "Edit sources and rules in your core configuration.").FontSize(12).TextColor(t.TextMuted)
+				panelButton(c, "Open TUI", components.ButtonSecondary, p.actions.Demo).OnClick(func() { p.local(p.actions.OpenTUI) })
 			}
-			components.Button(c, "Open configuration folder", components.ButtonGhost).Disabled(p.actions.Demo).OnClick(func() { p.local(p.actions.RevealConfig) })
+			panelButton(c, "Open configuration folder", components.ButtonSecondary, p.actions.Demo || p.actions.RevealConfig == nil).OnClick(func() { p.local(p.actions.RevealConfig) })
 		})
-		ui.Divider(c)
-		ui.Column(c).Gap(6).Children(func() {
+		panelHairline(c)
+		ui.Column(c).Gap(8).Children(func() {
 			ui.Text(c, "Connection service").Bold()
-			dns := p.snapshot.DNS
-			if dns == "" {
-				dns = "unavailable"
-			}
 			if p.snapshot.ExternalCore {
-				ui.Text(c, "Managed externally").FontSize(12).TextColor(t.TextMuted)
-				ui.Text(c, "Your core service owns connection and DNS settings. Quitting this app leaves it running.").FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, "Managed externally").FontSize(fontSmall).TextColor(t.TextMuted)
 			} else {
-				ui.Text(c, "Protected DNS: "+dns).FontSize(12).TextColor(t.TextMuted)
-				ui.Text(c, "Quitting this app leaves the tunnel running. Use Disconnect to stop it.").FontSize(12).TextColor(t.TextMuted)
+				dns := p.snapshot.DNS
+				if dns == "" {
+					dns = "unavailable"
+				}
+				ui.Text(c, "DNS: "+dns).FontSize(fontSmall).TextColor(t.TextMuted)
 			}
-			ui.Text(c, "sakamoto · GPL-3.0-or-later").FontSize(11).TextColor(t.TextMuted)
 		})
+		ui.Text(c, "GPL-3.0-or-later").FontSize(fontSmall).TextColor(t.TextMuted)
 	})
 }
 
 func (p *Panel) footer(c *ui.Context) {
-	ui.Divider(c)
-	notice := p.snapshot.Notice.Text
+	panelHairline(c)
+	notice := ""
+	if p.snapshot.Notice.Kind == core.NoticeError {
+		notice = p.snapshot.Notice.Text
+	}
 	if p.recovery && (notice == p.snapshot.Health.Summary || notice == p.snapshot.Recovery.Summary) {
 		notice = ""
 	}
@@ -499,20 +508,14 @@ func (p *Panel) footer(c *ui.Context) {
 		notice = p.localNotice
 	}
 	if notice != "" {
-		color := c.Theme().TextMuted
-		if p.localNotice != "" || p.snapshot.Notice.Kind == core.NoticeError {
-			color = c.Theme().Danger
-		}
-		ui.Text(c, notice).FontSize(11).TextColor(color).MaxHeight(32).Label(notice)
+		ui.Text(c, notice).FontSize(fontSmall).TextColor(c.Theme().Danger).MaxHeight(44).Label(notice)
 	}
 	ui.Row(c).AlignItems(ui.Center).Children(func() {
 		if !p.recovery {
-			components.Button(c, "Check & repair", components.ButtonGhost).OnClick(func() { p.settings = false; p.recovery = true; p.confirmRestart = false; p.localNotice = "" })
-		} else {
-			ui.Spacer(c)
+			panelButton(c, "Check & repair", components.ButtonGhost, false).Padding(6, 0).Border(0, ui.Transparent).OnClick(func() { p.settings = false; p.recovery = true; p.confirmRestart = false; p.localNotice = "" })
 		}
 		ui.Spacer(c)
-		components.Button(c, "Quit App", components.ButtonGhost).OnClick(func() {
+		panelButton(c, "Quit app", components.ButtonGhost, false).Padding(6, 0).Border(0, ui.Transparent).OnClick(func() {
 			if p.actions.Quit != nil {
 				p.actions.Quit()
 			}

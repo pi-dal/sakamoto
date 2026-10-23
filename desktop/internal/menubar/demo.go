@@ -110,9 +110,9 @@ func (d *Demo) SelectNode(_ context.Context, group, tag string) error {
 }
 func (d *Demo) CheckHealth(context.Context) error {
 	return d.update(func(s *desktop.Snapshot) {
-		summary := "Demo core health verified. Existing process retained."
+		summary := "Core API and DNS verified."
 		if s.ExternalCore {
-			summary = "Demo core API responds. The external service manages the tunnel and DNS."
+			summary = "Core API verified."
 		}
 		s.Health = desktop.HealthReport{State: "healthy", Action: "none", Verified: true, CheckedAt: time.Now(), Summary: summary}
 		s.Notice = core.Successf("%s", s.Health.Summary)
@@ -123,9 +123,9 @@ func (d *Demo) Repair(_ context.Context, restart bool) error {
 		return errors.New("the external service owns repair")
 	}
 	return d.update(func(s *desktop.Snapshot) {
-		action, summary := "none", "Demo core health verified. Existing process retained."
+		action, summary := "none", "Core API and DNS verified."
 		if restart {
-			action, summary = "restarted", "Demo core reconnected and verified."
+			action, summary = "restarted", "Core reconnected. API and DNS verified."
 		}
 		state := "healthy"
 		if restart {
@@ -140,7 +140,7 @@ func (d *Demo) RecoverRoute(context.Context) error {
 		return errors.New("the external service owns route recovery")
 	}
 	return d.update(func(s *desktop.Snapshot) {
-		s.Recovery = desktop.RecoveryReport{State: "queued", Summary: "Route tests requested. Recovery is not yet verified.", RequestedAt: time.Now()}
+		s.Recovery = desktop.RecoveryReport{State: "queued", Summary: "Route tests queued.", RequestedAt: time.Now()}
 		s.Notice = core.Progressf("%s", s.Recovery.Summary)
 	})
 }

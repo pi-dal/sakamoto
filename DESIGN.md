@@ -2,157 +2,202 @@
 name: Sakamoto desktop
 description: Shared macOS, Windows and Linux tray controls
 colors:
-  light-background: "#ffffff"
-  light-surface: "#f4f4f5"
-  light-text: "#18181b"
-  light-muted: "#71717a"
-  light-accent: "#2563eb"
-  dark-background: "#18181b"
-  dark-surface: "#27272a"
-  dark-text: "#f4f4f5"
-  dark-muted: "#a1a1aa"
-  dark-accent: "#3b82f6"
+  light-background: "#fcfcfd"
+  light-surface: "#f0f0f3"
+  light-surface-hover: "#e8e8ec"
+  light-surface-pressed: "#e0e1e6"
+  light-popup: "#f9f9fb"
+  light-separator: "#d9d9e0"
+  light-control-border: "#cdced6"
+  light-control-border-hover: "#b9bbc6"
+  light-text: "#1c2024"
+  light-muted: "#60646c"
+  light-accent: "#3e63dd"
+  light-accent-hover-pressed: "#3358d4"
+  light-selected-background: "#edf2fe"
+  light-selected-text: "#3a5bc7"
+  light-selection: "#d2deff"
+  light-danger: "#ce2c31"
+  light-warning: "#ab6400"
+  light-success: "#218358"
+  light-scrollbar: "#8b8d98"
+  dark-background: "#111113"
+  dark-surface: "#212225"
+  dark-surface-hover: "#272a2d"
+  dark-surface-pressed: "#2e3135"
+  dark-popup: "#18191b"
+  dark-separator: "#363a3f"
+  dark-control-border: "#43484e"
+  dark-control-border-hover: "#5a6169"
+  dark-text: "#edeef0"
+  dark-muted: "#b0b4ba"
+  dark-accent: "#3e63dd"
+  dark-accent-hover-pressed: "#3358d4"
+  dark-selected-background: "#182449"
+  dark-selected-text: "#9eb1ff"
+  dark-selection: "#253974"
+  dark-danger: "#ff9592"
+  dark-warning: "#ffca16"
+  dark-success: "#3dd68c"
+  dark-scrollbar: "#696e77"
+  solid-accent-text: "#ffffff"
 typography:
   title:
     fontFamily: system-ui
-    fontSize: 17pt
-    fontWeight: 700
-  status:
-    fontFamily: system-ui
-    fontSize: 14pt
+    fontSize: 16px
     fontWeight: 700
   body:
     fontFamily: system-ui
+    fontSize: 13px
   caption:
     fontFamily: system-ui
-    fontSize: 12pt
+    fontSize: 12px
 rounded:
-  control: 6pt
+  control: 6px
+  segmented-track: 8px
+  popup: 10px
 spacing:
-  compact: 6pt
-  section: 14pt
-  inset: 20pt
+  compact: 8px
+  section: 14px
+  inset: 20px
 components:
   connection-primary-light:
     backgroundColor: "{colors.light-accent}"
-    textColor: "{colors.light-background}"
+    textColor: "#ffffff"
     rounded: "{rounded.control}"
   connection-primary-dark:
     backgroundColor: "{colors.dark-accent}"
-    textColor: "{colors.light-background}"
+    textColor: "#ffffff"
     rounded: "{rounded.control}"
 ---
 
 # Design System: Sakamoto desktop
 
-## Overview
+The shared desktop client is a compact native connection utility for people
+who already use sakamoto and want routine controls without keeping a terminal
+open. System typography and Lucide icons span macOS, Windows and Linux. MyGo
+owns input, keyboard navigation, accessibility and the native shell. Onevra
+supplies icons; the panel styles MyGo bases to enforce the same color, border
+and motion rules throughout. This system covers desktop content, not the TUI,
+mobile clients or the owner's existing app artwork.
 
-The desktop client is a compact native connection utility. A shared MyGo view,
-system typography, Onevra controls and Lucide icons span macOS, Windows and Linux.
-macOS uses AppKit's NSPopover, Windows a notification-area flyout, and Linux an
-AppIndicator menu with a compositor-managed utility panel. Platform behavior is
-adapted without introducing separate visual systems. This document describes
-the desktop surface and does not prescribe changes to the TUI or mobile clients.
+## Color
 
-Observed behavior and readable actions lead. Demo data carries a visible label.
-Status text distinguishes a running tunnel from a reachable network; latency
-measurements are separate from connection status. This is an operational
-hierarchy, with no display typography or decorative imagery.
+All authored content colors come from [Radix UI Colors](https://www.radix-ui.com/colors).
+`desktop/internal/menubar/style.go` pins values from
+[dbdb85470547c7d34b9001f48fddb08ded335979](https://github.com/radix-ui/colors/tree/dbdb85470547c7d34b9001f48fddb08ded335979).
+`desktop/LICENSE.radix` preserves its MIT attribution and ships in every package.
 
-## Colors
+Follow [Radix's scale roles](https://www.radix-ui.com/colors/docs/palette-composition/understanding-the-scale):
 
-Light and dark appearances use MyGo's released theme tokens. The frontmatter
-records its fallback palette, also used by the view tester; the native host can
-resolve system colors and accent when rendering the real popover. The blue
-accent identifies the main connection action and selected controls. Neutral text and
-surfaces carry the rest of the panel. Success, warning and failure icons use
-the library's semantic colors, accompanied by ordinary readable status text.
-Small demo labels use muted text to retain contrast in both appearances.
+| Role | Scale and step |
+| --- | --- |
+| Panel background | Slate 1 |
+| Popup background | Slate 2 |
+| Control default, hover, press | Slate 3, 4, 5 |
+| Subtle separators | Slate 6 |
+| Control border, hover border | Slate 7, 8 |
+| Primary action | Indigo 9 |
+| Primary hover and press | Light Indigo 10 in both appearances |
+| Selected option/segment | Indigo 3 background and Indigo 11 text |
+| Secondary text | Slate 11 |
+| Primary text | Slate 12 |
+| Success, warning, failure | Green 11, Amber 11, Red 11 |
+| Input selection | Indigo 5 |
+| Keyboard focus | Indigo 9 |
+| Scrollbar | Slate 9 |
+| Text on a solid primary action, switch thumb | Radix Indigo contrast token (white) |
 
-On macOS the popover supplies its material through AppKit. The other platforms
-use their native window shell around the same opaque panel content. Content
-renders use the theme background for inspection; they do not imitate system
-material or prove native placement. System appearance follows the host.
+Dark Indigo 10 with white small text falls below 4.5:1, so primary hover uses
+light Indigo 10 in both appearances. Primary text contrast is at least 5.20:1
+in default, hover and pressed states. Secondary text on the neutral control
+states stays above 4.5:1. Disabled controls reduce opacity and remain disabled
+semantically. State colors always accompany words or a recognizable status icon.
+Accent is reserved for primary actions, selection and focus. White is the
+[Radix Indigo contrast token](https://github.com/radix-ui/themes/blob/main/packages/radix-ui-themes/src/styles/tokens/colors/indigo.css),
+used for solid actions and the switch thumb.
 
-## Typography
+The entire content background is opaque Slate 1, including on a material host.
+System appearance still determines light/dark. The OS owns its popover frame,
+tray tint, menus outside the panel and window shadow; content renders do not
+verify those surfaces. Windows/Linux's authored tray glyph uses Indigo 9.
 
-Use system sans for the utility's short titles, status, labels and data. The
-panel title uses the title token; the observed connection state uses the status
-token. Controls follow the host's default body size (13 on macOS, 14 elsewhere),
-while node labels use 13 and captions use 11–12. Preserve full node labels in accessible names when visual
-labels truncate. No separate display face or decorative monospace is used.
+## Typography and copy
 
-## Layout
+Use exactly three sizes in logical pixels (DIPs): 16 for panel titles, 13 for
+body, controls and section headings, 12 for measurements, secondary status,
+errors, popup hints and legal text. Use weight and spacing for other hierarchy.
+Never use an 11px caption or add a fourth size. All text uses system sans.
+Preserve full user-owned node and group names in accessible action labels when
+visual names truncate.
 
-The shared desktop panel is 400 × 640 points. Its body uses the inset token and
-section gaps. The order is title/settings, observed connection/API status with
-its supported action, routing mode, active route, compact labeled traffic and a
-searchable scrolling node list. Settings replaces the body with a back action,
-appearance, login launch and configuration/service details. Only the list
-scrolls; connection controls remain visible. The list groups its header, search
-and rows with an 8-point gap; node rows use 44-point targets. Clearing a filter
-or changing group resets scroll so an old anchor cannot leave an orphaned line.
+Use concise, professional operational English. Do not use middle dots as copy
+separators, decorative eyebrows, overlines, casual filler or introductory
+paragraphs that repeat a control. Preserve user-owned labels verbatim. Successful
+selection, mode and test changes are already visible in their controls and do
+not add footer prose. Footer errors remain actionable and readable.
 
-Keep related icon/text pairs compact. A node row has a selection action, a
-separate latency action and a secondary measurement line. Group selection and
-node selection are different operations. List UI state belongs to one popover
-content engine and is recreated when the panel reopens.
+Show extra text when it changes the next decision: setup/offline recovery,
+external service ownership, actual health/test results, maintenance instructions
+and the interruption warning beside reconnect confirmation. Queued/running route
+tests remain pending; never call them successful recovery. Demo identity remains
+visible. Legal attribution remains in Settings and package resources.
 
-## Elevation & Depth
+## Layout, alignment and shape
 
-Each platform shell owns placement and shadow: AppKit popover on macOS, the
-native flyout on Windows and a utility window on Linux. Controls use the
-library's subtle surface fills and borders. No decorative glass or extra
-application-level shadow is introduced. Content snapshots cannot verify the
-system frame; retain that limitation in review evidence.
+The shared panel is 400 × 640 DIPs with 20-point content insets and 14-point gaps.
+Distinct sections in settings/repair use 20-point gaps; related controls use 8.
+The hierarchy is title/settings, observed state and supported connection action,
+routing mode, active route, aligned traffic, then node group/search/list. Only
+the node list scrolls on home. Settings and repair scroll their own body and
+retain navigation/footer positions.
 
-## Shapes
+Node rows are 44 points high. A fixed 16-point check slot and 8-point gap keep
+selected/unselected names aligned; the latency action remains a separate 32-point
+target. Row padding and footer text align to the content inset. Traffic values
+share their labels' leading edge. A group with a single available choice is
+plain text rather than an unnecessary dropdown.
 
-Controls follow the library's gently rounded control radius. Lucide icons share
-one stroke vocabulary. The tray icon is an original power glyph: monochrome/template on macOS and colored
-on Windows/Linux for visibility. The app bundle icon resizes the existing
-owner-provided artwork; it is separate from the terminal portrait.
+All authored control borders, separators and keyboard focus outlines are 0.5
+logical pixels. Focus uses Indigo 9 with a 2-point gap around its control; input
+focus changes its border color. Content has no shadows, cards,
+colored edge stripes or ornamental rounded containers. A control's radius is
+6; the routing track is 8 with an inset of 2; popup radius is 10 with an inset
+of 4. Insets include the border, making inner/outer corners concentric. A login
+switch uses a functional 20-point capsule and 16-point circular thumb inset 2.
+Lucide glyph strokes belong to the icon design, not the container-border token.
 
-## Components
+## Interaction and motion
 
-The connection action sits beside observed service status. Connect uses the
-accent; Disconnect is a secondary action so a healthy connection does not read
-as a large call to disconnect. The label follows observed state and current
-operation. External-core mode shows Core online and Managed externally, with no
-unsupported lifecycle button. Errors use readable semantic text rather than a
-muted success-like footnote. Rule/Global/Direct use a labeled segmented control
-and only show supported native API modes.
+All content state changes are immediate. No section entrances, fades, sliding
+selection, animated glass, looping activity glyphs or application shadows.
+MyGo bases retain pointer/keyboard handling, semantic disabled states, native
+text editing, input selection, focus, popup dismissal and accessible roles.
+Icon hints use a plain palette-colored tooltip at 12px without glass/shadow.
 
-Search uses a labeled native text input, a clear action and a visible empty
-result. Nodes show a readable name and latency status, with accessible labels
-for icon actions. Appearance and node group choices use labeled select controls.
-Settings and the home panel share the same title, spacing and footer vocabulary.
+Routine actions have no extra confirmation. Reconnect alone presents its
+interruption warning and Cancel/Reconnect now at the action's location. Closing
+the panel clears a pending confirmation. Opening a page or dropdown does not
+start work or persist a preference. Appearance persists only after selection;
+login remains opt-in and disabled in demo mode.
 
-Check & repair uses the same back navigation, section spacing and native buttons.
-A timestamp accompanies the public health summary. Check and ordinary repair are
-adjacent; reconnect is a separate secondary action with an inline interruption
-warning and explicit confirmation. Route recovery names the watcher response and
-never turns a queued request into a verified recovery. External-core mode shows
-API diagnosis and its ownership boundary. Service recovery opens a bundled repair
-terminal only after its named button is pressed. All sections stay in the existing
-panel; longer failure/maintenance states scroll. Closing the panel discards a
-pending reconnect confirmation and cancels observation. Reopening shows refreshing
-status until current service state is available.
+External-core mode shows Core online and Managed externally, with API controls
+and configuration access only. API availability does not imply TUN ownership.
+Missing supervisor recovery opens a bundled terminal only through its named
+button. Closing/quitting the app keeps the independently running service alive;
+opening never connects. Hidden panels stop observations and release view bindings.
 
-## Do's and Don'ts
+## Evidence and limits
 
-- Do preserve system light/dark appearance and the native popover frame.
-- Do pair semantic status colors with readable words.
-- Do label fixtures as demo data and keep latency distinct from reachability.
-- Do keep advanced editing in the TUI rather than expanding this small panel.
-- Don't claim a successful mode change before the native API confirms it.
-- Don't imply that closing or quitting the client stops the independent tunnel.
-- Don't infer system material, VoiceOver or multi-monitor correctness from content renders.
+Source: `desktop/internal/menubar/style.go`, `panel.go`, `recovery.go`, `app.go`,
+the platform adapters and `internal/desktop` public projections. Input-driven
+view workflows produce light/dark home, settings, popup and repair renders under
+`dist/menubar-verification/`, plus machine-readable receipts. Service/API fixture
+workflows verify ownership and lifecycle semantics. Package verification covers
+architecture, checksums and license resources.
 
-Evidence: `desktop/internal/menubar/panel.go`, `app.go`, the platform adapters,
-MyGo v0.6.2 `ui/theme.go`, and `dist/menubar-verification/`. The current review
-covers shared content and tested behaviors. Impeccable's reviewer/documenter
-roles run inline because this harness has no available subagent interface.
-Native visual approval remains **recapture** for each platform until interactive
-system-window evidence is available. No native runtime acceptance is inferred
-from a cross-build.
+Shared content captures are evidence of the view on the test host. A packaged
+macOS run checks lifecycle and captures either a real system window or an
+explicitly recorded content fallback. Native acceptance remains **recapture**
+for platform placement, OS frame, screen readers and IME until interactive OS
+evidence exists. Cross-compilation does not imply Windows/Linux desktop acceptance.

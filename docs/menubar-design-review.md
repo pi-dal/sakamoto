@@ -9,12 +9,12 @@ appearances. macOS system capture fails in the current session; Windows/Linux
 are cross-compiled locally and have no local native desktop session to inspect.
 No cross-build or shared render is labeled as a native OS capture.
 
-Content evidence is available in `dist/menubar-verification/panel-*.png` and
-`shared-external-*.png`. These are shared MyGo view renders on the test host.
-`macos-*.png` is the packaged application content with recorded capture provenance,
-including the neutral background composite when system material is unavailable.
-These establish content hierarchy and legibility, not system material, shadow,
-tray positioning or dismissal behavior.
+Content evidence is available in `dist/menubar-verification/panel-*.png`,
+`settings-*.png`, `repair-*.png` and `shared-external-*.png`. These are shared MyGo
+view renders on the test host. `macos-*.png` is the packaged application content
+with recorded capture provenance, including an opaque Radix Slate background
+when system capture is unavailable. These establish content hierarchy and
+legibility, not the system frame, shadow, tray positioning or dismissal behavior.
 
 The refinement groups the primary status/action, demotes Disconnect to a
 secondary action, aligns labeled traffic, tightens group/search/list spacing and
@@ -33,6 +33,21 @@ without adding cards or another window. Duplicate result text is suppressed in
 the footer when it is already present in the page. Idle/protocol evidence is
 separate in `resident-repair-e2e.json`; content renders do not establish idle CPU
 or privileged service success.
+
+The Radix refinement uses Slate scale roles for neutral surfaces, Indigo for
+action/selection/focus and semantic step-11 state colors. Content has three text
+sizes (16/13/12), 0.5-point borders/focus outlines, concentric control/popup corners
+and immediate state changes. It removes middle-dot separators, routine footer
+success messages, repeated headings and explanatory paragraphs. The remaining
+copy preserves errors, partial reachability, external ownership, actual repair
+results, pending route tests and interruption consequences at confirmation.
+
+`controls-view-e2e.json` and settings/menu renders cover pointer/keyboard routing,
+group choice, appearance persistence, Escape-to-clear, disabled demo startup,
+explicit live startup callbacks, exact Radix background pixels on a material
+host and no resting animation frames. Popup controls use MyGo bases so styling
+does not replace native text input, focus and accessibility behavior. Radix's
+license ships in all six platform packages.
 
 Native IME, screen readers, taskbar/Wayland/multi-monitor/full-screen positioning,
 outside-click/Escape and login startup need interactive acceptance on each OS.

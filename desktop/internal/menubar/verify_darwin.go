@@ -42,6 +42,7 @@ func (a *application) verify() {
 		{"macos-light.png", mygo.ThemeLight, false, false, false},
 		{"macos-dark.png", mygo.ThemeDark, false, false, false},
 		{"macos-settings.png", mygo.ThemeLight, true, false, false},
+		{"macos-settings-dark.png", mygo.ThemeDark, true, false, false},
 		{"macos-repair-light.png", mygo.ThemeLight, false, true, false},
 		{"macos-repair-dark.png", mygo.ThemeDark, false, true, false},
 		{"macos-reconnect-confirm.png", mygo.ThemeLight, false, true, true},

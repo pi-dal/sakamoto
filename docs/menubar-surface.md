@@ -10,10 +10,13 @@ of the established native utility, not a replacement visual identity.
 THESIS: A compact connection control center whose state explains both the next
 available action and which service owns the connection.
 
-OWN-WORLD: System typography, neutral MyGo theme surfaces, a restrained accent,
-Lucide icons and labeled native controls. macOS uses AppKit NSPopover material;
-Windows uses a notification-area flyout; Linux uses an AppIndicator menu and a
-compositor-managed utility panel. System appearance remains the default.
+OWN-WORLD: System typography, Radix Slate surfaces, a restrained Indigo accent,
+Lucide icons and labeled MyGo base controls. The content is opaque in every host;
+AppKit owns the NSPopover frame, Windows the notification-area flyout and Linux
+an AppIndicator menu plus compositor-managed utility panel. System appearance
+remains the default. Use only 16/13/12-point text, 0.5-point authored borders,
+6-point controls with concentric tracks/popups and immediate state changes.
+No decorative eyebrows, content shadows, cards or middle-dot separators.
 
 STORY: Read observed connection/API state, connect or disconnect when supported,
 choose a routing mode, then inspect or change a node. An external core exposes

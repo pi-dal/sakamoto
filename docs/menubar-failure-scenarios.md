@@ -37,6 +37,22 @@ Written before implementation and end-to-end verification.
 - An unavailable supervisor must offer a deliberate service-recovery terminal action using the bundled CLI; opening that terminal must be explicit and paths must remain shell-quoted.
 - The idle tray must not offer stale Connect/Disconnect actions; Linux must remain hidden at startup when a tray is available.
 
+## Desktop refinement failure scenarios
+
+Written before the Radix/copy refinement and end-to-end verification.
+
+- Light/dark changes must update the actual panel and open menus; host vibrancy must not replace the specified Radix content background.
+- Default, hover, pressed, selected, disabled, focus, input selection and popup states must use the same palette. Primary-button text must remain readable on hover in both appearances.
+- Control borders and dividers must stay at 0.5 logical pixels; popups and routing segments must have concentric inner/outer radii and no content shadows.
+- All content must use 12, 13 or 16 logical pixels, including popup options, errors and measurements.
+- Removing helper paragraphs must retain actionable setup/offline failures, service ownership, demo identity, pending route-test status and the reconnect interruption warning.
+- Search must preserve Unicode input, keyboard editing, Escape-to-clear, a named clear action and empty results.
+- Appearance selection, node groups and routing segments must retain pointer/keyboard behavior, focus and disabled semantics after restyling.
+- Opening settings, repair or a select must not change the connection, start a repair or save a preference before an actual choice.
+- Maintenance must retain a deliberate resume instruction. External cores must still omit unsupported repair/lifecycle controls.
+- Long names and errors must not displace the footer or obscure action targets; successful actions already reflected in the view must not add duplicate footer prose.
+- Application-authored interface copy must contain no middle-dot separators, redundant section introductions or decorative eyebrows. User-owned node/group names must remain intact.
+
 ## Signed desktop release failure scenarios
 
 - Homebrew's online audit must use authenticated GitHub requests rather than a shared runner IP quota. A Homebrew-only replay must validate an existing stable release tag and its signed public archives, reject mismatched versions/downgrades, and never rebuild or republish that release.

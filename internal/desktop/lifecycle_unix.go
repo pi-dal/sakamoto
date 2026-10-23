@@ -13,7 +13,7 @@ import (
 
 func runtimeRepair(ctx context.Context, path string, check, restart bool) (HealthReport, error) {
 	result, err := svc.RepairAt(ctx, path, svc.RepairOptions{CheckOnly: check, Restart: restart})
-	report := HealthReport{State: "failed", Action: "none", Summary: "Core recovery failed. Open service recovery for further checks."}
+	report := HealthReport{State: "failed", Action: "none", Summary: "Repair failed. Open recovery terminal for details."}
 	// Accept only known public states and actions. Detail is deliberately discarded.
 	switch result.State {
 	case "healthy", "repaired", "stopped", "degraded", "maintenance", "unavailable", "failed":
@@ -27,23 +27,23 @@ func runtimeRepair(ctx context.Context, path string, check, restart bool) (Healt
 	switch report.State {
 	case "healthy":
 		if report.Verified {
-			report.Summary = "Core API and configured DNS verified. Existing process retained."
+			report.Summary = "Core API and DNS verified."
 		}
 	case "repaired":
 		if report.Verified {
-			report.Summary = "Core API and configured DNS verified after recovery."
+			report.Summary = "Core API and DNS verified after repair."
 			if report.Action == "rolled_back" {
-				report.Summary = "Recovered with the last working configuration. Core API and configured DNS verified."
+				report.Summary = "Restored the last working configuration. Core API and DNS verified."
 			}
 		}
 	case "stopped":
-		report.Summary = "Core is stopped. Repair core can start it."
+		report.Summary = "Core stopped."
 	case "degraded":
-		report.Summary = "Core is running but health checks failed. Reconnect requires your confirmation."
+		report.Summary = "Core health checks failed."
 	case "maintenance":
-		report.Summary = "Recovery is paused for maintenance. Resume deliberately with the CLI."
+		report.Summary = "Recovery paused for maintenance."
 	case "unavailable":
-		report.Summary = "Supervisor unavailable. Open service recovery to restore the background service."
+		report.Summary = "Background service unavailable."
 	}
 	if !report.Verified && err == nil {
 		err = errors.New("core health was not verified")

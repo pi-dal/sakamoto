@@ -26,7 +26,7 @@ func (a *application) verifyContent() {
 		theme    mygo.ThemeSource
 		settings bool
 		recovery bool
-	}{{"desktop-light.png", mygo.ThemeLight, false, false}, {"desktop-dark.png", mygo.ThemeDark, false, false}, {"desktop-settings.png", mygo.ThemeLight, true, false}, {"desktop-repair-light.png", mygo.ThemeLight, false, true}, {"desktop-repair-dark.png", mygo.ThemeDark, false, true}} {
+	}{{"desktop-light.png", mygo.ThemeLight, false, false}, {"desktop-dark.png", mygo.ThemeDark, false, false}, {"desktop-settings.png", mygo.ThemeLight, true, false}, {"desktop-settings-dark.png", mygo.ThemeDark, true, false}, {"desktop-repair-light.png", mygo.ThemeLight, false, true}, {"desktop-repair-dark.png", mygo.ThemeDark, false, true}} {
 		var window *mygo.Window
 		mygo.RunOnMain(func() {
 			if a.window != nil {

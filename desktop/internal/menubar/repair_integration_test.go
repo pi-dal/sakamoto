@@ -76,8 +76,8 @@ func TestPanelRepairEndToEnd(t *testing.T) {
 	if backend.restarts != 1 {
 		t.Fatal("confirmed reconnect missing")
 	}
-	click("Test automatic route")
-	if backend.recoveries != 1 || !tt.HasText("Route tests requested. Recovery is not yet verified.") {
+	click("Test route")
+	if backend.recoveries != 1 || !tt.HasText("Route tests queued.") {
 		t.Fatal("queued tests were presented as recovered", tt.Texts())
 	}
 	dir := os.Getenv("SAKAMOTO_MENUBAR_ARTIFACT_DIR")
@@ -111,11 +111,11 @@ func TestPanelRepairEndToEnd(t *testing.T) {
 	save("repair-confirm-dark.png", true)
 	click("Cancel reconnect")
 	_ = backend.update(func(s *desktop.Snapshot) {
-		s.Health = desktop.HealthReport{State: "unavailable", CheckedAt: time.Now(), Summary: "Supervisor unavailable. Open service recovery to restore the background service."}
+		s.Health = desktop.HealthReport{State: "unavailable", CheckedAt: time.Now(), Summary: "Background service unavailable."}
 	})
 	panel.Refresh()
 	tt.Frame()
-	if !tt.HasText("Open service recovery") {
+	if !tt.HasText("Open recovery terminal") {
 		t.Fatal("service recovery fallback is missing")
 	}
 	save("repair-service-unavailable.png", false)

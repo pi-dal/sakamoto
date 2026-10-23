@@ -201,7 +201,7 @@ func (a *application) observe() {
 						}
 					}
 					if !s.Observing {
-						status = "idle · open to check status"
+						status = "idle"
 					}
 					a.tray.SetToolTip("sakamoto — " + status)
 					a.syncMenu()

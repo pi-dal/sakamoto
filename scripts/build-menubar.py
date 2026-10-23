@@ -99,6 +99,7 @@ def main():
         shutil.copy2(Path(onevra["Dir"]) / "components" / "LICENSE.mygo", licenses / "MyGo-components-MIT.txt")
         shutil.copy2(Path(onevra["Dir"]) / "icons" / "lucide" / "LICENSE", licenses / "Lucide.txt")
         shutil.copy2(root / "desktop" / "LICENSE.onevra", licenses / "Onevra-MIT.txt")
+        shutil.copy2(root / "desktop" / "LICENSE.radix", licenses / "Radix-Colors-MIT.txt")
         with tempfile.TemporaryDirectory(prefix="sakamoto-icon-") as work:
             iconset = Path(work) / "AppIcon.iconset"
             iconset.mkdir()
