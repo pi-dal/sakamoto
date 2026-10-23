@@ -28,6 +28,7 @@ func runServiceUpdate(ctx context.Context, path string, args []string) error {
 	flags := flag.NewFlagSet("service-update", flag.ContinueOnError)
 	check := flags.Bool("check", false, "inspect the installed service without changes")
 	reconnect := flags.Bool("reconnect", false, "reconnect a live VPN after the service update")
+	validate := flags.Bool("validate-config", false, "validate the configuration before an approved live reconnect")
 	stage := flags.Bool("stage-rescue", false, "stage independent rescue as administrator")
 	apply := flags.Bool("apply", false, "apply the approved update as administrator")
 	if err := flags.Parse(args); err != nil {
@@ -39,7 +40,7 @@ func runServiceUpdate(ctx context.Context, path string, args []string) error {
 			modes++
 		}
 	}
-	if flags.NArg() != 0 || modes > 1 {
+	if flags.NArg() != 0 || modes > 1 || (*validate && !*stage) {
 		return errors.New("choose a single service-update mode")
 	}
 	absolute, err := filepath.Abs(path)
@@ -73,6 +74,11 @@ func runServiceUpdate(ctx context.Context, path string, args []string) error {
 	if *stage {
 		if err = rescue.StageServiceRescue(paths, sys); err != nil {
 			return err
+		}
+		if *validate {
+			if err = svc.ValidateConfigurationForUpdate(ctx, absolute); err != nil {
+				return fmt.Errorf("current configuration cannot be safely reconnected; live core retained: %w", err)
+			}
 		}
 		fmt.Println("Independent recovery helper is ready.")
 		return nil
@@ -129,10 +135,14 @@ func runServiceUpdate(ctx context.Context, path string, args []string) error {
 	if err = authorize.Run(); err != nil {
 		return err
 	}
-	stageCommand := exec.CommandContext(ctx, "/usr/bin/sudo", "-n", binary, "--config", absolute, "service-update", "--stage-rescue")
+	stageArgs := []string{"-n", binary, "--config", absolute, "service-update", "--stage-rescue"}
+	if live {
+		stageArgs = append(stageArgs, "--validate-config")
+	}
+	stageCommand := exec.CommandContext(ctx, "/usr/bin/sudo", stageArgs...)
 	stageCommand.Stdin, stageCommand.Stdout, stageCommand.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err = stageCommand.Run(); err != nil {
-		return fmt.Errorf("independent rescue could not be prepared; service update canceled: %w", err)
+		return fmt.Errorf("service update preparation failed; live core was not disconnected: %w", err)
 	}
 	if live {
 		reply, e := svc.SendToContext(ctx, socket, "disconnect")

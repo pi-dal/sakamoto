@@ -107,6 +107,15 @@ func TestRepairConfigurationFallbackAndRegeneration(t *testing.T) {
 			t.Fatalf("preparation interrupted core: before=%d after=%d", pid, got)
 		}
 	}
+	recoveryOK(t, ValidateConfigurationForUpdate(ctx, path))
+	invalidDisk := bytes.Replace(raw, []byte(`"disabled":true`), []byte(`"level":"invalid-recovery-level"`), 1)
+	recoveryOK(t, os.WriteFile(s.cfgPath, invalidDisk, 0600))
+	preflightFiles := snapshot()
+	if ValidateConfigurationForUpdate(ctx, path) == nil {
+		t.Fatal("service reconnect accepted invalid on-disk configuration")
+	}
+	unchanged(preflightFiles, first.PID)
+	recoveryOK(t, os.WriteFile(s.cfgPath, raw, 0600))
 	savedSecret := cfg.API.Secret
 	cfg.API.Secret = strings.Repeat("m", 48)
 	changedIdentity, err := cfg.MarshalYAML()
@@ -320,5 +329,5 @@ func TestRepairConfigurationFallbackAndRegeneration(t *testing.T) {
 	if lateRunning || lateBlocked || syscall.Kill(hungPID, 0) != syscall.ESRCH {
 		t.Fatal("manual stop left a restarted, blocked or orphaned core")
 	}
-	writeRecoveryArtifact(t, map[string]any{"manual_stop_cancels_reconnect_grace": true, "scenario": "configuration-repair", "real_native_check": true, "real_native_api": true, "corrupt_json_and_sidecar_fallback": true, "generation_failure_retains_pid_and_files": true, "empty_nodes_rejected": true, "pending_api_preserved": true, "api_identity_mismatch_detected": true, "custom_api_port_preserved": true, "assets_retained": true, "prepared_not_promoted": true, "generated_engine_failure_rolled_back": true, "missing_fallback_retains_live_core": true, "manual_stop_cancels_preparation": true, "uses_real_tun": false})
+	writeRecoveryArtifact(t, map[string]any{"service_update_config_checked_before_disconnect": true, "manual_stop_cancels_reconnect_grace": true, "scenario": "configuration-repair", "real_native_check": true, "real_native_api": true, "corrupt_json_and_sidecar_fallback": true, "generation_failure_retains_pid_and_files": true, "empty_nodes_rejected": true, "pending_api_preserved": true, "api_identity_mismatch_detected": true, "custom_api_port_preserved": true, "assets_retained": true, "prepared_not_promoted": true, "generated_engine_failure_rolled_back": true, "missing_fallback_retains_live_core": true, "manual_stop_cancels_preparation": true, "uses_real_tun": false})
 }

@@ -33,7 +33,7 @@ sakamoto service-update --check
 sakamoto service-update --reconnect
 ```
 
-The first command only inspects the identified installation. The second requires a local terminal, explicit confirmation and administrator authorization. It prepares independent offline rescue before disconnecting, verifies the old core's exit and restoration of captured network settings, retains both service executables outside Homebrew and the app bundle, then replaces only the canonical supervisor job. Failed bootstrap restores the retained service when possible. An incomplete rollback keeps maintenance held and reports failure. A disconnected VPN remains disconnected; an approved live reconnect must pass fresh API/DNS checks.
+The first command only inspects the identified installation. The second requires a local terminal, explicit confirmation and administrator authorization. It prepares independent offline rescue and validates the API/DNS configuration plus the intended engine before disconnecting a live core, verifies the old core's exit and restoration of captured network settings, retains both service executables outside Homebrew and the app bundle, then replaces only the canonical supervisor job. Failed bootstrap restores the retained service when possible. An incomplete rollback keeps maintenance held and reports failure. A disconnected VPN remains disconnected; an approved live reconnect must pass fresh API/DNS checks.
 
 This operation does not migrate unidentified legacy jobs or create a missing installation. Use the documented setup/migration procedure for those cases. Ordinary `repair` never silently replaces a service executable or plist.
 
@@ -69,6 +69,7 @@ TUI import/regeneration also builds and checks an independent directory before s
 | Generated runtime exits before readiness | One working fallback, then verification; block if it also fails |
 | Concurrent actions | Repair serializes; connect cannot bypass owned shutdown |
 | Unknown/private error content | Public UI contains only approved text |
+| Invalid on-disk config during service update | Refuse a live reconnect before disconnect; keep the current data plane |
 | Service bootstrap fails | Retained executable/plist restore; no implicit VPN start |
 | Foreign/unidentified launchd job | Refuse before changing it |
 | Hidden or closed panel | Pending confirmation disappears; submitted action remains bounded |

@@ -15,15 +15,16 @@ import (
 
 func (s *Server) dnsStatePath() string { return filepath.Join(s.workDir, sysdns.StateName) }
 
-func (s *Server) dnsPlan() (*config.Config, bool, error) {
-	cfg, err := config.Load(filepath.Join(s.workDir, "sakamoto.yaml"))
+func (s *Server) dnsPlan() (*config.Config, bool, error) { return dnsPlanFor(s.workDir, s.cfgPath) }
+func dnsPlanFor(dir, path string) (*config.Config, bool, error) {
+	cfg, err := config.Load(filepath.Join(dir, "sakamoto.yaml"))
 	if err != nil {
 		return nil, false, err
 	}
 	if !cfg.DNSGuard.Enabled {
 		return cfg, false, nil
 	}
-	b, err := os.ReadFile(s.cfgPath)
+	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, false, err
 	}

@@ -306,6 +306,44 @@ func (s *Server) prepareConfiguration(ctx context.Context, options RepairOptions
 	p.point = &restorepoint.Point{Dir: p.temporary, Manifest: manifest}
 	return p, nil
 }
+
+// ValidateConfigurationForUpdate checks the configuration that a replacement
+// supervisor would start. It performs no lifecycle or network-setting writes.
+// Call before disconnecting a live legacy core, which has no applied snapshot.
+func ValidateConfigurationForUpdate(ctx context.Context, path string) error {
+	dir := filepath.Dir(path)
+	original := map[string]configurationInput{}
+	for _, name := range []string{"sakamoto.yaml", "config.json"} {
+		raw, err := configurationRead(filepath.Join(dir, name))
+		if err != nil {
+			return err
+		}
+		if !raw.exists {
+			return errors.New("runtime configuration is missing")
+		}
+		original[name] = raw
+	}
+	if err := checkConfigurationPair(path, filepath.Join(dir, "config.json")); err != nil {
+		return err
+	}
+	if _, _, err := dnsPlanFor(dir, filepath.Join(dir, "config.json")); err != nil {
+		return err
+	}
+	if err := checkNativeConfiguration(ctx, singBoxExecutable(), dir, filepath.Join(dir, "config.json")); err != nil {
+		return err
+	}
+	for name, want := range original {
+		got, err := configurationRead(filepath.Join(dir, name))
+		if err != nil {
+			return err
+		}
+		if got.exists != want.exists || !bytes.Equal(got.raw, want.raw) {
+			return errors.New("runtime configuration changed during validation")
+		}
+	}
+	return nil
+}
+
 func checkNativeConfiguration(ctx context.Context, binary, dir, path string) error {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
