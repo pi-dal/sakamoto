@@ -134,6 +134,9 @@ func (c *Controller) SetVisible(visible bool) {
 			c.epoch++
 			c.state.Observing = false
 			c.state.APIReady = false
+			c.state.Groups = nil
+			c.state.Mode = ""
+			c.state.Modes = nil
 			c.state.Probe = core.ProbeIdle
 			c.state.ProbePath = ""
 			c.state.Traffic = Traffic{}

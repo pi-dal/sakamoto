@@ -82,7 +82,7 @@ func TestResidentRepairEndToEnd(t *testing.T) {
 	for (f.groupSubs.Load() != 0 || f.modes.Load() != 0 || f.traffic.Load() != 0) && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if f.groupSubs.Load() != 0 || f.modes.Load() != 0 || f.traffic.Load() != 0 || c.Snapshot().APIReady {
+	if f.groupSubs.Load() != 0 || f.modes.Load() != 0 || f.traffic.Load() != 0 || c.Snapshot().APIReady || len(c.Snapshot().Groups) != 0 || len(c.Snapshot().Modes) != 0 {
 		t.Fatal("hidden app retained active observation")
 	}
 	f.mu.Lock()

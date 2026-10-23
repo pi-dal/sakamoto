@@ -62,7 +62,11 @@ with hardened runtime and secure timestamps. Each architecture is submitted to
 Apple separately; only an `Accepted` result proceeds. Stapler and Gatekeeper
 checks run before packaging. Final ZIPs are extracted again and checked for code
 signatures, architecture, bundle version, stapled ticket and Gatekeeper acceptance.
-Notarization rejections retain public build diagnostics as CI artifacts.
+Notarization and verification failures retain public ZIPs, receipts and full tool
+output as CI diagnostics. Stapler ticket delivery retries transient errors up to
+three times, with a 60-second limit per attempt and 2/4-second backoff. Failure
+still blocks publication; extracted release bundles are validated, never
+restapled to conceal a broken archive.
 
 The publish job combines the six target manifests, verifies source commit and
 actual archive hashes, then uploads a draft release before making it public.
@@ -81,8 +85,8 @@ gh workflow run desktop-release.yml --ref YOUR_BRANCH
 After that run succeeds, tag the same source version and push the tag:
 
 ```sh
-git tag desktop-v0.2.18
-git push origin desktop-v0.2.18
+git tag desktop-v0.2.19
+git push origin desktop-v0.2.19
 ```
 
 The version must match `cmd/sakamoto/main.go`. Release workflow runs are serialized.

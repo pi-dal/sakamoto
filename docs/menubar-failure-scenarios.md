@@ -40,6 +40,7 @@ Written before implementation and end-to-end verification.
 ## Signed desktop release failure scenarios
 
 - A stapled ticket must survive final ZIP creation and extraction; source-bundle validation alone is insufficient.
+- Apple CloudKit transport failures during stapling/validation must retry a bounded number of times, then fail closed. A retry must never restaple an extracted release ZIP or skip signature/Gatekeeper checks.
 - Failed signature/stapler/Gatekeeper checks must retain their tool output and public ZIP diagnostics. Never restaple the extracted archive merely to hide a packaging failure.
 
 Written before release implementation and verification.

@@ -8,6 +8,14 @@ traffic and appearance across macOS, Windows and Linux.
 - Windows/Linux: arm64 and amd64 portable previews. These packages are unsigned.
   They control an existing compatible core; privileged tunnel/DNS service adapters
   are not included.
+- Hidden and never-opened panels do no observation polling, API subscriptions or
+  network probes. Reopening refreshes current state; hiding drops live node and
+  list-engine buffers.
+- Check & repair offers read-only health checks, healthy-process-preserving repair,
+  explicitly confirmed reconnect and watcher route-test requests on macOS.
+  External cores expose API diagnosis and retain their service manager's ownership.
+  Watcher acknowledgement is distinct from verified recovery; maintenance holds
+  remain deliberate. A missing supervisor offers an explicit recovery terminal.
 - Opening the client never connects a tunnel. Closing the panel keeps it resident;
   quitting preserves the independent service.
 

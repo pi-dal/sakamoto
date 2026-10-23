@@ -117,7 +117,8 @@ routes `MainProxy` to `ManualPick`, preserving watcher behavior. Mode changes ar
 confirmed by reading the API back. A hidden panel performs no config/status
 polling, VPN conflict subprocess checks, API subscriptions or network probes.
 Reopening immediately refreshes and creates new observations; cached state is
-not presented as current connectivity. Explicitly requested bounded operations
+not presented as current connectivity. Node/mode snapshots and list-engine
+bindings are released on hide. Explicitly requested bounded operations
 can finish after hiding. The independent supervisor/watcher keep their own
 responsibilities. List view state is recreated for every new popover engine so a
 reopened panel cannot reuse an invalid engine.

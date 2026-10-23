@@ -161,6 +161,9 @@ func (a *application) show() {
 		})
 	}
 	a.window.OnClosed(func() {
+		// Release engine bindings and row closures immediately while resident.
+		a.panel.list = ui.ListState{}
+		a.panel.listFilter = ""
 		a.panel.confirmRestart = false
 		a.window = nil
 		a.backend.SetVisible(false)
