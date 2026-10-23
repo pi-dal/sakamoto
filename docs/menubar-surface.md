@@ -33,7 +33,12 @@ separate restore/regenerate confirmation; a legacy service shows its bundled
 update terminal action in that section. An unavailable supervisor offers
 a deliberate bundled repair terminal action; external cores only expose API
 checks and their configuration folder. Long labels truncate visually while
-action names stay complete.
+action names stay complete. The home header's Connections action replaces the
+body with search, an active count and a virtual list. Each 60-point row aligns
+target/application/outbound on the left and per-connection totals on the right.
+This is read-only inspection, with no explanatory introduction or extra cards.
+Connection events subscribe only while this page is visible. Navigating away or
+hiding releases its data and bindings; reopening starts from a fresh snapshot.
 
 FORM: Keep the released MyGo tray/flyout interaction. The shared list and row
 system adapts to native host typography. Clearing a filter resets its scroll;

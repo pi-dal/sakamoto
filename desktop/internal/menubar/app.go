@@ -152,6 +152,7 @@ func (a *application) show() {
 	// MyGo list state belongs to one content engine. A dismissed popover
 	// creates a new engine when reopened, so it needs fresh scroll state.
 	a.panel.list = ui.ListState{}
+	a.panel.connectionList = ui.ListState{}
 	if a.tray == nil {
 		a.window = mygo.NewWindow(mygo.WindowOptions{Title: "Sakamoto", Width: PanelWidth, Height: PanelHeight, DisableResize: true, Content: ui.View(a.panel.View)})
 	} else {
@@ -163,11 +164,15 @@ func (a *application) show() {
 	a.window.OnClosed(func() {
 		// Release engine bindings and row closures immediately while resident.
 		a.panel.list = ui.ListState{}
+		a.panel.connectionList = ui.ListState{}
+		a.panel.connectionQuery = ""
+		a.panel.connectionFilter = ""
 		a.panel.listFilter = ""
 		a.panel.confirmRestart = false
 		a.panel.confirmConfig = ""
 		a.window = nil
 		a.backend.SetVisible(false)
+		a.panel.Refresh()
 		if a.tray == nil && a.opts.VerifyDirectory == "" {
 			mygo.App.Quit()
 		}
@@ -192,7 +197,7 @@ func (a *application) observe() {
 					return
 				}
 				a.panel.Refresh()
-				s := a.backend.Snapshot()
+				s := a.panel.snapshot
 				if a.tray != nil {
 					status := string(s.Phase)
 					if s.ExternalCore {
@@ -244,6 +249,7 @@ func (a *application) syncMenu() {
 func (a *application) menu() *mygo.Menu {
 	return mygo.NewMenu([]*mygo.MenuItem{
 		{Label: "Open Sakamoto", Click: func(*mygo.MenuItem, *mygo.Window) {
+			a.panel.setConnections(false)
 			a.panel.settings = false
 			a.panel.recovery = false
 			a.panel.confirmRestart = false
@@ -251,6 +257,7 @@ func (a *application) menu() *mygo.Menu {
 			a.show()
 		}},
 		{Label: "Check & repair…", Click: func(*mygo.MenuItem, *mygo.Window) {
+			a.panel.setConnections(false)
 			a.panel.settings = false
 			a.panel.recovery = true
 			a.panel.confirmRestart = false
@@ -259,6 +266,7 @@ func (a *application) menu() *mygo.Menu {
 		}},
 		mygo.Separator(),
 		{Label: "Settings…", Click: func(*mygo.MenuItem, *mygo.Window) {
+			a.panel.setConnections(false)
 			a.panel.recovery = false
 			a.panel.settings = true
 			a.panel.confirmRestart = false

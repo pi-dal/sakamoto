@@ -50,6 +50,7 @@ run = "python3 scripts/build-cli.py"
 
 [tasks."gui:check"]
 description = "Verify shared desktop workflows with local sockets, a mock API and rendered artifacts"
+tools.sing-box = "1.14.2"
 run = "python scripts/check-desktop.py"
 
 [tasks."gui:build"]

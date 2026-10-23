@@ -1,48 +1,36 @@
-# Desktop 0.2.21
+# Desktop 0.2.22
 
-Check & repair now separates health diagnosis, core reconnect and configuration
-recovery. Failed actions display a useful public reason without exposing private
-paths, source URLs, credentials or raw engine diagnostics.
+The home header now opens **Connections**, a searchable live list of active
+connections across macOS, Windows and Linux.
 
-- **Restore working configuration…** restores the complete verified runtime,
-  including its matching engine and checked local assets. Corrupt current JSON
-  or YAML does not prevent fallback. A saved working copy is required.
-- **Regenerate configuration…** reads saved settings and configured sources,
-  requires supported proxy nodes, preserves API identity/DNS policy, and checks
-  a private candidate before replacing anything. A failed preparation retains
-  the live process and active files.
-- Configuration replacement requires a separate confirmation. Manual stop,
-  maintenance and newer edits supersede stale work. Failed activation can use
-  one verified working fallback; repeated failure blocks automatic attempts.
-- Older supervisors show **Update background service…**. The bundled CLI
-  requests local confirmation/administrator authorization, stages independent
-  rescue before disconnecting, retains service executables outside Homebrew,
-  and verifies the approved reconnect. Installing the GUI alone does not
-  replace the running service.
-- API settings that differ between the GUI sidecar and core configuration now
-  produce a configuration-mismatch result. TUI generation also validates an
-  independent candidate before changing active rules.
+- See the destination, application (when supplied by the core), outbound, network
+  type and uploaded/downloaded totals. Search by any of these names or the
+  destination IP. Newest connections appear first.
+- Closed history is excluded and finished connections disappear. Delta-only
+  traffic events update totals while preserving connection metadata.
+- Connection tracking runs only while its page is visible. Leaving the page or
+  hiding clears live rows and stops the subscription; reopening fetches the
+  current snapshot. Inspection preserves active connections.
+- Interrupted streams reconnect. Cores without connection tracking show that
+  limitation while keeping node, mode and traffic controls available.
+- Large lists virtualize their rows and coalesce lifecycle bursts. The panel
+  retains Radix colors, concise copy and 0.5-point borders in both appearances.
 
-A working fallback is promoted only after the existing unchanged-runtime
-stability/readiness checks. An app update or successful configuration check
-alone does not create one. Health verification covers the native API and
-configured protected DNS, not every remote destination.
+The actual pinned core and loopback proxy workflow verify live connections,
+traffic totals, closed-history filtering and that the same data stream survives
+leaving/hiding the page. API/controller and input-driven view workflows cover
+reconnect, idle subscriptions, search, empty/error states and 2,000-row lists.
+These isolated checks do not modify the user's running service or network.
 
-The shared tray client retains Radix colors, 16/13/12 typography, 0.5-point
-borders, explicit reconnect confirmation and idle observation while hidden.
-Opening the app never connects a tunnel; quitting preserves its service.
-
-- macOS: arm64/Intel apps signed with Developer ID Application, notarized and
-  stapled. The app includes the matching CLI and independent offline rescue.
-- Windows/Linux: unsigned arm64/amd64 portable previews for an existing core.
-  API diagnosis is available; configuration/lifecycle recovery stays with the
-  external service manager.
+macOS arm64/Intel releases are signed, notarized and stapled. Windows/Linux
+arm64/amd64 portable clients continue to use an existing external core service.
+Installing this app does not replace the running supervisor or connect a tunnel.
 
 ```sh
 brew update
 brew upgrade --cask pi-dal/tap/sakamoto-desktop
 ```
 
-The separate CLI formula is `pi-dal/tap/sakamoto`. Check its version before using
-new terminal commands. See [configuration repair](https://github.com/pi-dal/sakamoto/blob/main/docs/configuration-repair.md)
-for service activation, offline behavior and verification limits.
+The separate CLI formula remains independent; this display feature requires only
+the GUI update. See [live connections](https://github.com/pi-dal/sakamoto/blob/main/docs/desktop-connections.md)
+for protocol behavior and verification limits.

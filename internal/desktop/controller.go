@@ -31,7 +31,7 @@ type Traffic struct {
 	Uplink, Downlink, UplinkTotal, DownlinkTotal int64
 }
 
-// Snapshot contains display data, never API credentials or server addresses.
+// Snapshot contains display data, never API credentials or proxy secrets.
 type Snapshot struct {
 	Observing             bool
 	Health                HealthReport
@@ -49,6 +49,8 @@ type Snapshot struct {
 	Modes                 []string
 	Groups                []*daemon.Group
 	Traffic               Traffic
+	Connections           []Connection
+	ConnectionsState      ConnectionState
 	Busy                  string
 	Notice                core.Notice
 	Tests                 map[string]core.NodeStatus
@@ -57,18 +59,21 @@ type Snapshot struct {
 // Controller owns observations and operations independently of any panel.
 // Run is called once. Closing its context never sends a disconnect command.
 type Controller struct {
-	path              string
-	opts              Options
-	mu                sync.Mutex
-	operation         sync.Mutex
-	state             Snapshot
-	changes           chan struct{}
-	visible           bool
-	visibilityChanged chan struct{}
-	observerCancel    context.CancelFunc
-	refreshRequested  chan struct{}
-	epoch             uint64
-	testStarted       map[string]time.Time
+	path                  string
+	opts                  Options
+	mu                    sync.Mutex
+	operation             sync.Mutex
+	state                 Snapshot
+	changes               chan struct{}
+	visible               bool
+	visibilityChanged     chan struct{}
+	observerCancel        context.CancelFunc
+	refreshRequested      chan struct{}
+	epoch                 uint64
+	testStarted           map[string]time.Time
+	connectionsVisible    bool
+	connectionsChanged    chan struct{}
+	connectionsGeneration uint64
 }
 
 func New(path string, opts Options) *Controller {
@@ -78,7 +83,7 @@ func New(path string, opts Options) *Controller {
 	if opts.ConflictCheck == nil {
 		opts.ConflictCheck = ShadowrocketConnected
 	}
-	return &Controller{path: path, opts: opts, changes: make(chan struct{}, 1), visibilityChanged: make(chan struct{}), refreshRequested: make(chan struct{}, 1), testStarted: map[string]time.Time{}, state: Snapshot{ExternalCore: opts.ExternalCore, Service: core.ServiceUnavailable, Probe: core.ProbeIdle, RuntimeDir: filepath.Dir(path), Tests: map[string]core.NodeStatus{}}}
+	return &Controller{path: path, opts: opts, changes: make(chan struct{}, 1), visibilityChanged: make(chan struct{}), refreshRequested: make(chan struct{}, 1), connectionsChanged: make(chan struct{}), testStarted: map[string]time.Time{}, state: Snapshot{ExternalCore: opts.ExternalCore, Service: core.ServiceUnavailable, Probe: core.ProbeIdle, RuntimeDir: filepath.Dir(path), Tests: map[string]core.NodeStatus{}}}
 }
 
 func (c *Controller) Changes() <-chan struct{} { return c.changes }
@@ -94,6 +99,7 @@ func (c *Controller) Snapshot() Snapshot {
 	if s.Busy == "Disconnecting" && s.Service == core.ServiceRunning {
 		s.Phase = core.PhaseStopping
 	}
+	s.Connections = append([]Connection(nil), s.Connections...)
 	s.Modes = append([]string(nil), s.Modes...)
 	s.Groups = make([]*daemon.Group, len(c.state.Groups))
 	for i, g := range c.state.Groups {
@@ -140,6 +146,7 @@ func (c *Controller) SetVisible(visible bool) {
 			c.state.Probe = core.ProbeIdle
 			c.state.ProbePath = ""
 			c.state.Traffic = Traffic{}
+			clearConnections(&c.state)
 		}
 		close(c.visibilityChanged)
 		c.visibilityChanged = make(chan struct{})
@@ -221,6 +228,7 @@ func (c *Controller) runVisible(parent context.Context) {
 				s.Modes = nil
 				s.Groups = nil
 				s.Traffic = Traffic{}
+				clearConnections(s)
 				s.Probe = core.ProbeIdle
 				s.ProbePath = ""
 				s.Tests = map[string]core.NodeStatus{}
@@ -249,8 +257,9 @@ func (c *Controller) runVisible(parent context.Context) {
 
 func (c *Controller) startObservers(ctx context.Context, cfg *config.Config, epoch uint64, workers *sync.WaitGroup) context.CancelFunc {
 	session, cancel := context.WithCancel(ctx)
-	workers.Add(2)
+	workers.Add(3)
 	go func() { defer workers.Done(); c.watchAPI(session, cfg, epoch) }()
+	go func() { defer workers.Done(); c.watchConnections(session, cfg, epoch) }()
 	go func() { defer workers.Done(); c.watchProbe(session, cfg, epoch) }()
 	return cancel
 }
@@ -298,6 +307,9 @@ func (c *Controller) refresh(ctx context.Context) (*config.Config, string) {
 		}
 		s.Observing = true
 		s.Service, s.DNS, s.Conflict, s.ConfigReady = service, dns, conflict, ready
+		if service != core.ServiceRunning {
+			clearConnections(s)
+		}
 		if known {
 			s.Health.UpgradeRequired = !supported
 			s.Health.FallbackAvailable = fallback
@@ -335,6 +347,9 @@ func (c *Controller) refreshExternal(ctx context.Context, cfg *config.Config, re
 		}
 		s.Observing = true
 		s.Service, s.ConfigReady, s.Conflict = service, ready, false
+		if service != core.ServiceRunning {
+			clearConnections(s)
+		}
 		if service != core.ServiceRunning {
 			s.APIReady = false
 			s.Groups = nil

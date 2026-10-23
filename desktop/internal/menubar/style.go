@@ -175,12 +175,16 @@ func panelSegmented(c *ui.Context, selected *int, labels []string, disabled bool
 }
 
 func panelSearch(c *ui.Context, query *string) ui.Element {
+	return panelSearchLabel(c, query, "Search nodes")
+}
+
+func panelSearchLabel(c *ui.Context, query *string, label string) ui.Element {
 	t := c.Theme()
 	row := ui.Row(c).AlignItems(ui.Center).Height(32).Padding(0, 8).Gap(8).Radius(radius).Background(t.Surface).Border(hairline, controlBorder(c, false))
 	var input ui.Element
 	row.Children(func() {
 		components.Icon(c, lucide.Search()).Size(14, 14).TextColor(t.TextMuted)
-		input = ui.TextInputBase(c, query).Grow(1).MinWidth(0).Label("Search nodes").Placeholder("Search nodes").FocusRing(false)
+		input = ui.TextInputBase(c, query).Grow(1).MinWidth(0).Label(label).Placeholder(label).FocusRing(false)
 		input.OnTextKey(func(k ui.TextKey) bool {
 			if k.Key == ui.KeyEscape && k.Text() != "" {
 				k.SetText("")

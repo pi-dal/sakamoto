@@ -23,6 +23,7 @@ type Backend interface {
 	Snapshot() desktop.Snapshot
 	Changes() <-chan struct{}
 	SetVisible(bool)
+	SetConnectionsVisible(bool)
 	Connect(context.Context) error
 	Disconnect(context.Context) error
 	SetMode(context.Context, string) error
@@ -51,19 +52,23 @@ type Actions struct {
 // Panel owns view state only. Explicit actions and the independent service can
 // outlive it; live observations are scoped to visibility.
 type Panel struct {
-	backend        Backend
-	actions        Actions
-	snapshot       desktop.Snapshot
-	settings       bool
-	recovery       bool
-	confirmRestart bool
-	confirmConfig  string
-	query, group   string
-	listFilter     string
-	list           ui.ListState
-	appearance     string
-	openAtLogin    bool
-	localNotice    string
+	backend          Backend
+	actions          Actions
+	snapshot         desktop.Snapshot
+	settings         bool
+	connections      bool
+	connectionQuery  string
+	connectionFilter string
+	connectionList   ui.ListState
+	recovery         bool
+	confirmRestart   bool
+	confirmConfig    string
+	query, group     string
+	listFilter       string
+	list             ui.ListState
+	appearance       string
+	openAtLogin      bool
+	localNotice      string
 }
 
 func NewPanel(backend Backend, actions Actions) *Panel {
@@ -130,6 +135,8 @@ func (p *Panel) View(c *ui.Context) {
 			p.recoveryView(c)
 		} else if p.settings {
 			p.settingsView(c)
+		} else if p.connections {
+			p.connectionsView(c)
 		} else {
 			p.home(c)
 		}
@@ -139,15 +146,19 @@ func (p *Panel) View(c *ui.Context) {
 
 func (p *Panel) header(c *ui.Context) {
 	ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-		if p.settings || p.recovery {
+		if p.settings || p.recovery || p.connections {
 			panelIconButton(c, lucide.ArrowLeft(), "Back", false).OnClick(func() {
 				p.settings = false
+				p.setConnections(false)
 				p.recovery = false
 				p.confirmRestart = false
 				p.confirmConfig = ""
 				p.localNotice = ""
 			})
 			title := "Settings"
+			if p.connections {
+				title = "Connections"
+			}
 			if p.recovery {
 				title = "Check & repair"
 			}
@@ -158,7 +169,8 @@ func (p *Panel) header(c *ui.Context) {
 		if p.actions.Demo {
 			ui.Text(c, "Demo session").FontSize(fontSmall).TextColor(c.Theme().TextMuted)
 		}
-		if !p.settings && !p.recovery {
+		if !p.settings && !p.recovery && !p.connections {
+			panelButton(c, "Connections", components.ButtonGhost, false).Padding(4, 8).OnClick(func() { p.setConnections(true) })
 			panelIconButton(c, lucide.Settings(), "Settings", false).OnClick(func() { p.settings = true })
 		}
 	})
@@ -523,6 +535,7 @@ func (p *Panel) footer(c *ui.Context) {
 		if !p.recovery {
 			panelButton(c, "Check & repair", components.ButtonGhost, false).Padding(6, 0).Border(0, ui.Transparent).OnClick(func() {
 				p.settings = false
+				p.setConnections(false)
 				p.recovery = true
 				p.confirmRestart = false
 				p.confirmConfig = ""
