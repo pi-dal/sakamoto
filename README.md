@@ -39,7 +39,7 @@ For a source build in this repository, use `./sakamoto setup` instead. `setup` l
 The shared MyGo + Onevra client lives in the independent [`desktop`](desktop/README.md)
 Go module. macOS uses a menu bar popover and the existing supervisor; Windows uses
 a notification-area flyout; Linux uses an AppIndicator menu and utility panel.
-The view, themes, mode/node controls, latency, traffic and live connection list are shared. Windows/Linux
+The view, themes, mode/node controls, latency, traffic, live connection list and validated scalar configuration editor are shared. Windows/Linux
 use an existing native core API and explicitly show external ownership; their
 privileged connection/DNS service adapters are not supplied by this preview.
 Closing a tray panel keeps the app running, and quitting preserves the independent

@@ -37,8 +37,13 @@ action names stay complete. The home header's Connections action replaces the
 body with search, an active count and a virtual list. Each 60-point row aligns
 target/application/outbound on the left and per-connection totals on the right.
 This is read-only inspection, with no explanatory introduction or extra cards.
-Connection events subscribe only while this page is visible. Navigating away or
-hiding releases its data and bindings; reopening starts from a fresh snapshot.
+Settings also opens a scrollable Configuration page for persistent TUI settings.
+It groups Network, DNS, Traffic policy, Privacy, Local proxy, Advanced, Cloud sync
+and Fallback. Save is explicit and atomic; Check & repair remains the only path to
+regenerate and reconnect. Nodes, subscription sources and policy collections stay
+in TUI list editors instead of becoming dense text fields. Connection events
+subscribe only while this page is visible. Navigating away or hiding releases its
+data and bindings; reopening starts from a fresh snapshot.
 
 FORM: Keep the released MyGo tray/flyout interaction. The shared list and row
 system adapts to native host typography. Clearing a filter resets its scroll;

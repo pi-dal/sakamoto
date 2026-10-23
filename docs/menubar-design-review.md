@@ -63,10 +63,14 @@ identity are recorded in `docs/menubar-surface.md` and `DESIGN.md`.
 The Connections extension keeps the same content vocabulary: a text action in the
 home header, back navigation, one search input, active count and 60-point virtual
 rows. Targets/applications/outbounds align left; transfer totals align right.
-No introduction or new card treatment was added. `connections-light.png`,
-`connections-dark.png` and packaged `macos-connections-*.png` establish content
+The Configuration page extends the same vocabulary with grouped labels, native
+switches, selects and bordered text inputs. Save is the only primary configuration
+action; regenerate and reconnect remain in Check & repair. No introduction or new
+card treatment was added. `connections-light.png`, `connections-dark.png` and
+packaged `macos-connections-*.png` establish content
 hierarchy; `connections-e2e.json` and `connections-native-e2e.json` separately
 verify demand-scoped tracking and preservation of the actual data stream. The
 content review is recorded in `dist/menubar-verification/connections-design-review.md`
 with disposition `ship` at content scope; the native acceptance limits above
-remain open. This review also used the inline fallback.
+remain open. `configuration-light.png` and `configuration-dark.png` cover the
+new editor. This review also used the inline fallback.

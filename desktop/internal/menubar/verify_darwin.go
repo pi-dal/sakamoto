@@ -33,22 +33,25 @@ func (a *application) verify() {
 		mygo.App.Quit()
 	}()
 	for _, capture := range []struct {
-		name        string
-		theme       mygo.ThemeSource
-		settings    bool
-		recovery    bool
-		confirm     bool
-		connections bool
+		name          string
+		theme         mygo.ThemeSource
+		settings      bool
+		recovery      bool
+		confirm       bool
+		connections   bool
+		configuration bool
 	}{
-		{"macos-light.png", mygo.ThemeLight, false, false, false, false},
-		{"macos-dark.png", mygo.ThemeDark, false, false, false, false},
-		{"macos-settings.png", mygo.ThemeLight, true, false, false, false},
-		{"macos-settings-dark.png", mygo.ThemeDark, true, false, false, false},
-		{"macos-repair-light.png", mygo.ThemeLight, false, true, false, false},
-		{"macos-repair-dark.png", mygo.ThemeDark, false, true, false, false},
-		{"macos-reconnect-confirm.png", mygo.ThemeLight, false, true, true, false},
-		{"macos-connections-light.png", mygo.ThemeLight, false, false, false, true},
-		{"macos-connections-dark.png", mygo.ThemeDark, false, false, false, true},
+		{"macos-light.png", mygo.ThemeLight, false, false, false, false, false},
+		{"macos-dark.png", mygo.ThemeDark, false, false, false, false, false},
+		{"macos-settings.png", mygo.ThemeLight, true, false, false, false, false},
+		{"macos-settings-dark.png", mygo.ThemeDark, true, false, false, false, false},
+		{"macos-repair-light.png", mygo.ThemeLight, false, true, false, false, false},
+		{"macos-repair-dark.png", mygo.ThemeDark, false, true, false, false, false},
+		{"macos-reconnect-confirm.png", mygo.ThemeLight, false, true, true, false, false},
+		{"macos-connections-light.png", mygo.ThemeLight, false, false, false, true, false},
+		{"macos-connections-dark.png", mygo.ThemeDark, false, false, false, true, false},
+		{"macos-configuration-light.png", mygo.ThemeLight, false, false, false, false, true},
+		{"macos-configuration-dark.png", mygo.ThemeDark, false, false, false, false, true},
 	} {
 		mygo.RunOnMain(func() {
 			if a.window != nil {
@@ -56,6 +59,11 @@ func (a *application) verify() {
 			}
 			mygo.Theme.SetSource(capture.theme)
 			a.panel.setConnections(capture.connections)
+			a.panel.configuration = false
+			a.panel.configReturnSettings = false
+			if capture.configuration {
+				a.panel.openConfiguration()
+			}
 			a.panel.settings = capture.settings
 			a.panel.recovery = capture.recovery
 			a.panel.confirmRestart = capture.confirm

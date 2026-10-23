@@ -24,6 +24,8 @@ type Backend interface {
 	Changes() <-chan struct{}
 	SetVisible(bool)
 	SetConnectionsVisible(bool)
+	Configuration() (desktop.Configuration, error)
+	SaveConfiguration(context.Context, desktop.Configuration) error
 	Connect(context.Context) error
 	Disconnect(context.Context) error
 	SetMode(context.Context, string) error
@@ -52,23 +54,28 @@ type Actions struct {
 // Panel owns view state only. Explicit actions and the independent service can
 // outlive it; live observations are scoped to visibility.
 type Panel struct {
-	backend          Backend
-	actions          Actions
-	snapshot         desktop.Snapshot
-	settings         bool
-	connections      bool
-	connectionQuery  string
-	connectionFilter string
-	connectionList   ui.ListState
-	recovery         bool
-	confirmRestart   bool
-	confirmConfig    string
-	query, group     string
-	listFilter       string
-	list             ui.ListState
-	appearance       string
-	openAtLogin      bool
-	localNotice      string
+	backend              Backend
+	actions              Actions
+	snapshot             desktop.Snapshot
+	settings             bool
+	connections          bool
+	connectionQuery      string
+	connectionFilter     string
+	connectionList       ui.ListState
+	recovery             bool
+	configuration        bool
+	configDraft          desktop.Configuration
+	configSection        string
+	configLoaded         bool
+	configReturnSettings bool
+	confirmRestart       bool
+	confirmConfig        string
+	query, group         string
+	listFilter           string
+	list                 ui.ListState
+	appearance           string
+	openAtLogin          bool
+	localNotice          string
 }
 
 func NewPanel(backend Backend, actions Actions) *Panel {
@@ -137,6 +144,8 @@ func (p *Panel) View(c *ui.Context) {
 			p.settingsView(c)
 		} else if p.connections {
 			p.connectionsView(c)
+		} else if p.configuration {
+			p.configurationView(c)
 		} else {
 			p.home(c)
 		}
@@ -146,16 +155,22 @@ func (p *Panel) View(c *ui.Context) {
 
 func (p *Panel) header(c *ui.Context) {
 	ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-		if p.settings || p.recovery || p.connections {
+		if p.settings || p.recovery || p.connections || p.configuration {
 			panelIconButton(c, lucide.ArrowLeft(), "Back", false).OnClick(func() {
-				p.settings = false
+				returnToSettings := p.configuration && p.configReturnSettings
+				p.settings = returnToSettings
 				p.setConnections(false)
+				p.configuration = false
+				p.configReturnSettings = false
 				p.recovery = false
 				p.confirmRestart = false
 				p.confirmConfig = ""
 				p.localNotice = ""
 			})
 			title := "Settings"
+			if p.configuration {
+				title = "Configuration"
+			}
 			if p.connections {
 				title = "Connections"
 			}
@@ -169,7 +184,7 @@ func (p *Panel) header(c *ui.Context) {
 		if p.actions.Demo {
 			ui.Text(c, "Demo session").FontSize(fontSmall).TextColor(c.Theme().TextMuted)
 		}
-		if !p.settings && !p.recovery && !p.connections {
+		if !p.settings && !p.recovery && !p.connections && !p.configuration {
 			panelButton(c, "Connections", components.ButtonGhost, false).Padding(4, 8).OnClick(func() { p.setConnections(true) })
 			panelIconButton(c, lucide.Settings(), "Settings", false).OnClick(func() { p.settings = true })
 		}
@@ -494,6 +509,7 @@ func (p *Panel) settingsView(c *ui.Context) {
 		panelHairline(c)
 		ui.Column(c).Gap(8).Children(func() {
 			ui.Text(c, "Configuration").Bold()
+			panelButton(c, "Edit configuration", components.ButtonSecondary, false).OnClick(func() { p.openConfiguration() })
 			if p.actions.OpenTUI != nil {
 				panelButton(c, "Open TUI", components.ButtonSecondary, p.actions.Demo).OnClick(func() { p.local(p.actions.OpenTUI) })
 			}
@@ -536,6 +552,7 @@ func (p *Panel) footer(c *ui.Context) {
 			panelButton(c, "Check & repair", components.ButtonGhost, false).Padding(6, 0).Border(0, ui.Transparent).OnClick(func() {
 				p.settings = false
 				p.setConnections(false)
+				p.configuration = false
 				p.recovery = true
 				p.confirmRestart = false
 				p.confirmConfig = ""
