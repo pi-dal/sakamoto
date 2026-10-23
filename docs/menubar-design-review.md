@@ -24,6 +24,16 @@ scroll. External ownership uses Core online / Managed externally instead of
 claiming an API connection means this client owns a TUN. Long labels retain full
 accessible names and action labels.
 
+The recovery refinement preserves this visual vocabulary: a footer/tray entry,
+back navigation, timestamped public diagnosis, adjacent check/repair controls,
+separate confirmed reconnect, and readable watcher acknowledgements. Light/dark
+repair content renders and pointer-driven confirmation/cancel evidence live in
+`repair-*.png` and `repair-view-e2e.json`. The recovery state uses section dividers
+without adding cards or another window. Duplicate result text is suppressed in
+the footer when it is already present in the page. Idle/protocol evidence is
+separate in `resident-repair-e2e.json`; content renders do not establish idle CPU
+or privileged service success.
+
 Native IME, screen readers, taskbar/Wayland/multi-monitor/full-screen positioning,
 outside-click/Escape and login startup need interactive acceptance on each OS.
 The packaged demo reproduces fixture views without private data using

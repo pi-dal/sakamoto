@@ -36,10 +36,15 @@ func (a *application) verify() {
 		name     string
 		theme    mygo.ThemeSource
 		settings bool
+		recovery bool
+		confirm  bool
 	}{
-		{"macos-light.png", mygo.ThemeLight, false},
-		{"macos-dark.png", mygo.ThemeDark, false},
-		{"macos-settings.png", mygo.ThemeLight, true},
+		{"macos-light.png", mygo.ThemeLight, false, false, false},
+		{"macos-dark.png", mygo.ThemeDark, false, false, false},
+		{"macos-settings.png", mygo.ThemeLight, true, false, false},
+		{"macos-repair-light.png", mygo.ThemeLight, false, true, false},
+		{"macos-repair-dark.png", mygo.ThemeDark, false, true, false},
+		{"macos-reconnect-confirm.png", mygo.ThemeLight, false, true, true},
 	} {
 		mygo.RunOnMain(func() {
 			if a.window != nil {
@@ -47,6 +52,8 @@ func (a *application) verify() {
 			}
 			mygo.Theme.SetSource(capture.theme)
 			a.panel.settings = capture.settings
+			a.panel.recovery = capture.recovery
+			a.panel.confirmRestart = capture.confirm
 			a.show()
 		})
 		time.Sleep(400 * time.Millisecond)
@@ -104,7 +111,7 @@ func (a *application) verify() {
 		}
 	}
 	var hidden bool
-	mygo.RunOnMain(func() { hidden = a.window == nil; a.panel.settings = false; a.show() })
+	mygo.RunOnMain(func() { hidden = a.window == nil; a.panel.settings = false; a.panel.recovery = false; a.show() })
 	time.Sleep(200 * time.Millisecond)
 	var reopened bool
 	mygo.RunOnMain(func() { reopened = a.window != nil && a.window.IsVisible() })

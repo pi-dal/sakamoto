@@ -23,13 +23,21 @@ FIRST VIEWPORT: 400 x 640 points. Product and settings at top; state and a compa
 supported connection action share a row. Routing segments, active route and
 aligned traffic precede a tighter node-group/search/list region. The selected
 node has both a check and a bold name. Settings replaces the panel body with a
-back action. Long labels truncate visually while action names stay complete.
+back action. Check & repair also replaces the body, with a read-only check,
+ordinary repair, explicitly confirmed reconnect and watcher acknowledgement.
+Opening this page does not initiate a repair. An unavailable supervisor offers
+a deliberate bundled repair terminal action; external cores only expose API
+checks and their configuration folder. Long labels truncate visually while
+action names stay complete.
 
 FORM: Keep the released MyGo tray/flyout interaction. The shared list and row
 system adapts to native host typography. Clearing a filter resets its scroll;
 reopening creates new engine-owned list state. A missing tray falls back to a
 reachable ordinary window. Closing a tray panel preserves operations and the
-independent service.
+independent service. Hiding cancels all GUI observation, including polling,
+subscriptions, conflict subprocess checks and network probes. Opening refreshes
+state immediately. Tray menus contain navigation rather than stale lifecycle
+actions. A requested bounded repair can finish after hiding.
 
 FINISH: Record content render/event evidence for light/dark and long Unicode
 names, real local API/supervisor workflow receipts, per-target build metadata and

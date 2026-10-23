@@ -7,12 +7,21 @@ from pathlib import Path
 import plistlib
 import re
 import subprocess
+import sys
 import tempfile
 import zipfile
 
+from macos_release_tools import stapler
+
 
 def capture(command):
-    return subprocess.check_output(command, stderr=subprocess.STDOUT, text=True)
+    try:
+        return subprocess.check_output(command, stderr=subprocess.STDOUT, text=True)
+    except subprocess.CalledProcessError as error:
+        # These verification commands contain no signing/notary credentials.
+        # Preserve the actual failure instead of only a Python exit-code trace.
+        print(error.output, file=sys.stderr, end="")
+        raise
 
 
 def verify_signature(path, team):
@@ -75,7 +84,7 @@ def main():
                 verify_signature(binary, None if args.allow_ad_hoc else args.team_id)
             verify_signature(app, None if args.allow_ad_hoc else args.team_id)
             if not args.allow_ad_hoc:
-                capture(["xcrun", "stapler", "validate", str(app)])
+                stapler("validate", app)
                 capture(["spctl", "--assess", "--type", "execute", "--verbose=4", str(app)])
         results.append({"arch": arch, "file": archive.name, "sha256": digest, "verified": True})
     if args.cask_output:

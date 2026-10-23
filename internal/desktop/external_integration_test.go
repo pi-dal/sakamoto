@@ -39,13 +39,17 @@ func TestExternalCoreEndToEnd(t *testing.T) {
 	probe := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
 	defer probe.Close()
 	controller := desktop.New(path, desktop.Options{ExternalCore: true, PollInterval: 30 * time.Millisecond, ProbeURLs: []string{probe.URL}, ConflictCheck: func(context.Context) bool { t.Error("external core checked macOS conflicts"); return false }})
+	controller.SetVisible(true)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan struct{})
 	go func() { controller.Run(ctx); close(done) }()
 	eventually(t, controller, func(s desktop.Snapshot) bool { return s.ExternalCore && s.APIReady && s.Phase == core.PhaseReachable })
-	if controller.Connect(ctx) == nil || controller.Disconnect(ctx) == nil {
-		t.Fatal("external core accepted a lifecycle operation")
+	if controller.Connect(ctx) == nil || controller.Disconnect(ctx) == nil || controller.Repair(ctx, false) == nil || controller.Repair(ctx, true) == nil || controller.RecoverRoute(ctx) == nil {
+		t.Fatal("external core accepted a lifecycle/recovery operation")
+	}
+	if err := controller.CheckHealth(ctx); err != nil || !controller.Snapshot().Health.Verified {
+		t.Fatal("external core health check failed", err)
 	}
 	if err := controller.SetMode(ctx, "global"); err != nil {
 		t.Fatal(err)

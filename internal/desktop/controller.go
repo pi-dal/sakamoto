@@ -33,6 +33,9 @@ type Traffic struct {
 
 // Snapshot contains display data, never API credentials or server addresses.
 type Snapshot struct {
+	Observing             bool
+	Health                HealthReport
+	Recovery              RecoveryReport
 	ExternalCore          bool
 	Service               core.ServiceState
 	Phase                 core.SessionPhase
@@ -62,6 +65,8 @@ type Controller struct {
 	changes           chan struct{}
 	visible           bool
 	visibilityChanged chan struct{}
+	observerCancel    context.CancelFunc
+	refreshRequested  chan struct{}
 	epoch             uint64
 	testStarted       map[string]time.Time
 }
@@ -73,7 +78,7 @@ func New(path string, opts Options) *Controller {
 	if opts.ConflictCheck == nil {
 		opts.ConflictCheck = ShadowrocketConnected
 	}
-	return &Controller{path: path, opts: opts, changes: make(chan struct{}, 1), visibilityChanged: make(chan struct{}), testStarted: map[string]time.Time{}, state: Snapshot{ExternalCore: opts.ExternalCore, Service: core.ServiceUnavailable, Probe: core.ProbeIdle, RuntimeDir: filepath.Dir(path), Tests: map[string]core.NodeStatus{}}}
+	return &Controller{path: path, opts: opts, changes: make(chan struct{}, 1), visibilityChanged: make(chan struct{}), refreshRequested: make(chan struct{}, 1), testStarted: map[string]time.Time{}, state: Snapshot{ExternalCore: opts.ExternalCore, Service: core.ServiceUnavailable, Probe: core.ProbeIdle, RuntimeDir: filepath.Dir(path), Tests: map[string]core.NodeStatus{}}}
 }
 
 func (c *Controller) Changes() <-chan struct{} { return c.changes }
@@ -112,7 +117,7 @@ func (c *Controller) update(fn func(*Snapshot)) {
 }
 func (c *Controller) updateSession(epoch uint64, fn func(*Snapshot)) {
 	c.update(func(s *Snapshot) {
-		if c.epoch == epoch && s.Service == core.ServiceRunning {
+		if c.epoch == epoch && c.visible && s.Service == core.ServiceRunning {
 			fn(s)
 		}
 	})
@@ -122,8 +127,26 @@ func (c *Controller) SetVisible(visible bool) {
 	defer c.mu.Unlock()
 	if c.visible != visible {
 		c.visible = visible
+		if !visible {
+			if c.observerCancel != nil {
+				c.observerCancel()
+			}
+			c.epoch++
+			c.state.Observing = false
+			c.state.APIReady = false
+			c.state.Groups = nil
+			c.state.Mode = ""
+			c.state.Modes = nil
+			c.state.Probe = core.ProbeIdle
+			c.state.ProbePath = ""
+			c.state.Traffic = Traffic{}
+		}
 		close(c.visibilityChanged)
 		c.visibilityChanged = make(chan struct{})
+		select {
+		case c.changes <- struct{}{}:
+		default:
+		}
 	}
 }
 func (c *Controller) visibility() (bool, <-chan struct{}) {
@@ -141,19 +164,51 @@ func wait(ctx context.Context, duration time.Duration) bool {
 	}
 }
 
-// Run observes the same supervisor and authenticated API as the TUI.
+// Run parks without timers or I/O while hidden. Explicit actions use their own
+// bounded context and can complete independently of a visible panel.
 func (c *Controller) Run(ctx context.Context) {
+	for ctx.Err() == nil {
+		visible, changed := c.visibility()
+		if !visible {
+			select {
+			case <-ctx.Done():
+				return
+			case <-changed:
+				continue
+			}
+		}
+		c.runVisible(ctx)
+	}
+}
+
+func (c *Controller) runVisible(parent context.Context) {
+	ctx, cancel := context.WithCancel(parent)
+	c.mu.Lock()
+	if !c.visible {
+		c.mu.Unlock()
+		cancel()
+		return
+	}
+	c.observerCancel = cancel
+	c.mu.Unlock()
 	var sessionCancel context.CancelFunc
 	var sessionKey string
 	var workers sync.WaitGroup
 	defer func() {
+		cancel()
 		if sessionCancel != nil {
 			sessionCancel()
 		}
 		workers.Wait()
+		c.mu.Lock()
+		c.observerCancel = nil
+		c.mu.Unlock()
 	}()
 	for ctx.Err() == nil {
 		cfg, key := c.refresh(ctx)
+		if ctx.Err() != nil {
+			return
+		}
 		if key != sessionKey {
 			if sessionCancel != nil {
 				sessionCancel()
@@ -180,8 +235,14 @@ func (c *Controller) Run(ctx context.Context) {
 			}
 		}
 		c.expireTests()
-		if !wait(ctx, c.opts.PollInterval) {
+		timer := time.NewTimer(c.opts.PollInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
 			return
+		case <-c.refreshRequested:
+			timer.Stop()
+		case <-timer.C:
 		}
 	}
 }
@@ -221,10 +282,17 @@ func (c *Controller) refresh(ctx context.Context) (*config.Config, string) {
 			}
 		}
 	}
+	if ctx.Err() != nil {
+		return cfg, ""
+	}
 	checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	conflict := c.opts.ConflictCheck(checkCtx)
 	cancel()
 	c.update(func(s *Snapshot) {
+		if !c.visible || ctx.Err() != nil {
+			return
+		}
+		s.Observing = true
 		s.Service, s.DNS, s.Conflict, s.ConfigReady = service, dns, conflict, ready
 		if service != core.ServiceRunning {
 			s.APIReady = false
@@ -254,6 +322,10 @@ func (c *Controller) refreshExternal(ctx context.Context, cfg *config.Config, re
 		}
 	}
 	c.update(func(s *Snapshot) {
+		if !c.visible || ctx.Err() != nil {
+			return
+		}
+		s.Observing = true
 		s.Service, s.ConfigReady, s.Conflict = service, ready, false
 		if service != core.ServiceRunning {
 			s.APIReady = false
@@ -426,13 +498,27 @@ func (c *Controller) perform(ctx context.Context, name string, fn func(context.C
 		return errors.New("another action is in progress")
 	}
 	defer c.operation.Unlock()
+	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	defer func() {
+		select {
+		case c.refreshRequested <- struct{}{}:
+		default:
+		}
+	}()
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	c.update(func(s *Snapshot) { s.Busy = name; s.Notice = core.Progressf("%s…", name) })
+	progress := core.Progressf("%s…", name)
+	c.update(func(s *Snapshot) { s.Busy = name; s.Notice = progress })
 	err := fn(ctx)
 	c.update(func(s *Snapshot) {
 		s.Busy = ""
+		// Actions may install a safe, more specific result (for example queued
+		// route tests). Never replace that acknowledgement with generic success.
+		if s.Notice.Text != progress.Text || s.Notice.Kind != progress.Kind {
+			return
+		}
 		if err != nil {
 			s.Notice = core.Errorf("%s failed. Refresh the connection and try again.", name)
 		} else {

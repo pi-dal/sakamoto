@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -104,12 +103,12 @@ func (a *application) ready() error {
 		login = mygo.App.OpenAtLogin()
 	}
 	mygo.Theme.SetSource(mygo.ThemeSource(strings.ToLower(appearance)))
-	var tui func() error
+	var tui, recovery func() error
 	if runtime.GOOS == "darwin" {
-		tui = a.openTUI
+		tui, recovery = a.openTUI, a.openRecovery
 	}
 	a.panel = NewPanel(a.backend, Actions{
-		Dispatch: a.dispatchAction, OpenTUI: tui, RevealConfig: a.revealConfig,
+		Dispatch: a.dispatchAction, OpenTUI: tui, OpenRecovery: recovery, RevealConfig: a.revealConfig,
 		SetAppearance: a.setAppearance, SetLogin: mygo.App.SetOpenAtLogin, Quit: mygo.App.Quit,
 		Appearance: appearance, OpenAtLogin: login, Demo: a.opts.Demo,
 	})
@@ -127,7 +126,7 @@ func (a *application) ready() error {
 		}
 	}
 	go a.observe()
-	if a.opts.Show || a.opts.VerifyDirectory != "" || a.tray == nil || runtime.GOOS == "linux" {
+	if a.opts.Show || a.opts.VerifyDirectory != "" || a.tray == nil {
 		// Let AppKit attach the status item to its menu bar window before
 		// anchoring the first popover (normal clicks happen after this point).
 		go func() {
@@ -142,17 +141,17 @@ func (a *application) ready() error {
 }
 
 func (a *application) show() {
+	a.backend.SetVisible(true)
+	a.panel.Refresh()
 	if a.window != nil {
 		a.window.Show()
 		a.window.Focus()
 		a.window.Invalidate()
 		return
 	}
-	a.panel.Refresh()
 	// MyGo list state belongs to one content engine. A dismissed popover
 	// creates a new engine when reopened, so it needs fresh scroll state.
 	a.panel.list = ui.ListState{}
-	a.backend.SetVisible(true)
 	if a.tray == nil {
 		a.window = mygo.NewWindow(mygo.WindowOptions{Title: "Sakamoto", Width: PanelWidth, Height: PanelHeight, DisableResize: true, Content: ui.View(a.panel.View)})
 	} else {
@@ -162,6 +161,10 @@ func (a *application) show() {
 		})
 	}
 	a.window.OnClosed(func() {
+		// Release engine bindings and row closures immediately while resident.
+		a.panel.list = ui.ListState{}
+		a.panel.listFilter = ""
+		a.panel.confirmRestart = false
 		a.window = nil
 		a.backend.SetVisible(false)
 		if a.tray == nil && a.opts.VerifyDirectory == "" {
@@ -197,6 +200,9 @@ func (a *application) observe() {
 							status = "Core online"
 						}
 					}
+					if !s.Observing {
+						status = "idle · open to check status"
+					}
 					a.tray.SetToolTip("sakamoto — " + status)
 					a.syncMenu()
 				}
@@ -228,30 +234,33 @@ func (a *application) syncMenu() {
 	if runtime.GOOS != "linux" || a.tray == nil {
 		return
 	}
-	s := a.backend.Snapshot()
-	key := fmt.Sprint(s.Service, s.Busy, s.ConfigReady, s.Conflict, s.ExternalCore)
-	if key != a.menuState {
-		a.menuState = key
+	if a.menuState != "resident" {
+		a.menuState = "resident"
 		a.tray.SetMenu(a.menu())
 	}
 }
 
 func (a *application) menu() *mygo.Menu {
-	s := a.backend.Snapshot()
-	label := "Connect"
-	action := a.backend.Connect
-	if s.Service == "Running" {
-		label = "Disconnect"
-		action = a.backend.Disconnect
-	}
-	if s.ExternalCore {
-		label = "Managed externally"
-	}
 	return mygo.NewMenu([]*mygo.MenuItem{
-		{Label: "Open Sakamoto", Click: func(*mygo.MenuItem, *mygo.Window) { a.show() }},
-		{Label: label, Disabled: s.ExternalCore || s.Busy != "" || s.Service == "Unavailable" || (!s.ConfigReady && s.Service != "Running") || (s.Conflict && s.Service != "Running"), Click: func(*mygo.MenuItem, *mygo.Window) { a.dispatchAction(action) }},
+		{Label: "Open Sakamoto", Click: func(*mygo.MenuItem, *mygo.Window) {
+			a.panel.settings = false
+			a.panel.recovery = false
+			a.panel.confirmRestart = false
+			a.show()
+		}},
+		{Label: "Check & repair…", Click: func(*mygo.MenuItem, *mygo.Window) {
+			a.panel.settings = false
+			a.panel.recovery = true
+			a.panel.confirmRestart = false
+			a.show()
+		}},
 		mygo.Separator(),
-		{Label: "Settings…", Click: func(*mygo.MenuItem, *mygo.Window) { a.panel.settings = true; a.show() }},
+		{Label: "Settings…", Click: func(*mygo.MenuItem, *mygo.Window) {
+			a.panel.recovery = false
+			a.panel.settings = true
+			a.panel.confirmRestart = false
+			a.show()
+		}},
 		{Role: mygo.RoleQuit, Label: "Quit Sakamoto"},
 	})
 }

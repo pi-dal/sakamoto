@@ -12,6 +12,8 @@ import shutil
 import subprocess
 import tempfile
 
+from macos_release_tools import stapler
+
 
 def run(command, **kwargs):
     subprocess.run(command, check=True, **kwargs)
@@ -34,8 +36,8 @@ def notarize(app, archive, receipt, profile):
         if status.get("id"):
             subprocess.run(["xcrun", "notarytool", "log", status["id"], *auth, str(receipt.with_suffix(".log.json"))], check=False)
         raise SystemExit(f"Notarization was not accepted; inspect {receipt}")
-    run(["xcrun", "stapler", "staple", str(app)])
-    run(["xcrun", "stapler", "validate", str(app)])
+    stapler("staple", app)
+    stapler("validate", app)
     run(["codesign", "--verify", "--deep", "--strict", str(app)])
     run(["spctl", "--assess", "--type", "execute", "--verbose=4", str(app)])
 
