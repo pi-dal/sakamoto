@@ -84,6 +84,7 @@ def main():
             shutil.copy2(Path(modules["github.com/egoist/mygo"]["Dir"]) / "LICENSE", licenses / "MyGo-MIT.txt")
             onevra = Path(modules["github.com/oneo-me/onevra/source"]["Dir"])
             shutil.copy2(root / "desktop/LICENSE.onevra", licenses / "Onevra-MIT.txt")
+            shutil.copy2(root / "desktop/LICENSE.radix", licenses / "Radix-Colors-MIT.txt")
             shutil.copy2(onevra / "components/LICENSE.mygo", licenses / "MyGo-components-MIT.txt")
             shutil.copy2(onevra / "icons/lucide/LICENSE", licenses / "Lucide.txt")
             if system == "linux":

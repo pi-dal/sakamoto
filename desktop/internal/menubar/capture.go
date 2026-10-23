@@ -2,7 +2,6 @@ package menubar
 
 import (
 	"bytes"
-	"github.com/egoist/mygo/ui"
 	"image"
 	"image/color"
 	"image/draw"
@@ -16,10 +15,7 @@ func readableSnapshot(raw []byte, dark bool) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	theme := ui.LightTheme()
-	if dark {
-		theme = ui.DarkTheme()
-	}
+	theme := radixTheme(dark)
 	c := theme.Background
 	output := image.NewRGBA(content.Bounds())
 	draw.Draw(output, output.Bounds(), image.NewUniform(color.NRGBA{R: c.R, G: c.G, B: c.B, A: 255}), image.Point{}, draw.Src)

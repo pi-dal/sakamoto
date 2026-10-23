@@ -17,7 +17,7 @@ func trayIcon() []byte {
 	img := image.NewNRGBA(image.Rect(0, 0, size, size))
 	ink := color.NRGBA{A: 255}
 	if runtime.GOOS != "darwin" {
-		ink = color.NRGBA{R: 37, G: 99, B: 235, A: 255}
+		ink = color.NRGBA{R: 62, G: 99, B: 221, A: 255} // Radix Indigo 9
 	}
 	for y := 0; y < size; y++ {
 		for x := 0; x < size; x++ {

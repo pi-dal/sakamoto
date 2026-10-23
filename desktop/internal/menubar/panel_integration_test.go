@@ -62,7 +62,7 @@ func TestPanelWorkflow(t *testing.T) {
 	if err := tt.Click("Test Demo Osaka"); err != nil {
 		t.Fatal(err)
 	}
-	if !tt.HasText("Reachable 38 ms") {
+	if !tt.HasText("38 ms") {
 		t.Fatal("latency result missing")
 	}
 	if err := tt.Click("Search nodes"); err != nil {

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/pi-dal/sakamoto/internal/core"
 	"github.com/pi-dal/sakamoto/internal/desktop"
 	"github.com/sagernet/sing-box/daemon"
 )
@@ -42,6 +43,24 @@ func TestSharedDesktopExternalWorkflow(t *testing.T) {
 	if tt.HasText("Open TUI") {
 		t.Fatal("unsupported TUI action shown")
 	}
+	_ = backend.update(func(s *desktop.Snapshot) { s.Probe = core.ProbeUnverified })
+	panel.Refresh()
+	tt.Frame()
+	if !tt.HasText("Network unverified. Retrying…") || !tt.HasText("Core online") {
+		t.Fatal("API availability obscured an unverified network", tt.Texts())
+	}
+	_ = backend.update(func(s *desktop.Snapshot) {
+		s.Probe = core.ProbeReachable
+		s.ProbePath = core.PathProxyOnly
+	})
+	panel.Refresh()
+	tt.Frame()
+	if !tt.HasText("Reachable via " + core.PathProxyOnly) {
+		t.Fatal("partial reachability lost its path qualification", tt.Texts())
+	}
+	_ = backend.update(func(s *desktop.Snapshot) { s.ProbePath = core.PathBoth })
+	panel.Refresh()
+	tt.Frame()
 	if err := tt.Click("Search nodes"); err != nil {
 		t.Fatal(err)
 	}
@@ -91,13 +110,13 @@ func TestSharedDesktopExternalWorkflow(t *testing.T) {
 	if err := tt.Click("Check & repair"); err != nil {
 		t.Fatal(err)
 	}
-	if tt.HasText("Repair core") || tt.HasText("Reconnect core…") || tt.HasText("Test automatic route") || !tt.HasText("Managed externally") {
+	if tt.HasText("Repair core") || tt.HasText("Reconnect core…") || tt.HasText("Test route") || !tt.HasText("Managed externally") {
 		t.Fatal("external repair view exposed unsupported operations")
 	}
 	if err := tt.Click("Check health"); err != nil {
 		t.Fatal(err)
 	}
-	if !panel.snapshot.Health.Verified || !tt.HasText("Demo core API responds. The external service manages the tunnel and DNS.") {
+	if !panel.snapshot.Health.Verified || !tt.HasText("Core API verified.") {
 		t.Fatal("external API check did not explain service ownership")
 	}
 }

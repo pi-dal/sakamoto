@@ -32,7 +32,7 @@ func (c *Controller) CheckHealth(ctx context.Context) error {
 		var report HealthReport
 		var err error
 		if c.opts.ExternalCore {
-			report = HealthReport{State: "unavailable", Summary: "Core API unavailable. Check the external service and its API settings."}
+			report = HealthReport{State: "unavailable", Summary: "Core API unavailable. Check the service and API settings."}
 			var cfg *config.Config
 			cfg, err = config.Load(c.path)
 			if err == nil {
@@ -46,7 +46,7 @@ func (c *Controller) CheckHealth(ctx context.Context) error {
 				}
 			}
 			if err == nil {
-				report = HealthReport{State: "healthy", Verified: true, Summary: "Core API responds. The external service manages the tunnel and DNS."}
+				report = HealthReport{State: "healthy", Verified: true, Summary: "Core API verified."}
 			}
 		} else {
 			report, err = runtimeRepair(ctx, c.path, true, false)
@@ -100,20 +100,20 @@ func (c *Controller) RecoverRoute(ctx context.Context) error {
 	}
 	return c.perform(ctx, "Requesting route tests", func(ctx context.Context) error {
 		status, err := watchcontrol.Request(ctx, c.path)
-		summary := "Route recovery is unavailable. Check the background watcher."
+		summary := "Route tests unavailable. Check the background service."
 		switch status {
 		case "queued":
-			summary = "Route tests requested. Recovery is not yet verified."
+			summary = "Route tests queued."
 		case "busy":
-			summary = "Route tests are already running. Recovery is not yet verified."
+			summary = "Route tests running."
 		case "cooldown":
-			summary = "Route recovery is cooling down. Try again shortly."
+			summary = "Route recovery is cooling down."
 		case "manual":
-			summary = "A manual route is selected. Automatic recovery kept your selection."
+			summary = "Manual route unchanged."
 		case "disabled":
-			summary = "Automatic fallback is disabled or has no alternative route."
+			summary = "Automatic fallback is off or has no alternative route."
 		case "maintenance":
-			summary = "Route recovery is paused for maintenance."
+			summary = "Route recovery paused for maintenance."
 		}
 		if err != nil {
 			status = "unavailable"
