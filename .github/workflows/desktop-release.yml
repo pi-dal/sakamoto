@@ -4,6 +4,11 @@ on:
   push:
     tags: ['desktop-v*']
   workflow_dispatch:
+    inputs:
+      homebrew_release_tag:
+        description: Existing desktop-vX.Y.Z release to verify and retry Homebrew only
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -14,6 +19,7 @@ concurrency:
 
 jobs:
   macos:
+    if: inputs.homebrew_release_tag == ''
     runs-on: macos-15
     timeout-minutes: 90
     env:
@@ -82,6 +88,7 @@ jobs:
         run: python3 scripts/macos-signing.py cleanup
 
   portable:
+    if: inputs.homebrew_release_tag == ''
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -135,7 +142,7 @@ jobs:
           compression-level: 0
 
   homebrew:
-    if: startsWith(github.ref, 'refs/tags/desktop-v')
+    if: always() && !cancelled() && ((startsWith(github.ref, 'refs/tags/desktop-v') && needs.publish.result == 'success') || inputs.homebrew_release_tag != '')
     needs: publish
     runs-on: macos-15
     timeout-minutes: 20
@@ -158,13 +165,19 @@ jobs:
         working-directory: source
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ inputs.homebrew_release_tag || github.ref_name }}
           MACOS_TEAM_ID: ${{ vars.MACOS_TEAM_ID }}
         run: |
+          python3 - <<'PY'
+          import os, re
+          assert re.fullmatch(r'desktop-v[0-9]+\.[0-9]+\.[0-9]+', os.environ['RELEASE_TAG']), 'Expected a stable desktop release tag'
+          PY
           gh release download "$RELEASE_TAG" --repo pi-dal/sakamoto --dir dist/desktop --pattern '*darwin-*.zip' --pattern 'release-metadata.json' --pattern 'notary-*.json'
           python3 scripts/verify-desktop-release.py --team-id "$MACOS_TEAM_ID" --cask-output dist/desktop/sakamoto-desktop.rb
           python3 - <<'PY'
-          import json, pathlib, re, shutil
+          import json, os, pathlib, re, shutil
+          current_metadata = json.loads(pathlib.Path('dist/desktop/release-metadata.json').read_text())
+          assert os.environ['RELEASE_TAG'] == 'desktop-v' + current_metadata['version'], 'Public metadata version does not match the requested tag'
           generated = pathlib.Path('dist/desktop/sakamoto-desktop.rb')
           destination = pathlib.Path('../tap/Casks/sakamoto-desktop.rb')
           if destination.exists():
@@ -176,7 +189,8 @@ jobs:
       - name: Audit and update tap
         working-directory: tap
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ inputs.homebrew_release_tag || github.ref_name }}
+          HOMEBREW_GITHUB_API_TOKEN: ${{ github.token }}
         run: |
           brew tap --custom-remote pi-dal/desktop-release "file://$PWD"
           if brew command trust >/dev/null 2>&1; then brew trust pi-dal/desktop-release; fi

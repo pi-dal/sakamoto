@@ -91,6 +91,17 @@ git push origin desktop-v0.2.19
 
 The version must match `cmd/sakamoto/main.go`. Release workflow runs are serialized.
 Rerunning a failed tap job is supported; an unchanged cask produces no commit.
+If the workflow needs a configuration fix after a release is already public,
+replay only the Homebrew update from the corrected branch:
+
+```sh
+gh workflow run desktop-release.yml --ref main -f homebrew_release_tag=desktop-v0.2.19
+```
+
+This skips signing/build/publication jobs and verifies the existing public signed
+ZIPs before updating the tap. It rejects invalid tags, tag/metadata version
+mismatches and cask downgrades. Online Homebrew audit uses the workflow's GitHub
+token so shared runner IP rate limits do not block a valid release.
 After a successful tap update, install with:
 
 ```sh
