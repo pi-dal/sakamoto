@@ -54,9 +54,10 @@ mise exec -- python scripts/run-desktop.py
 
 The [desktop release pipeline](docs/desktop-release.md) signs and notarizes macOS
 apps and updates the separate `sakamoto-desktop` Homebrew cask after publication.
-The first public release awaits an Account Holder-issued Developer ID
-certificate. Once published, install with
-`brew install --cask pi-dal/tap/sakamoto-desktop`; the existing CLI formula remains independent.
+The macOS release pipeline signs with Developer ID Application and requires
+Apple notarization and a stapled ticket before updating Homebrew. After publication,
+install with `brew install --cask pi-dal/tap/sakamoto-desktop`; the existing
+CLI formula remains independent.
 See [platform capabilities, setup and verification limits](desktop/README.md).
 
 ## Android

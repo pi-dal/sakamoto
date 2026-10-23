@@ -56,7 +56,7 @@ def main():
         artifacts.extend(dict(item, target=f"darwin-{item['arch']}", lifecycle="sakamoto-supervisor") for item in mac["artifacts"])
     modules = {}
     for name in ("github.com/egoist/mygo", "github.com/oneo-me/onevra/source"):
-        modules[name] = json.loads(subprocess.check_output(["go", "list", "-m", "-json", name], cwd=root / "desktop", text=True))
+        modules[name] = json.loads(subprocess.check_output(["go", "mod", "download", "-json", name], cwd=root / "desktop", text=True))
     with tempfile.TemporaryDirectory(prefix="sakamoto-desktop-assets-") as temporary:
         assets = Path(temporary)
         run(["go", "run", "./cmd/desktop-assets", str(root / "assets/app-icon.png"), str(assets)], cwd=root / "desktop")

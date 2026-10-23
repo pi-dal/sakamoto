@@ -93,7 +93,7 @@ resource; this preview does not embed it into the executable's file icon.
 Local macOS builds use an ad-hoc signature; Windows/Linux artifacts are unsigned.
 The [desktop release workflow](../docs/desktop-release.md) adds Developer ID
 signing, Apple notarization, stapling and a separate `sakamoto-desktop` Homebrew
-cask. Its first public release requires an Account Holder-issued certificate.
+cask. Release signing credentials are configured for the expected Apple team.
 `scripts/build-menubar.py` remains the macOS packaging entry point and accepts
 `--sign-identity`, `--team-id`, `--notarize` and `--notary-profile`. The shared
 packaging entry point forwards these options and preserves signing evidence.
