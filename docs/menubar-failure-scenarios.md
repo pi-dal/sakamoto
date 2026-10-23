@@ -26,6 +26,7 @@ Written before implementation and integration tests.
 
 Written before release implementation and verification.
 
+- A clean Go module cache must download license-bearing modules before reading their source directories; metadata lookup alone may omit `Dir`.
 - A release must fail before building when its tag differs from the source version or signing credentials are missing.
 - Apple Development, Apple Distribution and ad-hoc identities must never be accepted as Developer ID release identities.
 - Both the app and its bundled CLI/rescue helper must have a secure timestamp, hardened runtime and the expected signing team.

@@ -62,8 +62,8 @@ def main():
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     version = re.search(r'const version = "([^"]+)"', (root / "cmd/sakamoto/main.go").read_text()).group(1)
-    modules = json.loads(subprocess.check_output(["go", "list", "-m", "-json", "github.com/egoist/mygo"], cwd=root / "desktop", text=True))
-    onevra = json.loads(subprocess.check_output(["go", "list", "-m", "-json", "github.com/oneo-me/onevra/source"], cwd=root / "desktop", text=True))
+    modules = json.loads(subprocess.check_output(["go", "mod", "download", "-json", "github.com/egoist/mygo"], cwd=root / "desktop", text=True))
+    onevra = json.loads(subprocess.check_output(["go", "mod", "download", "-json", "github.com/oneo-me/onevra/source"], cwd=root / "desktop", text=True))
     artifacts = []
     for arch in dict.fromkeys(args.arch or ["arm64" if platform.machine() == "arm64" else "amd64"]):
         target = output / ("darwin-" + arch)
