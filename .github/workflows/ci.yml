@@ -74,7 +74,7 @@ jobs:
           cache_save: ${{ github.event_name != 'pull_request' }}
       - name: Exercise external core API workflow
         run: |
-          SAKAMOTO_MENUBAR_ARTIFACT_DIR="$PWD/dist/menubar-verification" go test ./internal/desktop -run TestExternalCoreEndToEnd -count=1 -timeout=30s
+          SAKAMOTO_MENUBAR_ARTIFACT_DIR="$PWD/dist/menubar-verification" go test ./internal/desktop -run 'TestExternalCoreEndToEnd|TestLiveConnectionsEndToEnd' -count=1 -timeout=30s
       - name: Verify shared desktop view
         run: |
           export SAKAMOTO_MENUBAR_ARTIFACT_DIR="$PWD/dist/menubar-verification"

@@ -59,3 +59,14 @@ remote outcome is not asserted by this local work.
 Impeccable's reviewer/documenter fallback roles ran inline because this harness
 has no available subagent interface. The scope and preserved native utility
 identity are recorded in `docs/menubar-surface.md` and `DESIGN.md`.
+
+The Connections extension keeps the same content vocabulary: a text action in the
+home header, back navigation, one search input, active count and 60-point virtual
+rows. Targets/applications/outbounds align left; transfer totals align right.
+No introduction or new card treatment was added. `connections-light.png`,
+`connections-dark.png` and packaged `macos-connections-*.png` establish content
+hierarchy; `connections-e2e.json` and `connections-native-e2e.json` separately
+verify demand-scoped tracking and preservation of the actual data stream. The
+content review is recorded in `dist/menubar-verification/connections-design-review.md`
+with disposition `ship` at content scope; the native acceptance limits above
+remain open. This review also used the inline fallback.

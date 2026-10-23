@@ -31,7 +31,13 @@ func NewDemo() *Demo {
 	return &Demo{changes: make(chan struct{}, 1), state: desktop.Snapshot{
 		Observing: true, Service: core.ServiceRunning, Phase: core.PhaseReachable, Probe: core.ProbeReachable, ProbePath: core.PathBoth,
 		ConfigReady: true, APIReady: true, DNS: "protected", Health: desktop.HealthReport{FallbackAvailable: true}, Mode: "Rule", Modes: []string{"Rule", "Global", "Direct"}, Tests: map[string]core.NodeStatus{},
-		Traffic: desktop.Traffic{Available: true, Downlink: 6 * 1024 * 1024, Uplink: 384 * 1024, DownlinkTotal: 235 * 1024 * 1024, UplinkTotal: 12 * 1024 * 1024},
+		Traffic:          desktop.Traffic{Available: true, Downlink: 6 * 1024 * 1024, Uplink: 384 * 1024, DownlinkTotal: 235 * 1024 * 1024, UplinkTotal: 12 * 1024 * 1024},
+		ConnectionsState: desktop.ConnectionsLive,
+		Connections: []desktop.Connection{
+			{ID: "demo-web", Target: "example.com", Destination: "192.0.2.1:443", Process: "Safari", Network: "tcp", Outbound: "Demo Tokyo", DownlinkTotal: 12 * 1024 * 1024, UplinkTotal: 128 * 1024},
+			{ID: "demo-update", Target: "updates.example.org", Destination: "192.0.2.2:443", Process: "Software Update", Network: "tcp", Outbound: "direct", DownlinkTotal: 864 * 1024, UplinkTotal: 32 * 1024},
+			{ID: "demo-ipv6", Target: "[2001:db8::1]:443", Destination: "[2001:db8::1]:443", Network: "udp", Outbound: "Demo Singapore", DownlinkTotal: 48 * 1024, UplinkTotal: 16 * 1024},
+		},
 		Groups: []*daemon.Group{
 			{Tag: "MainProxy", Selectable: true, Selected: "RealityAuto", Items: []*daemon.GroupItem{{Tag: "RealityAuto"}, {Tag: "OthersAuto"}, {Tag: "ManualPick"}}},
 			{Tag: "RealityAuto", Selected: "Demo Tokyo", Items: items},
@@ -48,6 +54,7 @@ func (d *Demo) Snapshot() desktop.Snapshot {
 	for _, g := range d.state.Groups {
 		s.Groups = append(s.Groups, proto.Clone(g).(*daemon.Group))
 	}
+	s.Connections = append([]desktop.Connection(nil), s.Connections...)
 	s.Modes = append([]string(nil), s.Modes...)
 	s.Tests = map[string]core.NodeStatus{}
 	for k, v := range d.state.Tests {
@@ -55,8 +62,9 @@ func (d *Demo) Snapshot() desktop.Snapshot {
 	}
 	return s
 }
-func (d *Demo) Changes() <-chan struct{} { return d.changes }
-func (d *Demo) SetVisible(bool)          {}
+func (d *Demo) Changes() <-chan struct{}   { return d.changes }
+func (d *Demo) SetVisible(bool)            {}
+func (d *Demo) SetConnectionsVisible(bool) {}
 func (d *Demo) update(fn func(*desktop.Snapshot)) error {
 	d.mu.Lock()
 	fn(&d.state)

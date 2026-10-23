@@ -13,6 +13,7 @@ unchanged. No JavaScript frontend is used.
 | --- | --- | --- | --- |
 | Shared panel, themes, search, node selection, latency, traffic | Yes | Yes | Yes |
 | Routing mode through the authenticated native API | Yes | Yes | Yes |
+| Live connections, application/route search and per-connection traffic | Yes | Yes | Yes |
 | Core health check | Core API and configured DNS | Core API only | Core API only |
 | Repair, confirmed reconnect and watcher recovery | Existing supervisor/watcher | External service owns recovery | External service owns recovery |
 | Resident entry point | Menu bar status item | Notification area | AppIndicator menu |
@@ -25,7 +26,7 @@ The shared UI does not make privileged services interchangeable. Windows/Linux
 currently use **external-core mode**: start/configure a compatible core separately,
 then supply its sakamoto sidecar YAML with the native API URL and secret. The
 client can select nodes, confirm routing modes, request latency tests and observe
-traffic. It cannot start/stop that service or take over DNS. It displays **Core
+traffic and live connections. It cannot start/stop that service or take over DNS. It displays **Core
 online** and **Managed externally**, and omits a nonfunctional connection button.
 API availability is never presented as proof that the client owns a TUN.
 
@@ -124,6 +125,16 @@ bindings are released on hide. Explicitly requested bounded operations
 can finish after hiding. The independent supervisor/watcher keep their own
 responsibilities. List view state is recreated for every new popover engine so a
 reopened panel cannot reuse an invalid engine.
+
+The **Connections** action opens a separate searchable list of active targets,
+applications (when the core supplies them), outbounds, network types and uploaded/
+downloaded totals. Rows sort newest first and virtualize large lists. A domain
+falls back to the destination IP when unavailable. Closed history is excluded;
+traffic deltas accumulate without losing metadata. Search matches targets, IPs,
+applications, outbounds and network types. Only that page subscribes to connection
+events. Leaving it, hiding the panel or losing its stream clears live rows;
+reopening reads a fresh snapshot. Inspecting connections never closes them.
+See [protocol handling and repeatable verification](../docs/desktop-connections.md).
 
 Settings includes System/Light/Dark appearance, opt-in login startup and a config
 folder action. The TUI entry appears where a native CLI bundle is available.
