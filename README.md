@@ -1,160 +1,112 @@
 # sakamoto
 
-A connection client with a mouse-enabled macOS TUI and a shared macOS/Windows/Linux tray app for [sing-box](https://sing-box.sagernet.org/). Inspired by Shadowrocket's Home / Config / Data / Settings workflow; **not affiliated with Shadowrocket or SagerNet**.
+A [sing-box](https://sing-box.sagernet.org/) connection client with a macOS terminal UI, a shared desktop tray app, and native Android and iOS clients. Import Shadowrocket configurations, select proxy nodes, switch routing modes, and inspect traffic.
 
-> **No real server credentials belong in this repository or tap.** The default local state directory is `~/.sakamoto` on a fresh install. Existing installs with a running legacy daemon keep using `~/.config/sakamoto` until explicitly migrated.
+**License: [GPL-3.0-or-later](LICENSE).** Servers and credentials are supplied by you. This project is independent of SagerNet and Shadowrocket.
 
-## Quick start (macOS)
+| Client | What you can use | Install and details |
+| --- | --- | --- |
+| macOS TUI | Mouse and keyboard control of the tunnel, configuration, nodes, traffic and fallback | [Quick start below](#install-and-connect-on-macos) |
+| macOS menu bar | Native panel with tunnel control, nodes, live connections, settings and repair through the existing supervisor | `brew install --cask pi-dal/tap/sakamoto-desktop` · [Desktop guide](desktop/README.md) |
+| Windows / Linux tray | Preview for an externally managed core: node/mode control, latency, traffic and live connections; tunnel lifecycle and DNS stay with your service manager | [Desktop setup and limits](desktop/README.md) |
+| Android 7.0+ | Native VPN app with configuration editing, diagnostics, widgets and notification controls | [Signed APK installation and first connection](android/README.md#install-the-official-release) |
+| iOS | SwiftUI app and PacketTunnel integration; device installation requires signing and provisioning | [Build, signing and device verification](ios/README.md) |
 
-Requirements: macOS, sing-box **1.14.2+** (native API mode support), and a terminal with SGR mouse events (e.g. Ghostty/iTerm2). The [Homebrew tap](https://github.com/pi-dal/homebrew-tap) installs the sing-box and Go build dependencies; **installation never starts a VPN or installs privileged services**.
+## Usage
 
-```bash
+On a configured Mac, open the TUI:
+
+```sh
+sakamoto
+```
+
+1. In **Home**, click **Connect** and check the displayed network verification result.
+2. Click a node to select it; right-click for a latency test or details. Click **Mode** or press `m` to cycle **Rule → Global → Direct** for new connections.
+3. In **Config**, import a `.conf`, manage nodes and subscriptions, edit settings or add routing policies. **Regenerate**, then disconnect/reconnect to apply generated changes.
+4. In **Data**, inspect traffic, active connections and logs.
+
+`Tab` switches pages; arrows or `j`/`k` move; `Enter` selects; `Esc` goes back; `q` quits the TUI. See the [TUI guide](docs/tui.md) for all controls and the [desktop guide](desktop/README.md) for tray workflows. Opening either client does not connect automatically.
+
+Read-only diagnosis and watcher recovery are also available from the terminal:
+
+```sh
+sakamoto repair --check  # inspect core/API and configured protected DNS
+sakamoto recover         # request fresh group tests from the running watcher
+# Example recovery acknowledgement:
+# queued
+```
+
+Recovery applies the watcher's existing fallback policy and respects manual node selection. An acknowledgement is not proof that connectivity has recovered; see [recovery statuses](docs/configuration.md#on-demand-recovery-trigger). Run `sakamoto help` for the complete command list.
+
+## Install and connect on macOS
+
+The TUI requires **sing-box 1.14.2+** and a terminal with SGR mouse support for pointer control, such as Ghostty or iTerm2. Homebrew installs the core dependency. Installation and service setup leave the VPN disconnected.
+
+### 1. Install and prepare private settings
+
+```sh
 brew install pi-dal/tap/sakamoto
 install -d -m 700 ~/.sakamoto
 cp "$(brew --prefix)/share/sakamoto/sakamoto.example.yaml" ~/.sakamoto/sakamoto.yaml
 cp "$(brew --prefix)/share/sakamoto/nodes.example.txt" ~/.sakamoto/nodes.txt
+chmod 600 ~/.sakamoto/sakamoto.yaml ~/.sakamoto/nodes.txt
+openssl rand -hex 32
 ```
 
-For a source build instead, clone this repository, run `go build -o sakamoto ./cmd/sakamoto`, and use the templates at the repository root. Replace the example API secret with a unique random value (`openssl rand -hex 32`) before generating a config.
+Edit `~/.sakamoto/sakamoto.yaml`: set `api.secret` to the generated random value, `conf:` to your own Shadowrocket `.conf` file or URL, and `nodes_file:` to the absolute path of your `nodes.txt`. Replace example node links with your own. Keep these files and credentials private.
 
-Edit `~/.sakamoto/sakamoto.yaml` to point `conf:` at your own Shadowrocket `.conf`, or open `sakamoto` → **Config → Import config** and paste its URL. If `include=ad.conf` is relative, the importer fetches it from the same URL directory. Add manual node share links to `nodes.txt` through **Config → Nodes & sources → Add node**, then **Regenerate**. Check the result:
+Fresh installs use `~/.sakamoto`. Existing installations with a live legacy daemon retain `~/.config/sakamoto`; follow the [migration guide](docs/migration.md#existing-installation-at-configsakamoto) before moving state.
 
-```bash
+### 2. Import and validate
+
+Open `sakamoto`, choose **Config → Import config** to import a `.conf` URL/file, and use **Nodes & sources → Add node** for manual share links. Relative `include=ad.conf` files are fetched from the source URL's directory. Choose **Regenerate**, then validate:
+
+```sh
 sing-box check -D ~/.sakamoto -c ~/.sakamoto/config.json
 ```
 
-For root TUN control and automatic group fallback **while connected**, preflight and install the macOS services *once*:
+See [import support and differences](docs/import.md) for supported rules and sources.
 
-```bash
-sakamoto setup --check  # read-only: validate config or report existing service state
-sakamoto setup          # interactive: install daemon/watch only when absent
+### 3. Install background services and connect
+
+```sh
+sakamoto setup --check  # read-only preflight
+sakamoto setup         # interactive installation with administrator authorization
+sakamoto
 ```
 
-For a source build in this repository, use `./sakamoto setup` instead. `setup` locates the packaged installer, asks for confirmation and administrator authorization on a fresh install, and **refuses to replace existing, partial or unavailable launchd services**. It does not start or reconnect the VPN; running it again reports service state and, for a Homebrew installation, repairs a stale command link. `setup --check` only reports a link mismatch. You can also run `sakamoto link --check` or `sakamoto link` separately; repair retains the previous executable beside the command and does not restart services. Do **not** connect Shadowrocket and sakamoto TUN simultaneously. Open `sakamoto` and click **Connect**. `daemon` and `watch` are launchd internals; `sakamoto help` lists shortcuts.
+Setup installs the root supervisor for TUN control and the user watcher for automatic group fallback. It refuses to replace partial or unavailable installations. Disconnect Shadowrocket's VPN before clicking **Connect** in sakamoto.
 
-**After a reboot, reconnect manually.** Launchd restarts the supervisor and starts the watcher at login, but neither starts sing-box's TUN. With protected DNS enabled, the supervisor attempts to restore the prior DHCP/static DNS from its private snapshot when no loopback DNS listener survives; it does **not** re-enable protection automatically. Do not assume proxy or DNS protection persists across a reboot. See [startup, failure and verification boundaries](docs/dns-protection.md#startup-and-reboot-behavior).
+**Reconnect manually after every reboot.** The supervisor and watcher restart, but the TUN and protected DNS require an explicit connection. The supervisor attempts to restore prior DNS settings when its protected listener is gone; see [startup and reboot behavior](docs/dns-protection.md#startup-and-reboot-behavior).
 
-## Desktop tray app
+For source builds, use the [contributing guide](CONTRIBUTING.md#build-the-cli-from-source). For an existing installation, see [setup, command-link repair and migration](docs/migration.md).
 
-The shared MyGo + Onevra client lives in the independent [`desktop`](desktop/README.md)
-Go module. macOS uses a menu bar popover and the existing supervisor; Windows uses
-a notification-area flyout; Linux uses an AppIndicator menu and utility panel.
-The view, themes, mode/node controls, latency, traffic, live connection list and validated scalar configuration editor are shared. Windows/Linux
-use an existing native core API and explicitly show external ownership; their
-privileged connection/DNS service adapters are not supplied by this preview.
-Closing a tray panel keeps the app running, and quitting preserves the independent
-service. Opening it never connects. Advanced configuration remains user-owned.
+## Configuration and guides
 
-```bash
-mise run gui:demo     # build and open an explicitly labeled demo; no live runtime
-mise run gui:check    # isolated workflow tests, screenshots and JSON receipts
-mise run gui:build    # package the current OS under dist/desktop/
-mise exec -- python scripts/run-desktop.py
-```
+The [example settings](sakamoto.example.yaml) define the sidecar YAML; the [configuration reference](docs/configuration.md) explains routing modes, policy overrides, fallback and privacy.
 
-The [desktop release pipeline](docs/desktop-release.md) signs and notarizes macOS
-apps and updates the separate `sakamoto-desktop` Homebrew cask after publication.
-The macOS release pipeline signs with Developer ID Application and requires
-Apple notarization and a stapled ticket before updating Homebrew. After publication,
-install with `brew install --cask pi-dal/tap/sakamoto-desktop`; the existing
-CLI formula remains independent.
-See [platform capabilities, setup and verification limits](desktop/README.md).
+| Task | Guide |
+| --- | --- |
+| Import Shadowrocket rules and subscriptions | [Supported imports and unsupported features](docs/import.md) |
+| Configure routing, automatic fallback or experimental learning | [Configuration](docs/configuration.md) · [Desktop learning](docs/desktop-learning.md) · [Mobile learning](docs/mobile-learning.md) |
+| Enable protected system DNS | [Activation, restoration and scope](docs/dns-protection.md) |
+| Edit desktop settings or inspect live connections | [Configuration editor](docs/desktop-configuration.md) · [Connections](docs/desktop-connections.md) |
+| Sync sources across devices | [S3](docs/s3-sync.md) · [iCloud Drive](docs/icloud.md) |
+| Diagnose a failed core or restore a working configuration | [Configuration repair](docs/configuration-repair.md) · [Offline desktop recovery](docs/stability-recovery.md) · [Mobile recovery](docs/mobile-stability-recovery.md) |
+| Install or migrate macOS services | [Installation, migration and troubleshooting](docs/migration.md) |
 
-## Android
+## Limits and recovery
 
-The official Android client is available from
-[Android v0.1.4](https://github.com/pi-dal/sakamoto/releases/tag/android-v0.1.4).
-Download the signed APK and verify `SHA256SUMS`. Android 7.0+ is supported;
-configuration and servers are supplied by the user. Native VPN diagnostics,
-node/group editing, widgets, notification controls and optional experiments
-share the project's Go logic. See [Android installation and limitations](android/README.md).
-Debug APKs have a different signature; switching from a development install
-requires preserving data before a manual migration. The release does not
-publish an iOS app or change your running macOS tunnel.
+- **Shadowrocket compatibility:** HTTP URL/Header/Body rewrites, MITM rules and JavaScript response scripts are not implemented by sing-box. Compiled `.db.rule` files cannot substitute for the original `.conf`. Review import diagnostics before relying on the result.
+- **Connection verification:** a running TUN, a selected node and a successful latency test are separate observations. A successful network check confirms its tested path; it does not establish reachability of every destination or DNS privacy.
+- **Browser routing on macOS:** the example enables both `system_proxy` and `mixed_inbound`. While connected, the watcher saves and sets the HTTP/HTTPS system proxy and restores it on disconnect. Review the network service name in your settings; see [configuration](docs/configuration.md#minimal-settings) and [troubleshooting](docs/migration.md#network-troubleshooting).
+- **Core repair:** `sakamoto repair` retains a healthy process and can recover a stopped or crashed core. A live but unhealthy core requires explicit `sakamoto repair --restart`. Configuration restoration, regeneration and old-supervisor updates have separate prerequisites; see [configuration repair](docs/configuration-repair.md).
+- **Mobile releases:** capabilities described in source may require a newer installed app. Android debug and official APKs use different signing certificates; preserve data before a manual transition. Unsigned iOS simulator builds cannot run a real VPN tunnel.
 
-## Development toolchain (mise)
+## Contributing
 
-Project runtime versions and local/CI build commands are in `mise.toml`.
-Android SDK/JDK are opt-in through `mise.android.toml`; Xcode remains an
-Apple-provided prerequisite on macOS. No project task installs global tools
-through Homebrew or changes your global mise runtime choices.
-
-```bash
-mise trust
-mise install
-mise run ci:check
-mise run icons
-mise run cli:build                      # optimized arm64/Intel CLI + resources
-mise run gui:build                      # native tray client for the current OS
-mise run ios:build                       # macOS + Xcode
-mise run ios:package                     # simulator .app zip
-mise -E android install
-mise -E android run android:build       # SDK, AARs, tests, APK
-mise -E android run android:install     # attached Pixel, USB debugging
-```
-
-`mise run mobile:tools` exposes the mise-managed gomobile binaries at
-`GOPATH/bin`, as required by sing-box's upstream builder. Gradle remains
-pinned by the checked-in wrapper; SDK packages are installed by the
-mise-managed Android SDK. Language dependency management is unchanged.
-The Homebrew tap above remains an end-user distribution option.
-
-`mise run cli:build` packages the macOS CLI and TUI together for arm64 and Intel
-in `dist/cli`, with setup scripts, launchd templates, example configurations,
-checksums and build metadata. On macOS it verifies an ad-hoc code signature.
-Release binaries use `-trimpath`, stripped debug information, and the shared
-`scripts/go-size-profile.json` policy. Standard-library networking/crypto and
-TUI rendering packages keep their default inlining. The macOS builder keeps CGO
-enabled for upstream native TLS/certificate-store helpers and requires the Xcode
-command-line tools. Ordinary `go build` remains available for debugging; no build
-task installs services or changes the live VPN.
-
-## Interface
-
-- **Home:** connected/verified state, live proxy chain and SOCKS exit, node groups with latency; left-click any node to select it, right-click for test/details, mouse wheel to scroll. Click **Mode** or press `m` to switch Rule/Global/Direct through the native API; [mode rules and exclusions](docs/configuration.md#rule-global-and-direct-routing-modes) are explicit.
-- **Config:** import a `.conf` URL/file, browse General/rules/DNS, manage source subscriptions and manual node links, and add user-owned **Policy** rules for `proxy`/`direct`/`reject` hostname routing. **Edit settings** opens a floating in-TUI form: choices are selected in place and custom values are edited in a focused field. Generate changes, then disconnect/reconnect to apply.
-- **Data:** traffic, active connections, logs and close-connection action.
-- **Settings:** clickable toggles and editable values; optional iCloud source sync includes the local conf and recursive relative includes, not just nodes. Reality fallback order can be set as `RealityAuto,OthersAuto`. Experimental unmatched policy supports `off` (direct unmatched), `on` (proxy unmatched) and `auto` (learn from corroborated repeated direct timeouts). See [privacy limits and ruleset reference](docs/configuration.md#experimental-unmatched-domain-policy). A manual node selection is respected by the fallback watcher.
-- **About → Copyright:** a terminal-safe block portrait and a tribute explaining the name, plus software copyright, portrait attribution, license and non-affiliation statement.
-
-**Core crash or failed update:** run `sakamoto repair` to detect and recover the core, then verify its native API and configured protected DNS. `sakamoto repair --check` only diagnoses; `sakamoto repair --restart` explicitly reconnects a live but unhealthy core. Healthy processes retain their PID. `repair --fallback --restart` restores the verified complete runtime; `repair --regenerate --restart` builds and checks saved sources before replacing it. An old supervisor needs an explicit `service-update --reconnect` from the new CLI. See [configuration repair](docs/configuration-repair.md) and [offline recovery](docs/stability-recovery.md#quick-core-repair).
-
-**Fallback semantics:** `RealityAuto` gets fresh URL tests, then `OthersAuto` is selected when Reality is unavailable; switching back needs `recover_after` consecutive healthy checks. The watcher runs without an open TUI. Explicit node selection is not overridden. `sakamoto recover` requests an immediate watcher-owned test pass for a local integration such as [pi-proxy-guard](https://github.com/pi-dal/pi-proxy-guard); it does not restart the TUN or force a node. [Request statuses and limitations](docs/configuration.md#on-demand-recovery-trigger) are documented.
-
-**Browser routing on macOS:** some system DNS answers may be poisoned or cached. With `system_proxy.enabled: true` and `mixed_inbound.enabled: true`, the watcher enables the local HTTP/HTTPS system proxy while sakamoto is connected and restores prior settings when disconnected. TUN remains enabled for non-browser traffic and UDP. This behavior is opt-in in the example config. The initial user device has it enabled and was tested with Google, GitHub and Bing.
-
-## Configuration and migration
-
-- [Shared macOS/Windows/Linux tray client](desktop/README.md)
-- [TUI: mouse and keyboard workflows](docs/tui.md)
-- [S3 source sync across TUI, iOS and Android](docs/s3-sync.md)
-- [Configuration, fallback and privacy](docs/configuration.md)
-- [Native protected system DNS and administrative activation](docs/dns-protection.md)
-- [Desktop stability, offline rescue and known-working rollback](docs/stability-recovery.md)
-- [Mobile core stability, crash admission and local repair](docs/mobile-stability-recovery.md)
-- [Shadowrocket import and unsupported features](docs/import.md)
-- [macOS installation and legacy-directory migration](docs/migration.md)
-- [iCloud Drive sync (optional)](docs/icloud.md)
-- [Agent-readable development notes](skills.md)
-- [Code quality review and remaining refactoring plan](docs/code-quality.md)
-- [Public release readiness](docs/release-checklist.md)
-- [Portrait attribution and CC BY 2.0 asset license](docs/portrait-license.md)
-
-**Limitations:** sing-box does not implement Shadowrocket's HTTP URL/Header/Body rewrite, MITM, or JavaScript response scripts. Import reports these differences; do not claim feature parity. DNS/domain and GeoIP rules require checking against your *current* Shadowrocket export; compiled `.db.rule` data alone is not the original `.conf`.
-
-## Development
-
-```bash
-go test ./...
-go vet ./...
-go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run ./...
-go build ./cmd/sakamoto
-```
-
-Code-quality baseline: `fuck-u-code analyze . -f json` improved from **65.9** to **about 80** after splitting oversized modules and handling unchecked I/O; the Go linter reports **0 issues**. The installed `fuck-u-code` shell parser may fall back to regex; treat its score as a trend, not a correctness proof. CI enforces tests, vet and the pinned Go linter.
-
-On macOS sign your local build ad hoc when copying to a different location: `codesign -s - -f ./sakamoto`. Stage an API credential with `sakamoto rotate-api` (no change to the live connection; applied at the next normal TUI connect). Use `sakamoto rotate-api --apply-now` only when accepting an immediate brief reconnect. The key is never printed. Do not commit generated binary, actual node links, subscription URLs, API secret, `auto-proxy.json` (visited domains), `.srs`, logs or generated `config.json`.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the mise toolchain, source builds, verification commands, packaging and release references. [Agent development notes](skills.md) and the [code quality review](docs/code-quality.md) provide additional maintenance context.
 
 ## License and attribution
 
-Copyright © 2026 pi-dal. `sakamoto` is licensed under **GPL-3.0-or-later**; see [LICENSE](LICENSE). It links to [SagerNet/sing-box](https://github.com/SagerNet/sing-box), also GPL-3.0-or-later. The About-page portrait assets are separately [CC BY 2.0](docs/portrait-license.md). See [NOTICE.md](NOTICE.md) for upstream and image attribution. This is an independent tool, not endorsed by SagerNet or Shadowrocket.
+Copyright © 2026 pi-dal. Licensed under **GPL-3.0-or-later**; see [LICENSE](LICENSE). Sakamoto links to [SagerNet/sing-box](https://github.com/SagerNet/sing-box), also GPL-3.0-or-later. The About-page portrait assets use a separate [CC BY 2.0 license](docs/portrait-license.md). See [NOTICE.md](NOTICE.md) for upstream and artwork attribution.

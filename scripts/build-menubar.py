@@ -83,7 +83,7 @@ def main():
         env = dict(os.environ, GOOS="darwin", GOARCH=arch, CGO_ENABLED="1")
         run(["go", "build", "-trimpath", "-ldflags=-s -w", "-o", str(executable), "./cmd/sakamoto-menubar"], cwd=root / "desktop", env=env)
         run(["go", "build", "-trimpath", "-ldflags=-s -w", "-o", str(cli / "sakamoto"), "./cmd/sakamoto"], cwd=root, env=env)
-        for name in ["sakamoto.example.yaml", "nodes.example.txt", "LICENSE", "NOTICE.md", "README.md"]:
+        for name in ["sakamoto.example.yaml", "nodes.example.txt", "LICENSE", "NOTICE.md", "README.md", "CONTRIBUTING.md"]:
             shutil.copy2(root / name, cli / name)
         for name in ["scripts", "launchd", "docs"]:
             shutil.copytree(root / name, cli / name, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))

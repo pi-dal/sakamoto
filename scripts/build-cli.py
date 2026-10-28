@@ -42,7 +42,7 @@ def main():
             if os.uname().sysname == "Darwin":
                 subprocess.run(["codesign", "--force", "--sign", "-", str(binary)], check=True)
                 subprocess.run(["codesign", "--verify", "--strict", str(binary)], check=True)
-            for filename in ["sakamoto.example.yaml", "nodes.example.txt", "LICENSE", "NOTICE.md", "README.md"]:
+            for filename in ["sakamoto.example.yaml", "nodes.example.txt", "LICENSE", "NOTICE.md", "README.md", "CONTRIBUTING.md"]:
                 shutil.copy2(root / filename, package / filename)
             for directory in ["scripts", "launchd", "docs"]:
                 shutil.copytree(root / directory, package / directory, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))

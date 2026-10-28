@@ -11,6 +11,19 @@
 
 The LaunchDaemon controls TUN as root. A user-owned socket (`0600`) allows the TUI to request connect/disconnect without repeated sudo. The watcher handles group fallback and optional macOS HTTP/HTTPS proxy restore. Both launchd jobs start automatically (`RunAtLoad`/`KeepAlive`), **but they do not automatically connect sing-box**: after every reboot, log in and click **Connect**. Protected DNS also needs this explicit reconnect; its old DNS snapshot is restored on supervisor startup only when restoration succeeds and port 53 is free. See [startup and reboot behavior](dns-protection.md#startup-and-reboot-behavior).
 
+## Check services and repair the command link
+
+Run `sakamoto setup --check` to inspect the current service/configuration state without changes. Running `sakamoto setup` again reports installed services; it does not start or reconnect the VPN and refuses to replace existing, partial or unavailable services. Source builds use `./sakamoto setup` from the repository root.
+
+For Homebrew installations, setup can also repair a stale command link. To inspect or repair it separately:
+
+```sh
+sakamoto link --check  # read-only; reports a mismatched executable
+sakamoto link         # repair the command link without restarting services
+```
+
+Repair retains the previous executable beside the command. `setup --check` reports a mismatch without repairing it. Updating an older running supervisor is a separate [controlled service update](configuration-repair.md#commands-and-gui).
+
 ## Existing installation at `~/.config/sakamoto`
 
 **Never replace the root plist while sakamoto is connected.** Its process may keep TUN routes active; never remove a live socket underneath it. New binaries detect the old live socket and stay on the legacy directory until migration is deliberate.
