@@ -14,9 +14,28 @@ struct ExperimentView: View {
     @State private var priorityGroup = ""
     @State private var priorityMembers = ""
     @State private var confirmApply = false
+    @State private var selectedFailures: Set<String> = []
+    @State private var showFailurePicker = false
 
     var body: some View {
         Form {
+            Section("Learning") {
+                HStack {
+                    Label(learningModeTitle, systemImage: settings.mode == .auto ? "wand.and.stars" : "circle.dashed")
+                    Spacer()
+                    Text(runtime.learned.isEmpty ? "No routes" : "\(runtime.learned.count) routes")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                Text(learningStateText)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                if !runtime.status.isEmpty {
+                    LabeledContent("Runtime", value: runtime.status)
+                        .font(.footnote)
+                }
+            }
+
             Section("Traffic policy") {
                 Picker("Unmatched policy", selection: Binding(get: { settings.mode }, set: { mode in
                     if mode == .auto { confirmAuto = true }
@@ -74,6 +93,15 @@ struct ExperimentView: View {
             }
             Section("Recent checks") {
                 if runtime.history.isEmpty { Text("No origin checks yet").foregroundStyle(.secondary) }
+                if !recentFailures.isEmpty {
+                    Button {
+                        selectedFailures = Set(recentFailures.map(\.domain))
+                        showFailurePicker = true
+                    } label: {
+                        Label("Add recent failures to Config", systemImage: "plus.circle")
+                    }
+                    .accessibilityIdentifier("AddRecentFailures")
+                }
                 ForEach(Array(runtime.history.suffix(10).reversed())) { result in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(result.domain)
@@ -94,8 +122,15 @@ struct ExperimentView: View {
                 if busy { ProgressView() }
             }
         }
-        .navigationTitle("Experiment")
+        .navigationTitle("Automatic learning")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button(model.store.applying ? "Applying…" : "Apply") { confirmApply = true }
+                    .disabled(model.store.generating || (!model.store.canConnect && !model.store.canGenerate) || busy)
+                    .accessibilityIdentifier("LearningApply")
+            }
+        }
         .sakamotoInspectTag("ExperimentView")
         .onAppear { loadSettings() }
         .onChange(of: model.store.selectedProfileID) { _ in loadSettings() }
@@ -104,6 +139,47 @@ struct ExperimentView: View {
             while !Task.isCancelled {
                 readRuntime()
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
+        .sheet(isPresented: $showFailurePicker, onDismiss: { selectedFailures = [] }) {
+            NavigationStack {
+                List {
+                    Section {
+                        ForEach(recentFailures, id: \.domain) { failure in
+                            Button {
+                                if selectedFailures.contains(failure.domain) { selectedFailures.remove(failure.domain) }
+                                else { selectedFailures.insert(failure.domain) }
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: selectedFailures.contains(failure.domain) ? "checkmark.circle.fill" : "circle")
+                                        .foregroundStyle(selectedFailures.contains(failure.domain) ? Color.accentColor : Color.secondary)
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(failure.domain).foregroundStyle(.primary)
+                                        Text(failure.detail).font(.footnote).foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    } footer: {
+                        Text("Selected domains become exact proxy rules in this profile. The running tunnel changes only after Apply.")
+                    }
+                }
+                .navigationTitle("Choose failed domains")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { showFailurePicker = false }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Add \(selectedFailures.count)") {
+                            do {
+                                try model.store.addProxyPolicyRules(Array(selectedFailures))
+                                error = nil
+                                showFailurePicker = false
+                            } catch { self.error = TunnelDiagnostics.sanitized(error.localizedDescription) }
+                        }.disabled(selectedFailures.isEmpty)
+                    }
+                }
             }
         }
         .confirmationDialog("Enable automatic learning?", isPresented: $confirmAuto, titleVisibility: .visible) {
@@ -116,6 +192,27 @@ struct ExperimentView: View {
         } message: { Text("Reloading may interrupt active connections. It also activates these Experiment settings in the VPN extension.") }
     }
     private var appliedProfile: Bool { model.store.selectedProfile?.pendingApply == false && model.store.selectedProfile?.sourcesChanged == false }
+    private var recentFailures: [ExperimentLearningResult] {
+        var seen = Set<String>()
+        return runtime.history.suffix(20).reversed().filter { result in
+            guard result.direct?.reachable == false else { return false }
+            return seen.insert(result.domain).inserted
+        }
+    }
+    private var learningModeTitle: String {
+        switch settings.mode {
+        case .auto: return "Automatic learning enabled"
+        case .on: return "Proxy policy enabled"
+        case .off: return "Learning is off"
+        }
+    }
+    private var learningStateText: String {
+        switch settings.mode {
+        case .auto: return "iOS watches new direct failures, checks the origin through the protected tunnel, and only then adds a local route."
+        case .on: return "Unmatched traffic uses the configured proxy. No domains are learned automatically."
+        case .off: return "Turn on Auto to let the running VPN verify correlated failures and learn routes locally."
+        }
+    }
     private func loadSettings() { settings = model.store.experimentSettings; selectedID = model.store.selectedProfileID; readRuntime() }
     private func update(_ edit: (inout ExperimentSettings) -> Void) {
         guard selectedID == model.store.selectedProfileID else { loadSettings(); return }

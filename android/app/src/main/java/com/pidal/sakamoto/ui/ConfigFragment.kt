@@ -83,6 +83,7 @@ class ConfigFragment : androidx.fragment.app.Fragment() {
         page.setting(manage, getString(R.string.profiles_title), icon = R.drawable.ic_node) { open(ProfilesFragment(), R.string.profiles_title) }
         page.setting(manage, getString(R.string.policy_effective_rules), icon = R.drawable.ic_route) { open(RoutingPolicyFragment(), R.string.policy_effective_rules) }
         page.setting(manage, getString(R.string.proxy_chain_title), icon = R.drawable.ic_route) { open(ProxyChainFragment(), R.string.proxy_chain_title) }
+        page.setting(manage, getString(R.string.experiments_title), icon = R.drawable.ic_route) { open(ExperimentsFragment(), R.string.experiments_title) }
         page.setting(manage, getString(R.string.profile_source_title), icon = R.drawable.ic_sync) { open(SourcesManagerFragment(), R.string.profile_source_title) }
         val apply = page.section(getString(R.string.config_apply_section))
         stateRow = page.setting(apply, getString(R.string.config_state_label)) {

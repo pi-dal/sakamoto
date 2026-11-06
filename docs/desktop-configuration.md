@@ -16,9 +16,10 @@ in the TUI Settings page. Open Settings, then **Edit configuration**.
 - Fallback: automatic fallback and the MainProxy fallback chain
 
 API URL and API secret are not shown in the GUI. The API identity remains preserved
-when a configuration is saved. Nodes, subscription sources and policy rules remain
-in the TUI because they are collection editors with secret-aware input and source
-file semantics. The GUI provides an Open TUI entry for those workflows.
+when a configuration is saved. Nodes, subscription sources and policy rules also
+have in-panel collection editors with secret-aware input and stale-edit checks.
+Learning exposes recent checks and explicit selection of failed domains for saved
+proxy rules. See [Desktop learning and source editing](desktop-management.md).
 
 ## Save and activation boundary
 

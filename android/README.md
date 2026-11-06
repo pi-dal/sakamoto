@@ -6,9 +6,9 @@ JNI runtime. Native frameworks and private configuration are never committed.
 
 ## Install the official release
 
-Download `sakamoto-android-v0.1.13-arm64-v8a.apk` and `SHA256SUMS` from the
-[Android v0.1.13 release](https://github.com/pi-dal/sakamoto/releases/tag/android-v0.1.13).
-Most current phones use arm64-v8a. Use `sakamoto-android-v0.1.13.apk` as the
+Download `sakamoto-android-v0.1.19-arm64-v8a.apk` and `SHA256SUMS` from the
+[Android v0.1.19 release](https://github.com/pi-dal/sakamoto/releases/tag/android-v0.1.19).
+Most current phones use arm64-v8a. Use `sakamoto-android-v0.1.19.apk` as the
 universal fallback when the architecture is unknown.
 Verify the checksum before installation. The APK is a non-debuggable release
 signed with the project's dedicated Android certificate:
@@ -17,12 +17,18 @@ signed with the project's dedicated Android certificate:
 SHA-256: a6fb9d4b3070023b52c0efcf254b2cad251fa3fa79cab6eeec2c378f6daa66bc
 ```
 
-The package is `com.pidal.sakamoto`, versionName `0.1.18`, versionCode `20`.
+The package is `com.pidal.sakamoto`, versionName `0.1.19`, versionCode `21`.
 Future official versions retain the signing certificate for upgrades.
 A development APK uses a different debug certificate and cannot be replaced
 in place by the official APK. Preserve/export configuration and credentials
 before a manual transition; uninstalling deletes app-private data and Keystore
 credentials. Release tooling never uninstalls or clears a connected phone.
+
+## Learning shortcuts
+
+Android **0.1.19 (21)** links Experiments directly from Config and lets you
+select recent failed domains to add proxy rules as one validated save. Apply
+the saved configuration through the existing workflow to change the tunnel.
 
 ## First connection and configuration
 

@@ -167,6 +167,44 @@ object ConfigRepository {
         MobilecoreRuntime.configEvent("modified")
     }
 
+    /** Add several user-approved proxy rules as one validated config transaction. */
+    fun savePolicyRules(context: Context, matches: List<String>) {
+        val current = load(context)
+        require(current.generatedContent.isNotBlank()) { "No saved configuration — import or generate one first." }
+        val root = JSONObject(current.generatedContent)
+        val route = root.getJSONObject("route")
+        val existing = route.optJSONArray("rules") ?: JSONArray()
+        val next = JSONArray()
+        for (i in 0 until existing.length()) next.put(existing.getJSONObject(i))
+        val destination = io.nekohasekai.mobileexperiment.Mobileexperiment.proxyOutbound(current.generatedContent)
+            .takeIf { it.isNotBlank() && it != "direct" }
+            ?: error("No proxy outbound available")
+        val added = current.policy.toMutableList()
+        val seen = added.map { it.match to it.action }.toMutableSet()
+        val existingMatches = mutableSetOf<String>()
+        for (i in 0 until existing.length()) {
+            val rule = existing.optJSONObject(i) ?: continue
+            if (rule.optString("action", "route") != "route" || rule.optString("outbound") != destination) continue
+            for (kind in listOf("domain", "domain_suffix", "domain_keyword", "ip_cidr")) {
+                val values = rule.optJSONArray(kind) ?: continue
+                for (j in 0 until values.length()) existingMatches += "$kind:${values.optString(j)}"
+            }
+        }
+        for (raw in matches.map { it.trim() }.filter { it.isNotEmpty() }.distinct()) {
+            val info = io.nekohasekai.mobilecore.Mobilecore.normalizePolicyRule(raw, "proxy")
+            if (!seen.add(info.match to info.action) || !existingMatches.add("${info.kind}:${info.value}")) continue
+            next.put(JSONObject().put(info.kind, JSONArray().put(info.value)).put("action", "route").put("outbound", destination))
+            added += PolicyRule(info.match, info.action)
+        }
+        if (added.size == current.policy.size) return
+        route.put("rules", next)
+        val content = root.toString()
+        io.nekohasekai.mobilecore.Mobilecore.validateConfigJSON(content)
+        io.nekohasekai.libbox.Libbox.checkConfig(content)
+        save(context, current.copy(generatedContent = content, policy = added))
+        MobilecoreRuntime.configEvent("modified")
+    }
+
     fun savePolicy(context: Context, original: PolicyRule?, replacement: PolicyRule?) {
         val current = load(context)
         val root = JSONObject(current.generatedContent)

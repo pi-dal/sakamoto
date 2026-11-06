@@ -686,6 +686,30 @@ final class ConfigStore: ObservableObject {
         transition(.modified)
     }
 
+    /// Stage recent failed domains as exact proxy rules. This is deliberately
+    /// user-confirmed: adding a rule changes the selected profile's sources,
+    /// and Apply remains the boundary that changes the running tunnel.
+    func addProxyPolicyRules(_ domains: [String]) throws {
+        let candidates = domains.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty }
+        guard !candidates.isEmpty else { throw TunnelProfile.InvalidProfile("Choose at least one failed domain.") }
+        var next = policy
+        var added = 0
+        for domain in candidates {
+            var error: NSError?
+            guard let normalized = MobilecoreNormalizePolicyRule("domain:" + domain, "proxy", &error), error == nil else {
+                throw error ?? TunnelProfile.InvalidProfile("Invalid failed domain.")
+            }
+            guard !next.rules.contains(where: { $0.match == normalized.match && $0.action == normalized.action }) else { continue }
+            next = next.adding(StagedPolicyRule(match: normalized.match, action: normalized.action))
+            added += 1
+        }
+        guard added > 0 else { throw TunnelProfile.InvalidProfile("Those domains are already in Config.") }
+        commitPolicy(next)
+        let suffix = added == 1 ? "" : "s"
+        lastAction = "Added \(added) failed domain rule\(suffix) to Config. Apply changes to use it."
+    }
+
     /// Commit a staged policy book. The caller has validated every rule
     /// through mobilecore; this only persists and marks the state.
     func commitPolicy(_ book: PolicyBook) {

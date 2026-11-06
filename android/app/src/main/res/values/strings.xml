@@ -30,6 +30,10 @@
     <string name="experiment_checks">Recent checks</string>
     <string name="experiment_no_checks">No origin checks yet</string>
     <string name="experiment_check_note">Checks compare the origin through direct and proxy exits. A new route is saved only after it passes another check. Results stay on this device.</string>
+    <string name="experiment_failure_detail">Direct origin check failed</string>
+    <string name="experiment_add_failures">Add recent failures to config</string>
+    <string name="experiment_add_failures_title">Choose failed domains</string>
+    <string name="experiment_select_failure_first">Choose at least one failed domain.</string>
     <string name="experiment_cf">Cloudflare regional signal learning</string>
     <string name="experiment_auto_confirm">Enable automatic route learning?</string>
     <string name="experiment_auto_note">Only correlated unmatched-direct TCP timeouts with fresh healthy proxy tests qualify. Learning validates and reloads the tunnel, interrupting active connections. It is local to this phone and can be reversed.</string>

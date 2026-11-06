@@ -8,6 +8,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/oneo-me/onevra/source/components"
 	"github.com/oneo-me/onevra/source/icons/lucide"
+	"github.com/pi-dal/sakamoto/internal/config"
 	"github.com/pi-dal/sakamoto/internal/core"
 	"github.com/pi-dal/sakamoto/internal/desktop"
 	"github.com/sagernet/sing-box/daemon"
@@ -26,6 +27,12 @@ type Backend interface {
 	SetConnectionsVisible(bool)
 	Configuration() (desktop.Configuration, error)
 	SaveConfiguration(context.Context, desktop.Configuration) error
+	Management() (desktop.Management, error)
+	Learning() (desktop.Learning, error)
+	SaveNode(context.Context, desktop.ManualNode, string) error
+	SaveSubscriptions(context.Context, desktop.Management, []config.SubSource) error
+	SavePolicies(context.Context, desktop.Management, []config.PolicyRule) error
+	AddRecentFailures(context.Context, []string) error
 	Connect(context.Context) error
 	Disconnect(context.Context) error
 	SetMode(context.Context, string) error
@@ -54,28 +61,42 @@ type Actions struct {
 // Panel owns view state only. Explicit actions and the independent service can
 // outlive it; live observations are scoped to visibility.
 type Panel struct {
-	backend              Backend
-	actions              Actions
-	snapshot             desktop.Snapshot
-	settings             bool
-	connections          bool
-	connectionQuery      string
-	connectionFilter     string
-	connectionList       ui.ListState
-	recovery             bool
-	configuration        bool
-	configDraft          desktop.Configuration
-	configSection        string
-	configLoaded         bool
-	configReturnSettings bool
-	confirmRestart       bool
-	confirmConfig        string
-	query, group         string
-	listFilter           string
-	list                 ui.ListState
-	appearance           string
-	openAtLogin          bool
-	localNotice          string
+	backend                         Backend
+	actions                         Actions
+	snapshot                        desktop.Snapshot
+	settings                        bool
+	connections                     bool
+	connectionQuery                 string
+	connectionFilter                string
+	connectionList                  ui.ListState
+	recovery                        bool
+	configuration                   bool
+	configDraft                     desktop.Configuration
+	configSection                   string
+	configLoaded                    bool
+	configReturnSettings            bool
+	confirmRestart                  bool
+	confirmConfig                   string
+	query, group                    string
+	listFilter                      string
+	list                            ui.ListState
+	appearance                      string
+	openAtLogin                     bool
+	localNotice                     string
+	managementPage                  string
+	managementReturnConfig          bool
+	managementDraft                 desktop.Management
+	learningData                    desktop.Learning
+	managementQuery                 string
+	managementEditor                string
+	managementNoticeBaseline        core.Notice
+	managementIndex                 int
+	editName, editValue, editChoice string
+	editServer, editPort            string
+	editEndpoint, replaceNodeLink   bool
+	revealSource                    bool
+	selectedFailures                map[string]bool
+	managementSaved                 chan bool
 }
 
 func NewPanel(backend Backend, actions Actions) *Panel {
@@ -83,11 +104,19 @@ func NewPanel(backend Backend, actions Actions) *Panel {
 	if p.appearance == "" {
 		p.appearance = "System"
 	}
+	p.managementSaved = make(chan bool, 1)
 	p.Refresh()
 	return p
 }
 
 func (p *Panel) Refresh() {
+	select {
+	case <-p.managementSaved:
+		p.managementEditor = ""
+		p.selectedFailures = map[string]bool{}
+		p.loadManagement()
+	default:
+	}
 	p.snapshot = p.backend.Snapshot()
 	found := false
 	for _, g := range p.snapshot.Groups {
@@ -138,7 +167,9 @@ func (p *Panel) View(c *ui.Context) {
 	body := ui.Column(c).Fill().Background(t.Background)
 	body.Padding(20).Gap(14).Children(func() {
 		p.header(c)
-		if p.recovery {
+		if p.managementPage != "" {
+			p.managementView(c)
+		} else if p.recovery {
 			p.recoveryView(c)
 		} else if p.settings {
 			p.settingsView(c)
@@ -155,8 +186,19 @@ func (p *Panel) View(c *ui.Context) {
 
 func (p *Panel) header(c *ui.Context) {
 	ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-		if p.settings || p.recovery || p.connections || p.configuration {
+		if p.settings || p.recovery || p.connections || p.configuration || p.managementPage != "" {
 			panelIconButton(c, lucide.ArrowLeft(), "Back", false).OnClick(func() {
+				if p.managementPage != "" {
+					if p.managementEditor != "" {
+						p.managementEditor = ""
+						return
+					}
+					p.managementPage = ""
+					p.configuration = p.managementReturnConfig
+					p.settings = !p.managementReturnConfig
+					p.localNotice = ""
+					return
+				}
 				returnToSettings := p.configuration && p.configReturnSettings
 				p.settings = returnToSettings
 				p.setConnections(false)
@@ -177,6 +219,9 @@ func (p *Panel) header(c *ui.Context) {
 			if p.recovery {
 				title = "Check & repair"
 			}
+			if p.managementPage != "" {
+				title = p.managementPage
+			}
 			ui.Text(c, title).FontSize(fontTitle).Bold().Grow(1)
 		} else {
 			ui.Text(c, "sakamoto").FontSize(fontTitle).Bold().Grow(1)
@@ -184,7 +229,7 @@ func (p *Panel) header(c *ui.Context) {
 		if p.actions.Demo {
 			ui.Text(c, "Demo session").FontSize(fontSmall).TextColor(c.Theme().TextMuted)
 		}
-		if !p.settings && !p.recovery && !p.connections && !p.configuration {
+		if !p.settings && !p.recovery && !p.connections && !p.configuration && p.managementPage == "" {
 			panelButton(c, "Connections", components.ButtonGhost, false).Padding(4, 8).OnClick(func() { p.setConnections(true) })
 			panelIconButton(c, lucide.Settings(), "Settings", false).OnClick(func() { p.settings = true })
 		}
@@ -509,6 +554,7 @@ func (p *Panel) settingsView(c *ui.Context) {
 		panelHairline(c)
 		ui.Column(c).Gap(8).Children(func() {
 			ui.Text(c, "Configuration").Bold()
+			p.managementLinks(c)
 			panelButton(c, "Edit configuration", components.ButtonSecondary, false).OnClick(func() { p.openConfiguration() })
 			if p.actions.OpenTUI != nil {
 				panelButton(c, "Open TUI", components.ButtonSecondary, p.actions.Demo).OnClick(func() { p.local(p.actions.OpenTUI) })
@@ -550,6 +596,8 @@ func (p *Panel) footer(c *ui.Context) {
 	ui.Row(c).AlignItems(ui.Center).Children(func() {
 		if !p.recovery {
 			panelButton(c, "Check & repair", components.ButtonGhost, false).Padding(6, 0).Border(0, ui.Transparent).OnClick(func() {
+				p.managementPage = ""
+				p.managementEditor = ""
 				p.settings = false
 				p.setConnections(false)
 				p.configuration = false

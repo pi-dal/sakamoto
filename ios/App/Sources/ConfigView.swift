@@ -488,6 +488,13 @@ struct ConfigView: View {
                 } label: { Label("Routing rules", systemImage: "arrow.triangle.branch") }
                 NavigationLink { ProxyGroupsView(store: model.store) } label: { Label("Proxy groups", systemImage: "square.stack.3d.up") }
                 NavigationLink { ProxyChainView(store: model.store) } label: { Label("Proxy chain", systemImage: "point.3.connected.trianglepath.dotted") }
+                NavigationLink { ExperimentView(model: settings) } label: {
+                    HStack {
+                        Label("Automatic learning", systemImage: "wand.and.stars")
+                        Spacer()
+                        Text(learningSummary).font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
                 NavigationLink {
                     NodesSourcesView(model: model)
                 } label: {
@@ -953,6 +960,14 @@ struct ConfigView: View {
             Text("sing-box config (advanced)")
         } footer: {
             Text("Endpoints/outbounds JSON produced by the host generator. The Tailscale auth key is injected from the Keychain at start time and is never stored in this text. Saving runs a structural check; Apply also validates with Libbox.")
+        }
+    }
+
+    private var learningSummary: String {
+        switch settings.store.experimentSettings.mode {
+        case .auto: return "Auto"
+        case .on: return "On"
+        case .off: return "Off"
         }
     }
 

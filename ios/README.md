@@ -24,6 +24,15 @@ tunnel process; this is not a CLI probe and not an external-daemon count).
 | Control Center control | Native VPN toggle on iOS 18+, directly operates the saved profile without opening the app |
 | App Store Connect signing | distribution export verified with Team `6Y2YB464VU`, NetworkExtension, shared App Group and production iCloud entitlements; device VPN behavior still needs runtime verification |
 
+## Learning and source editing
+
+iOS **0.1.25 (34)** exposes Automatic learning directly from Config, with the
+current mode, learned route count and recent checks. Select failed domains to
+stage exact proxy rules, then Apply to activate. Nodes & sources adds search,
+an Add source menu, empty states and common endpoint fields before advanced
+protocol settings. Existing source validation and explicit Apply still govern
+activation.
+
 ## Core stability and repair
 
 iOS **0.1.24 (33)** adds Home → **Check and repair VPN**, **Check core only** in

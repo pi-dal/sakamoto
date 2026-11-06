@@ -5,6 +5,8 @@ struct NodesSourcesView: View {
     @ObservedObject var model: ConfigModel
     @State private var removal: SourceRemoval?
     @State private var error: String?
+    @State private var searchText = ""
+    @State private var showAddMenu = false
     private struct SourceRemoval {
         let node: StagedNode?
         let source: StagedSubscription?
@@ -16,14 +18,33 @@ struct NodesSourcesView: View {
             !["selector", "urltest", "direct", "block", "dns"].contains($0["type"] as? String ?? "")
         }
     }
+    private var filteredNodes: [StagedNode] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return model.store.nodesSources.nodes }
+        return model.store.nodesSources.nodes.filter { node in
+            let row = model.store.editableSourceNode(node)
+            let values = [node.tag, node.server, row?["tag"] as? String, row?["server"] as? String].compactMap { $0 }
+            return values.contains { $0.localizedCaseInsensitiveContains(query) }
+        }
+    }
     var body: some View {
         List {
             Section {
-                ForEach(model.store.nodesSources.nodes) { node in
+                if filteredNodes.isEmpty {
+                    SourceEmptyState(
+                        title: searchText.isEmpty ? "No manual nodes" : "No matching nodes",
+                        message: searchText.isEmpty ? "Add a node or import nodes.txt to get started." : "Try a different name or hostname.",
+                        systemImage: searchText.isEmpty ? "network" : "magnifyingglass"
+                    )
+                }
+                ForEach(filteredNodes) { node in
                     HStack {
                         NavigationLink {
-                            if let row = model.store.editableSourceNode(node), let tag = row["tag"] as? String { SavedNodeEditor(store: model.store, tag: tag) }
-                            else { SourceNodeForm(model: model, original: node) }
+                            if let row = model.store.editableSourceNode(node), let tag = row["tag"] as? String {
+                                SavedNodeEditor(store: model.store, tag: tag)
+                            } else {
+                                SourceNodeForm(model: model, original: node)
+                            }
                         } label: {
                             VStack(alignment: .leading, spacing: 4) {
                                 let row = model.store.editableSourceNode(node)
@@ -38,9 +59,10 @@ struct NodesSourcesView: View {
                         Button("Delete", role: .destructive) { removal = SourceRemoval(node: node, source: nil, profileID: model.store.selectedProfileID) }
                     }
                 }
-                NavigationLink { SourceNodeForm(model: model, original: nil) } label: { Label("Add node", systemImage: "plus") }
+                Button { showAddMenu = true } label: { Label("Add node", systemImage: "plus") }
+                    .accessibilityIdentifier("AddNode")
                 Button("Import nodes.txt from Files…") { model.importNodesFile = true; model.showFileImporter = true }
-            } header: { Text("Manual nodes") } footer: { Text("Tap a node to edit its remark, IP or hostname, port and protocol settings. Apply changes to activate.") }
+            } header: { Text("Manual nodes") } footer: { Text("Tap a node for the common fields. Open advanced settings for credentials, TLS and transport options.") }
             if !savedNodes.isEmpty {
                 Section {
                     NavigationLink { SavedConfigNodesView(store: model.store) } label: { LabeledContent("Saved config nodes", value: "\(savedNodes.count)") }
@@ -65,6 +87,24 @@ struct NodesSourcesView: View {
             if let error { Text(error).font(.callout) }
         }
         .navigationTitle("Nodes & sources").navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $searchText, prompt: "Search nodes and sources")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button { showAddMenu = true } label: { Label("Add node", systemImage: "server.rack") }
+                    Button { model.importNodesFile = true; model.showFileImporter = true } label: { Label("Import nodes.txt", systemImage: "doc.badge.plus") }
+                    Button { model.showAddSubscription = true } label: { Label("Add subscription", systemImage: "link.badge.plus") }
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .accessibilityLabel("Add source")
+            }
+        }
+        .confirmationDialog("Add node", isPresented: $showAddMenu, titleVisibility: .visible) {
+            Button("Paste or enter share link") { model.nodeFormError = nil; model.newNodeLink = ""; model.showAddNode = true }
+            Button("Import nodes.txt from Files…") { model.importNodesFile = true; model.showFileImporter = true }
+            Button("Cancel", role: .cancel) {}
+        }
         .alert("Delete source?", isPresented: Binding(get: { removal != nil }, set: { if !$0 { removal = nil } }), presenting: removal) { selection in
             Button("Delete", role: .destructive) { delete(selection) }.disabled(blockedDeletion(selection) != nil)
             Button("Cancel", role: .cancel) { removal = nil }
@@ -91,12 +131,46 @@ struct NodesSourcesView: View {
 
 struct SavedConfigNodesView: View {
     @ObservedObject var store: ConfigStore
+    @State private var searchText = ""
+    private var tags: [String] {
+        let values = ProxyGroupEditing.outbounds(store.content)
+            .filter { !["selector", "urltest", "direct", "block", "dns"].contains($0["type"] as? String ?? "") }
+            .compactMap { $0["tag"] as? String }
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return query.isEmpty ? values : values.filter { $0.localizedCaseInsensitiveContains(query) }
+    }
     var body: some View {
         List {
-            ForEach(ProxyGroupEditing.outbounds(store.content).filter { !["selector", "urltest", "direct", "block", "dns"].contains($0["type"] as? String ?? "") }.compactMap { $0["tag"] as? String }, id: \.self) { tag in
+            if tags.isEmpty {
+                SourceEmptyState(
+                    title: searchText.isEmpty ? "No saved nodes" : "No matching nodes",
+                    message: "Generate a configuration to edit imported and subscription nodes.",
+                    systemImage: "network"
+                )
+            }
+            ForEach(tags, id: \.self) { tag in
                 NavigationLink { SavedNodeEditor(store: store, tag: tag) } label: { Text(tag) }
             }
-        }.navigationTitle("Saved config nodes").navigationBarTitleDisplayMode(.inline)
+        }
+        .searchable(text: $searchText, prompt: "Search saved nodes")
+        .navigationTitle("Saved config nodes").navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct SourceEmptyState: View {
+    let title: String
+    let message: String
+    let systemImage: String
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: systemImage).font(.title2).foregroundStyle(.secondary)
+            Text(title).font(.headline)
+            Text(message).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 24)
+        .listRowBackground(Color.clear)
     }
 }
 
@@ -113,28 +187,33 @@ struct SourceNodeForm: View {
     @Environment(\.dismiss) private var dismiss
     init(model: ConfigModel, original: StagedNode?) {
         self.model = model; self.original = original; profileID = model.store.selectedProfileID
+        let saved = original.flatMap { model.store.editableSourceNode($0) }
         let endpoint = original.flatMap { try? NodeLinkEditing.endpoint($0.rawLink) }
-        _remark = State(initialValue: endpoint?.remark ?? original?.tag ?? "")
-        _server = State(initialValue: endpoint?.server ?? original?.server ?? "")
-        _port = State(initialValue: endpoint?.port.map(String.init) ?? "")
-        singlePort = endpoint?.port != nil
+        _remark = State(initialValue: saved?["tag"] as? String ?? endpoint?.remark ?? original?.tag ?? "")
+        _server = State(initialValue: saved?["server"] as? String ?? endpoint?.server ?? original?.server ?? "")
+        let savedPort = (saved?["server_port"] as? NSNumber)?.intValue
+        _port = State(initialValue: savedPort.map(String.init) ?? endpoint?.port.map(String.init) ?? "")
+        singlePort = savedPort != nil || endpoint?.port != nil
         _link = State(initialValue: original?.rawLink ?? "")
     }
     var body: some View {
         Form {
             if original != nil {
                 Section("Node") {
-                    TextField("Remark / name", text: $remark).accessibilityIdentifier("SourceField-remark")
-                    TextField("IP / hostname", text: $server).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("SourceField-server")
-                    if singlePort { TextField("Port", text: $port).keyboardType(.numberPad).accessibilityIdentifier("SourceField-port") }
+                    TextField("Remark / name", text: $remark).accessibilityIdentifier("NodeField-tag")
+                    TextField("IP / hostname", text: $server).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("NodeField-server")
+                    if singlePort { TextField("Port", text: $port).keyboardType(.numberPad).accessibilityIdentifier("NodeField-port") }
                 }
             } else {
                 Section("Import node") {
                     TextEditor(text: $link).frame(minHeight: 150).textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive().accessibilityLabel("Node share link").accessibilityIdentifier("NodeShareLink")
                 }
             }
-            if let original, model.store.nodesSources.nodes.filter({ $0.tag == original.tag }).count == 1, ProxyGroupEditing.outbounds(model.store.content).contains(where: { $0["tag"] as? String == original.tag }) {
-                Section { NavigationLink("Edit server, credentials & TLS") { SavedNodeEditor(store: model.store, tag: original.tag) } }
+            if let original,
+               model.store.nodesSources.nodes.filter({ $0.tag == original.tag }).count == 1,
+               let editableTag = model.store.editableSourceNode(original)?["tag"] as? String,
+               ProxyGroupEditing.outbounds(model.store.content).contains(where: { $0["tag"] as? String == editableTag }) {
+                Section { NavigationLink("Edit server, credentials & TLS") { SavedNodeEditor(store: model.store, tag: editableTag) } }
             }
             if let error { Text(error).font(.callout) }
             Section { Text("Save stages these fields. Apply changes generates the node with its existing credentials and protocol options.").font(.callout).foregroundStyle(.secondary) }
@@ -150,7 +229,7 @@ struct SourceNodeForm: View {
                 try model.saveSourceNode(raw, original: original, profileID: profileID); dismiss()
             }
             catch { self.error = TunnelDiagnostics.sanitized(error.localizedDescription) }
-        }.accessibilityIdentifier("SourceNodeSave").disabled(link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.store.applying || model.store.generating) } }
+        }.accessibilityIdentifier("NodeSettingsSave").disabled((original == nil && link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) || model.store.applying || model.store.generating) } }
     }
 }
 
