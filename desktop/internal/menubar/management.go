@@ -320,6 +320,9 @@ func (p *Panel) sourceEditor(c *ui.Context) {
 		panelSelect(c.Key("policy-action"), &p.editChoice, []string{"proxy", "direct", "reject"}).Label("Policy action").Disabled(busy)
 	}
 	label := map[string]string{"node": "Save node", "subscription": "Save subscription", "policy": "Save rule"}[kind]
+	if p.localNotice != "" {
+		ui.Text(c, p.localNotice).FontSize(fontSmall).TextColor(c.Theme().Danger).Label(p.localNotice)
+	}
 	ui.Row(c).Gap(8).Children(func() {
 		panelButton(c, label, components.ButtonPrimary, busy || strings.TrimSpace(p.editValue) == "").OnClick(func() { p.saveSource(false) })
 		panelButton(c, "Cancel edit", components.ButtonSecondary, busy).OnClick(func() { p.managementEditor = "" })
