@@ -21,6 +21,7 @@ func (p *Panel) managementLinks(c *ui.Context) {
 func (p *Panel) openManagement(page string) {
 	p.managementReturnConfig = p.configuration
 	p.managementNoticeBaseline = p.snapshot.Notice
+	p.confirmConfig = ""
 	p.managementPage = page
 	p.managementEditor = ""
 	p.managementQuery = ""
@@ -83,15 +84,44 @@ func (p *Panel) managementView(c *ui.Context) {
 			p.learningView(c)
 			return
 		}
+		p.managementApply(c)
 		panelSearchLabel(c.Key("source-search"), &p.managementQuery, "Search saved sources")
 		if p.managementPage == "Routing policy" {
 			p.policyList(c)
 		} else {
 			p.sourceList(c)
 		}
-		ui.Text(c, "Saved changes take effect after regeneration.").FontSize(fontSmall).TextColor(c.Theme().TextMuted)
 		p.managementNotice(c)
 	})
+}
+func (p *Panel) managementApply(c *ui.Context) {
+	busy := p.snapshot.Busy != ""
+	ui.Text(c, "Saved changes need to be applied to the VPN.").FontSize(fontSmall).TextColor(c.Theme().TextMuted)
+	if p.snapshot.ExternalCore {
+		ui.Text(c, "Apply saved configuration through your external service manager.").FontSize(fontSmall).TextColor(c.Theme().TextMuted)
+		return
+	}
+	if p.snapshot.Health.UpgradeRequired {
+		ui.Text(c, "Update the background supervisor and watcher to apply saved configuration.").FontSize(fontSmall).TextColor(c.Theme().TextMuted)
+		panelButton(c, "Update service and apply…", components.ButtonPrimary, busy || p.actions.Demo || p.actions.UpdateService == nil).OnClick(func() { p.local(p.actions.UpdateService) })
+		return
+	}
+	if p.confirmConfig == "management" {
+		text, label := "The VPN will connect using your saved configuration.", "Regenerate and connect"
+		if p.snapshot.Service == core.ServiceRunning {
+			text, label = "Active connections will be interrupted.", "Regenerate and reconnect"
+		}
+		ui.Text(c, text).FontSize(fontSmall)
+		ui.Row(c).Gap(8).Children(func() {
+			panelButton(c, "Cancel apply", components.ButtonSecondary, busy).OnClick(func() { p.confirmConfig = "" })
+			panelButton(c, label, components.ButtonPrimary, busy).OnClick(func() {
+				p.confirmConfig = ""
+				p.submitAction(func(ctx context.Context) error { return p.backend.RepairConfiguration(ctx, false) })
+			})
+		})
+		return
+	}
+	panelButton(c, "Apply saved configuration…", components.ButtonPrimary, busy).OnClick(func() { p.confirmConfig = "management" })
 }
 func (p *Panel) managementNotice(c *ui.Context) {
 	if p.snapshot.Notice == p.managementNoticeBaseline {
@@ -172,6 +202,7 @@ func (p *Panel) learningView(c *ui.Context) {
 }
 func (p *Panel) beginSourceEdit(kind string, index int) {
 	p.managementNoticeBaseline = p.snapshot.Notice
+	p.confirmConfig = ""
 	p.managementEditor = kind
 	p.managementIndex = index
 	p.editName = ""

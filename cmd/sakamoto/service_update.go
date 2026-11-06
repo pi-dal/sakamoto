@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -28,6 +29,7 @@ func runServiceUpdate(ctx context.Context, path string, args []string) error {
 	flags := flag.NewFlagSet("service-update", flag.ContinueOnError)
 	check := flags.Bool("check", false, "inspect the installed service without changes")
 	reconnect := flags.Bool("reconnect", false, "reconnect a live VPN after the service update")
+	regenerate := flags.Bool("regenerate", false, "apply saved configuration after the approved service update")
 	validate := flags.Bool("validate-config", false, "validate the configuration before an approved live reconnect")
 	stage := flags.Bool("stage-rescue", false, "stage independent rescue as administrator")
 	apply := flags.Bool("apply", false, "apply the approved update as administrator")
@@ -40,7 +42,7 @@ func runServiceUpdate(ctx context.Context, path string, args []string) error {
 			modes++
 		}
 	}
-	if flags.NArg() != 0 || modes > 1 || (*validate && !*stage) {
+	if flags.NArg() != 0 || modes > 1 || (*validate && !*stage) || (*regenerate && !*reconnect) {
 		return errors.New("choose a single service-update mode")
 	}
 	absolute, err := filepath.Abs(path)
@@ -117,7 +119,21 @@ func runServiceUpdate(ctx context.Context, path string, args []string) error {
 			return errors.New("cannot confirm the old core identity; service update canceled")
 		}
 	}
-	fmt.Println("Update this runtime's background service and retain its previous executable outside Homebrew.")
+	account, err := user.LookupId(strconv.Itoa(sys.UID))
+	if err != nil || os.Geteuid() != sys.UID {
+		return errors.New("run the update as the runtime owner; administrator authorization is requested separately")
+	}
+	watcher := rescue.WatcherUpdatePaths{Runtime: paths.Runtime, Plist: filepath.Join(account.HomeDir, "Library", "LaunchAgents", "dev.sakamoto.watch.plist"), Source: binary, Install: filepath.Join(account.HomeDir, ".local", "share", "sakamoto", "services"), Version: version}
+	if err = rescue.CheckWatcherUpdate(ctx, watcher, sys); err != nil {
+		return fmt.Errorf("watcher upgrade preflight failed; services unchanged: %w", err)
+	}
+	fmt.Println("Update this runtime's background supervisor and watcher; retain executables outside Homebrew and the app.")
+	if *regenerate {
+		fmt.Println("Saved configuration will be regenerated and applied after the service update.")
+		if !live {
+			fmt.Println("The VPN will connect after configuration validation succeeds.")
+		}
+	}
 	if live {
 		fmt.Println("The active VPN will disconnect and reconnect. Native API and protected DNS will be checked.")
 	}
@@ -183,6 +199,9 @@ func runServiceUpdate(ctx context.Context, path string, args []string) error {
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
+	if err = rescue.UpdateWatcher(ctx, watcher, sys); err != nil {
+		return fmt.Errorf("watcher update failed; supervisor was not replaced and VPN remains disconnected: %w", err)
+	}
 	command := exec.CommandContext(ctx, "/usr/bin/sudo", "-n", binary, "--config", absolute, "service-update", "--apply")
 	command.Stdin, command.Stdout, command.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err = command.Run(); err != nil {
@@ -191,14 +210,20 @@ func runServiceUpdate(ctx context.Context, path string, args []string) error {
 	if recovery.Held(paths.Runtime) {
 		return errors.New("service updated; maintenance remains held, resume deliberately before connecting")
 	}
-	if live {
-		result, e := svc.RepairAt(ctx, absolute, svc.RepairOptions{})
+	if live || *regenerate {
+		result, e := svc.RepairAt(ctx, absolute, svc.RepairOptions{Regenerate: *regenerate, Restart: *regenerate})
 		if e != nil {
 			return fmt.Errorf("background service updated; core recovery is incomplete (%s): %w", result.Problem, e)
 		}
-		fmt.Println("Background service updated. Core API and protected DNS verified.")
+		if *regenerate && result.Action != "regenerated" {
+			return errors.New("services updated, but saved configuration was not applied; inspect repair status before retrying")
+		}
+		fmt.Println("Background supervisor and watcher updated. Core API and protected DNS verified.")
+		if *regenerate {
+			fmt.Println("Saved configuration regenerated and applied.")
+		}
 	} else {
-		fmt.Println("Background service updated. The VPN remains disconnected.")
+		fmt.Println("Background supervisor and watcher updated. The VPN remains disconnected; apply saved configuration when connecting.")
 	}
 	return nil
 }

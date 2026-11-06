@@ -1,3 +1,13 @@
+# Desktop 0.2.25
+
+Desktop policy management now includes an explicit apply workflow.
+
+- Saving a policy remains source-only and does not restart the active core.
+- Apply saved configuration shows whether the VPN will reconnect or connect for the first time.
+- Legacy supervisors offer Update service and apply, upgrading the matching watcher and supervisor before regenerating saved sources.
+- Watcher replacement is retained outside Homebrew and app bundles, checks version/protocol/PID, and rolls back on failure.
+- The native recovery workflow verifies that wildcard policy rules are present in the configuration loaded by the replacement core.
+
 # Desktop 0.2.24
 
 MyGo now brings learning history and source management into the desktop panel.

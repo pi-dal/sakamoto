@@ -18,10 +18,16 @@
 
 Settings exposes Learning and Nodes & sources. Configuration also links to Learning, Nodes & sources, and Routing policy. Each page uses the existing panel navigation, search, accessible controls and light/dark palette.
 
-Learning displays saved mode, learned route count and the latest twenty checks. Selecting a domain adds an exact proxy rule to the sidecar policy after revalidation, without changing the active runtime. Existing exact overrides are retained. Apply saved changes through the existing Check & repair regeneration flow (external-core users apply through their service).
+Learning displays saved mode, learned route count and the latest twenty checks. Selecting a domain adds an exact proxy rule to the sidecar policy after revalidation, without changing the active runtime. Existing exact overrides are retained. Apply saved changes through Check & repair or the Apply saved configuration action on Nodes & sources and Routing policy (external-core users apply through their service).
 
 Nodes, subscriptions and policy rules have searchable lists and in-panel add/edit/remove forms. Existing nodes expose remark, server and single-port fields without exposing credentials; full-link replacement remains available for advanced options or malformed entries. Hopping ports are retained. Sensitive link fields are masked by default. Saves validate inputs and reject stale source revisions. Node files retain comments and unrelated lines.
 
+## Applying saved policy
+
+Saving a rule only writes the source configuration. On Routing policy, choose **Apply saved configuration…**, then confirm **Regenerate and reconnect**. When disconnected, the confirmation says **Regenerate and connect**. Preparation validates a private candidate before changing the active configuration. A failed generation leaves the existing runtime intact.
+
+A supervisor without configuration recovery exposes **Update service and apply…**. This opens the bundled CLI in Terminal with `service-update --reconnect --regenerate`; the terminal requests confirmation and local administrator authorization before disconnecting. The update replaces both the identified supervisor and the current user's matching watcher. It verifies the replacement watcher's version, protocol and PID before replacing the supervisor, then regenerates saved settings and verifies the new core API and protected DNS. The explicit regenerate option also connects an initially disconnected VPN; the terminal explains this before confirmation. Plain `service-update --reconnect` preserves an initially disconnected state.
+
 ## Repeatable evidence
 
-Run `rtk proxy python3 scripts/check-desktop.py --race`. With `SAKAMOTO_MENUBAR_ARTIFACT_DIR` set, integration workflows retain JSON receipts and light/dark MyGo content renders. These are isolated source/controller and input-driven UI fixtures; they do not use owner configuration or a real TUN.
+Run `rtk proxy python3 scripts/check-desktop.py --race`. With `SAKAMOTO_MENUBAR_ARTIFACT_DIR` set, integration workflows retain JSON receipts and light/dark MyGo content renders. These are isolated source/controller and input-driven UI fixtures; they do not use owner configuration or a real TUN. The policy application workflow retains `policy-apply-e2e.json` and light/dark captures of saved, confirmation and legacy-service states. `mise run go:recovery` includes watcher replacement/rollback fixtures and checks the policy inside the compiled rules referenced by a real native core process.
