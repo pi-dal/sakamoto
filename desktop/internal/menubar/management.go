@@ -347,7 +347,7 @@ func (p *Panel) saveSource(remove bool) {
 			var err error
 			value, err = desktop.UpdateNodeEndpoint(original.Raw, p.editName, p.editServer, p.editPort)
 			if err != nil {
-				p.localNotice = err.Error()
+				p.localNotice = strings.ToUpper(err.Error()[:1]) + err.Error()[1:]
 				return
 			}
 		}

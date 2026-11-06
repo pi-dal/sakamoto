@@ -109,7 +109,7 @@ func UpdateNodeEndpoint(raw, remark, server, port string) (string, error) {
 			return "", errors.New("edit the share link to change hopping ports")
 		}
 	} else if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
-		return "", errors.New("Port must be 1–65535")
+		return "", errors.New("port must be 1–65535")
 	}
 	if remark == current.Remark && server == current.Server && port == current.Port {
 		return raw, nil
