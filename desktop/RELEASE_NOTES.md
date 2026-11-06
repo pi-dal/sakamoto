@@ -1,3 +1,24 @@
+# Desktop 0.2.24
+
+MyGo now brings learning history and source management into the desktop panel.
+
+- Learning shows the saved mode, learned route count and twenty recent checks.
+- Select failed domains and add exact proxy rules, with duplicate prevention and existing direct/reject overrides retained.
+- Add, edit and remove nodes, subscriptions and routing policies in the panel. Node remark, server and port edits retain credentials and advanced link parameters.
+- Search lists, mask sensitive links by default and reject stale edits before replacing saved sources.
+- Saving updates configuration sources. Use Check & repair to regenerate and apply through the existing explicit reconnect flow; external-core users apply through their service.
+
+Input-driven desktop workflows cover editing, validation, stale saves, selection, search and light/dark renders. Both macOS architectures are signed, notarized and stapled; Windows/Linux portable clients use an existing external core. Physical platform accessibility/IME acceptance remains separate from these automated fixtures.
+
+```sh
+brew update
+brew upgrade --cask pi-dal/tap/sakamoto-desktop
+```
+
+See [desktop management](https://github.com/pi-dal/sakamoto/blob/main/docs/desktop-management.md). The CLI Homebrew formula remains independent.
+
+---
+
 # Desktop 0.2.23
 
 The menu bar GUI now includes a validated editor for persistent settings that were

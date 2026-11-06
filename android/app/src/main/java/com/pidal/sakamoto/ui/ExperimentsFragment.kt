@@ -8,6 +8,7 @@ import androidx.lifecycle.lifecycleScope
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
 import com.pidal.sakamoto.R
+import com.pidal.sakamoto.runtime.ConfigRepository
 import com.pidal.sakamoto.runtime.ExperimentRuntime
 import kotlinx.coroutines.launch
 
@@ -68,6 +69,29 @@ class ExperimentsFragment : androidx.fragment.app.Fragment() {
         val history = ExperimentRuntime.history(requireContext())
         historySignature = history.lastOrNull()
         val checks = page.section(getString(R.string.experiment_checks))
+        val recentFailures = history.takeLast(20).reversed().mapNotNull { raw ->
+            val result = runCatching { org.json.JSONObject(raw) }.getOrNull() ?: return@mapNotNull null
+            val domain = result.optString("domain").trim()
+            val direct = result.optJSONObject("direct")
+            if (domain.isEmpty() || direct?.optBoolean("reachable", true) != false) return@mapNotNull null
+            domain to result.optString("detail", getString(R.string.experiment_failure_detail))
+        }.distinctBy { it.first }
+        if (recentFailures.isNotEmpty()) {
+            page.button(checks, getString(R.string.experiment_add_failures), primary = true) {
+                val domains = recentFailures.map { it.first }
+                val checked = BooleanArray(domains.size)
+                MaterialAlertDialogBuilder(requireContext())
+                    .setTitle(R.string.experiment_add_failures_title)
+                    .setMultiChoiceItems(domains.toTypedArray(), checked) { _, which, isChecked -> checked[which] = isChecked }
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .setPositiveButton(R.string.add) { _, _ ->
+                        val selected = domains.filterIndexed { index, _ -> checked[index] }
+                        if (selected.isEmpty()) feedback(getString(R.string.experiment_select_failure_first))
+                        else runCatching { ConfigRepository.savePolicyRules(requireContext(), selected); refresh() }
+                            .onFailure { feedback(it.message.orEmpty()) }
+                    }.show()
+            }
+        }
         if (history.isEmpty()) page.row(checks, getString(R.string.experiment_no_checks))
         history.takeLast(10).reversed().forEach { raw ->
             val result = org.json.JSONObject(raw)

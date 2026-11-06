@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 )
 
@@ -158,11 +157,9 @@ func atomic(path string, raw []byte, mode os.FileMode, userFile bool) error {
 	if err = f.Chmod(mode); err != nil {
 		return fail(err)
 	}
-	if old != nil && os.Geteuid() == 0 {
-		if st, ok := old.Sys().(*syscall.Stat_t); ok {
-			if err = f.Chown(int(st.Uid), int(st.Gid)); err != nil {
-				return fail(err)
-			}
+	if old != nil {
+		if err = preserveFileOwner(f, old); err != nil {
+			return fail(err)
 		}
 	}
 	if _, err = f.Write(raw); err != nil {
@@ -179,11 +176,4 @@ func atomic(path string, raw []byte, mode os.FileMode, userFile bool) error {
 	}
 	return SyncDir(filepath.Dir(path))
 }
-func SyncDir(dir string) error {
-	f, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-	return f.Sync()
-}
+func SyncDir(dir string) error { return syncDir(dir) }

@@ -2,7 +2,6 @@ package menubar
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -62,29 +61,10 @@ func (p *Panel) configurationView(c *ui.Context) {
 			}
 			ui.Text(c, note).FontSize(fontSmall).TextColor(color).MaxHeight(44)
 		}
-		p.configurationSections(c)
+		p.managementLinks(c)
 		panelHairline(c)
-		ui.Column(c).Gap(8).Children(func() {
-			ui.Text(c, "Nodes and sources").Bold()
-			ui.Text(c, fmt.Sprintf("%d subscriptions, nodes file configured", p.configDraft.SubscriptionCount)).FontSize(fontSmall).TextColor(t.TextMuted)
-			p.configurationLink(c, "Open TUI for nodes and sources")
-		})
-		ui.Column(c).Gap(8).Children(func() {
-			ui.Text(c, "Routing policy").Bold()
-			ui.Text(c, fmt.Sprintf("%d user policy rules", p.configDraft.PolicyCount)).FontSize(fontSmall).TextColor(t.TextMuted)
-			p.configurationLink(c, "Open TUI for routing policy")
-		})
+		p.configurationSections(c)
 	})
-}
-
-func (p *Panel) configurationLink(c *ui.Context, label string) {
-	if p.actions.OpenTUI != nil {
-		panelButton(c, label, components.ButtonSecondary, p.actions.Demo).OnClick(func() { p.local(p.actions.OpenTUI) })
-		return
-	}
-	if p.actions.RevealConfig != nil {
-		panelButton(c, "Open configuration folder", components.ButtonSecondary, p.actions.Demo).OnClick(func() { p.local(p.actions.RevealConfig) })
-	}
 }
 
 func (p *Panel) configurationSections(c *ui.Context) {
