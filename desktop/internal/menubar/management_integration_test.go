@@ -104,7 +104,7 @@ func TestManagementPanelEndToEnd(t *testing.T) {
 	replace("Node server", "::1")
 	replace("Node port", "0")
 	click("Save node")
-	if !tt.HasText("Port must be 1–65535.") {
+	if !tt.HasText("Port must be 1–65535") {
 		t.Fatal("invalid port did not produce actionable error")
 	}
 	current, err := backend.Management()
