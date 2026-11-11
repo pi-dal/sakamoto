@@ -40,7 +40,7 @@ func automaticMembers(group string, tags, excluded []string) ([]string, error) {
 }
 
 // buildOutbounds merges manual nodes before subscriptions, classifies automatic groups,
-// and keeps the SOCKS exit separate from the selectable entry nodes.
+// and keeps the configured chain exit separate from selectable entry nodes.
 func buildOutbounds(o Options, cfg *config.Config, hc *http.Client) ([]map[string]any, []map[string]any, string, []string, error) {
 	if err := cfg.ValidateAutomaticGroups(); err != nil {
 		return nil, nil, "", nil, err
@@ -95,15 +95,46 @@ func buildOutbounds(o Options, cfg *config.Config, hc *http.Client) ([]map[strin
 		}
 	}
 
-	// 4) Group Reality and other nodes for URL testing, plus manual selection.
-	var dataNodes, socksNodes []map[string]any
-	for _, n := range nodes {
-		if n["type"] == "socks" {
-			socksNodes = append(socksNodes, n)
+	// An explicit exit tag separates the role of a node from its protocol.
+	// Without one, retain the first SOCKS exit used by existing profiles.
+	explicitExit := strings.TrimSpace(cfg.ChainExit)
+	if explicitExit == "" {
+		explicitExit = strings.TrimSpace(cfg.SocksExit)
+	}
+	var chainExit string
+	if cfg.ChainEnabled {
+		chainExit = explicitExit
+		if chainExit == "" {
+			for _, n := range nodes {
+				if n["type"] == "socks" {
+					chainExit, _ = n["tag"].(string)
+					break
+				}
+			}
 		} else {
-			dataNodes = append(dataNodes, n)
+			var found map[string]any
+			for _, n := range nodes {
+				if n["tag"] == chainExit {
+					found = n
+					break
+				}
+			}
+			if found == nil || !chainableOutbound(found) {
+				return nil, nil, "", nil, fmt.Errorf("choose an existing proxy node for chain_exit")
+			}
 		}
 	}
+	var dataNodes []map[string]any
+	for _, n := range nodes {
+		if n["tag"] == chainExit || (cfg.ChainEnabled && explicitExit == "" && n["type"] == "socks") {
+			continue
+		}
+		dataNodes = append(dataNodes, n)
+	}
+	if cfg.ChainEnabled && explicitExit != "" && len(dataNodes) == 0 {
+		return nil, nil, "", nil, fmt.Errorf("chain_exit requires at least one separate upstream node")
+	}
+
 	var realityTags, otherTags []string
 	for _, n := range dataNodes {
 		if AutomaticGroupTag(n) == "RealityAuto" {
@@ -146,10 +177,11 @@ func buildOutbounds(o Options, cfg *config.Config, hc *http.Client) ([]map[strin
 	mainMembers = append(mainMembers, "ManualPick")
 	main := map[string]any{"type": "selector", "tag": "MainProxy", "outbounds": mainMembers,
 		"default": mainMembers[0], "interrupt_exist_connections": true}
-	// Chain the SOCKS exit through MainProxy when chain_enabled is true.
+	// Chain the selected exit through MainProxy. The exit may be SOCKS,
+	// VLESS, VMess, Trojan, or any other sing-box leaf outbound.
 	for _, n := range nodes {
 		delete(n, "_chain")
-		if n["type"] == "socks" && cfg.ChainEnabled {
+		if n["tag"] == chainExit {
 			n["detour"] = "MainProxy"
 		}
 	}
@@ -157,15 +189,66 @@ func buildOutbounds(o Options, cfg *config.Config, hc *http.Client) ([]map[strin
 	outbounds = append(outbounds, nodes...)
 	outbounds = append(outbounds, map[string]any{"type": "direct", "tag": "direct"})
 	exitTag := "MainProxy"
-	if cfg.ChainEnabled {
-		for _, s := range socksNodes { // Choose the SOCKS outbound detouring through MainProxy.
-			if s["detour"] == "MainProxy" {
-				exitTag = s["tag"].(string)
-				break
-			}
-			exitTag = s["tag"].(string)
-		}
+	if cfg.ChainEnabled && chainExit != "" {
+		exitTag = chainExit
 	}
 
+	if err := validateOutboundGraph(outbounds); err != nil {
+		return nil, nil, "", nil, err
+	}
 	return outbounds, nodes, exitTag, mainMembers, nil
+}
+
+func validateOutboundGraph(outbounds []map[string]any) error {
+	graph := make(map[string][]string, len(outbounds))
+	for _, node := range outbounds {
+		tag, _ := node["tag"].(string)
+		if _, exists := graph[tag]; tag == "" || exists {
+			return fmt.Errorf("proxy chain requires unique non-empty outbound tags")
+		}
+		members, _ := node["outbounds"].([]string)
+		deps := append([]string(nil), members...)
+		if detour, _ := node["detour"].(string); detour != "" {
+			deps = append(deps, detour)
+		}
+		graph[tag] = deps
+	}
+	visited, visiting := map[string]bool{}, map[string]bool{}
+	var visit func(string) error
+	visit = func(tag string) error {
+		if visiting[tag] {
+			return fmt.Errorf("proxy chain creates a routing cycle")
+		}
+		if visited[tag] {
+			return nil
+		}
+		deps, exists := graph[tag]
+		if !exists {
+			return fmt.Errorf("proxy chain references a missing outbound")
+		}
+		visiting[tag] = true
+		for _, dependency := range deps {
+			if err := visit(dependency); err != nil {
+				return err
+			}
+		}
+		delete(visiting, tag)
+		visited[tag] = true
+		return nil
+	}
+	for tag := range graph {
+		if err := visit(tag); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func chainableOutbound(node map[string]any) bool {
+	switch node["type"] {
+	case nil, "", "selector", "urltest", "direct", "block", "dns":
+		return false
+	default:
+		return true
+	}
 }

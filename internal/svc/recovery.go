@@ -21,7 +21,7 @@ import (
 func (s *Server) SetVersion(version string) { s.mu.Lock(); s.version = version; s.mu.Unlock() }
 func (s *Server) info() string {
 	s.mu.Lock()
-	value := map[string]any{"version": s.version, "protocol": 2, "capabilities": []string{"native-dns-v1", "offline-recovery-v1", "lifecycle-cancel-v1", "runtime-bundle-v1", "quick-repair-v1", configRepairCapability}, "circuit": s.circuit, "state_error": s.stateErr != nil}
+	value := map[string]any{"version": s.version, "protocol": 2, "capabilities": []string{"native-dns-v1", "offline-recovery-v1", "lifecycle-cancel-v1", "runtime-bundle-v1", "quick-repair-v1", configRepairCapability, ChainExitCapability}, "circuit": s.circuit, "state_error": s.stateErr != nil}
 	if s.child != nil {
 		value["core"] = map[string]any{"pid": s.child.Process.Pid, "executable": s.child.Path, "started": s.started, "alive": s.runningLocked(), "applied_input_sha256": s.activeConfigHash}
 	}

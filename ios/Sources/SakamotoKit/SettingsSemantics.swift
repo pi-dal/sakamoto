@@ -10,7 +10,7 @@ import Foundation
 //      is unit-testable without Libbox and can never write a malformed
 //      config silently (the provider reload still validates and fails loudly).
 //   2. HOST-OWNED — fields of the host generator and its sidecar
-//      `sakamoto.yaml` (chain SOCKS exit, fallback chain, subscriptions).
+//      `sakamoto.yaml` (chain exit, fallback chain, subscriptions).
 //      The generator runs on the sakamoto host; the app never regenerates
 //      that output, so this file only DESCRIBES what the current config
 //      contains and the UI says where to change the rest. Claiming an

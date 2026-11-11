@@ -34,7 +34,7 @@ Shared Go packages provide consistent configuration semantics across platforms. 
 ## 4. Product invariants
 
 1. Never commit private runtime files: API secrets, `nodes.txt`, subscription tokens, `config.json`, compiled `.srs` files, logs, restore snapshots, learned domains or pending keys.
-2. SOCKS exits use `MainProxy` and `detour` in the defined chain direction. Shadowrocket `FINAL,DIRECT` maps to `route.final=direct`.
+2. Chain exits use `MainProxy` and `detour` in the defined chain direction. Any sing-box leaf proxy outbound may be the exit; Shadowrocket `FINAL,DIRECT` maps to `route.final=direct`.
 3. Ordered fallback is `RealityAuto` to `OthersAuto`. Switches require fresh URL-test results, and manual selections are preserved.
 4. Shadowrocket and sing-box must not own active TUN/VPN sessions simultaneously. The desktop supervisor stops sing-box when it detects the competing VPN.
 5. Import fails closed. Missing includes or remote rule sets must not replace the previous usable configuration.
@@ -48,7 +48,7 @@ Shared Go packages provide consistent configuration semantics across platforms. 
 
 | Feature | Implemented behavior |
 |---|---|
-| Home | Connect/disconnect; separate core-start and network-probe states; chain and SOCKS exit summary; group latency; mouse selection, testing and details |
+| Home | Connect/disconnect; separate core-start and network-probe states; chain and proxy exit summary; group latency; mouse selection, testing and details |
 | Traffic mode | Cycle Rule, Global and Direct through the native API and verify the result; report when an old configuration needs regeneration; retain private/Tailscale exclusions, ad rejection and configured STUN/QUIC blocking |
 | Config | Import local or remote Shadowrocket `.conf` with relative includes; inspect General, rules and DNS; manage sources, node links and proxy/direct/reject policies |
 | Policy forms | Exact names, `*.` suffixes, `keyword:`, `cidr:` and supported remote rule URLs |

@@ -25,6 +25,9 @@ import (
 
 const configRepairCapability = "configuration-repair-v1"
 
+// ChainExitCapability confirms the supervisor honors explicit protocol-independent exits.
+const ChainExitCapability = "generic-chain-exit-v1"
+
 type repairFailure struct {
 	problem string
 	err     error

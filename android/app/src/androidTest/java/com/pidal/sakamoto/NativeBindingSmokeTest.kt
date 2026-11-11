@@ -29,6 +29,7 @@ class NativeBindingSmokeTest : Instrumentation() {
     private var updates = false
     private var power = false
     private var recovery = false
+    private var checkChain = false
     private var recoveryVpn = false
 
     override fun onCreate(arguments: Bundle?) {
@@ -47,6 +48,7 @@ class NativeBindingSmokeTest : Instrumentation() {
         updates = arguments?.getString("updates") == "true"
         power = arguments?.getString("power") == "true"
         recovery = arguments?.getString("recovery") == "true"
+        checkChain = arguments?.getString("chain") == "true"
         recoveryVpn = arguments?.getString("recoveryVpn") == "true"
         widgetToggle = arguments?.getString("toggle") == "true"
         if (widgetToggle) checkVpn = true
@@ -388,6 +390,7 @@ class NativeBindingSmokeTest : Instrumentation() {
                 check(com.pidal.sakamoto.runtime.ConfigRepository.sourceFiles(targetContext).any { it.name == "policy.json" })
                 check(com.pidal.sakamoto.runtime.ConfigRepository.sourceFiles(targetContext).any { it.name == "chain.json" })
             }
+            if (checkChain) ProxyChainScenario.run(this)
             if (power) PowerObservationScenario.run(this)
             if (recovery) RecoveryObservationScenario.run(this)
             if (recoveryVpn) RecoveryObservationScenario.runVpn(this)

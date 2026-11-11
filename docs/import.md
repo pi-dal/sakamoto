@@ -21,7 +21,7 @@ A failed import leaves the last working `config.json` and rule sets untouched. R
 
 ## Supported migration
 
-- `DOMAIN`, `DOMAIN-SUFFIX`, `DOMAIN-KEYWORD`, `IP-CIDR`, `GEOIP`, `FINAL` (`FINAL,DIRECT` remains direct; explicit `PROXY` rules still use the chained SOCKS exit);
+- `DOMAIN`, `DOMAIN-SUFFIX`, `DOMAIN-KEYWORD`, `IP-CIDR`, `GEOIP`, `FINAL` (`FINAL,DIRECT` remains direct; explicit `PROXY` rules still use the configured chain exit);
 - `skip-proxy`, `bypass-tun`, DNS servers, DNS hijacking, Tailscale exclusions. List-valued General settings from an included conf are merged without dropping the parent or included values;
 - exact `[Host]` IP overrides via a sing-box hosts DNS server (system DNS must actually send the relevant query to sing-box for that override to apply);
 - VLESS Reality, VMess, Hysteria2, TUIC, AnyTLS, SOCKS5;

@@ -106,7 +106,7 @@ for service in config.get('services', []):
 # Keep host-owned policy/chain intent distinct from device runtime state.
 # Never include the host API secret, cloud settings or unrelated YAML fields.
 metadata = {key: settings[key] for key in (
-    'chain_enabled', 'socks_exit', 'fallbacks', 'fallback_enabled', 'recover_after',
+    'chain_enabled', 'chain_exit', 'socks_exit', 'fallbacks', 'fallback_enabled', 'recover_after',
     'block_quic', 'block_stun', 'experiment', 'strict_route', 'tun_stack'
 ) if key in settings}
 files['imports/local/policy.json'] = json.dumps(settings.get('policy') or [], indent=2).encode()

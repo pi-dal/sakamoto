@@ -49,7 +49,10 @@ object ConfigRepository {
         val subscriptions: List<Triple<String, String, String>> = emptyList(), // name, url, format
         val nodeAliases: Map<String, String> = emptyMap(),
         val automaticGroups: List<ProxyGroupEdit> = emptyList(),
-    )
+        val proxyChain: ProxyChainSettings? = null,
+    ) {
+        val runtimeContent: String get() = proxyChain?.applying(generatedContent) ?: generatedContent
+    }
 
     private fun file(context: Context): File = File(context.filesDir, FILE_NAME)
 
@@ -73,6 +76,7 @@ object ConfigRepository {
                         PolicyRule(o.optString("match"), o.optString("action"))
                     }
                 } ?: emptyList(),
+                proxyChain = ProxyChainSettings.decode(root.optJSONObject("proxyChain")),
                 automaticGroups = ProxyGroupEditing.decodeSaved(root.optJSONArray("automaticGroups")),
                 nodeAliases = root.optJSONObject("nodeAliases")?.let { aliases -> aliases.keys().asSequence().associateWith { aliases.getString(it) } } ?: emptyMap(),
                 nodes = root.optJSONArray("nodes")?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList(),
@@ -106,6 +110,7 @@ object ConfigRepository {
                 config.policy.forEach { put(JSONObject().put("match", it.match).put("action", it.action)) }
             },
         )
+        root.put("proxyChain", config.proxyChain?.json())
         root.put("automaticGroups", ProxyGroupEditing.encodeSaved(config.automaticGroups))
         root.put("nodeAliases", JSONObject(config.nodeAliases))
         root.put("nodes", JSONArray().apply { config.nodes.forEach { put(it) } })
@@ -126,11 +131,28 @@ object ConfigRepository {
         _changes.value = revision.incrementAndGet()
     }
 
-    fun saveNodeEdit(context: Context, content: String, old: String, name: String) {
-        val protected = io.nekohasekai.mobilecore.Mobilecore.prepareTailscaleConnectivityJSON(content)
-        io.nekohasekai.mobilecore.Mobilecore.validateConfigJSON(protected)
-        io.nekohasekai.libbox.Libbox.checkConfig(protected)
+    fun saveProxyChain(context: Context, settings: ProxyChainSettings, expected: StagedConfig) {
         val current = load(context)
+        require(current == expected) { "Configuration changed. Reopen the chain editor." }
+        val base = if (current.proxyChain == null) ProxyChainSettings.unchained(current.generatedContent) else current.generatedContent
+        val candidate = settings.applying(base)
+        io.nekohasekai.mobilecore.Mobilecore.validateConfigJSON(candidate)
+        io.nekohasekai.libbox.Libbox.checkConfig(candidate)
+        save(context, current.copy(generatedContent = base, proxyChain = settings))
+        MobilecoreRuntime.configEvent("modified")
+    }
+
+    private fun validateRuntime(current: StagedConfig, content: String) {
+        val runtime = current.proxyChain?.applying(content) ?: content
+        io.nekohasekai.mobilecore.Mobilecore.validateConfigJSON(runtime)
+        io.nekohasekai.libbox.Libbox.checkConfig(runtime)
+    }
+
+    fun saveNodeEdit(context: Context, content: String, old: String, name: String) {
+        val current = load(context)
+        val chain = current.proxyChain?.let { it.copy(upstream = if (it.upstream == old) name else it.upstream, exit = if (it.exit == old) name else it.exit) }
+        val protected = io.nekohasekai.mobilecore.Mobilecore.prepareTailscaleConnectivityJSON(content)
+        validateRuntime(current.copy(proxyChain = chain), protected)
         val aliases = current.nodeAliases.mapValues { if (it.value == old) name else it.value }.toMutableMap()
         if (old != name && current.nodeAliases.values.none { it == old }) aliases[old] = name
         val metadata = JSONObject(current.hostMetadata)
@@ -142,7 +164,7 @@ object ConfigRepository {
         }
         val groups = current.automaticGroups.map { edit -> edit.copy(members = edit.members.map { if (it == old) name else it },
             excludedMembers = edit.excludedMembers?.map { if (it == old) name else it }, additionalMembers = edit.additionalMembers?.map { if (it == old) name else it }) }
-        save(context, current.copy(generatedContent = protected, nodeAliases = aliases, hostMetadata = metadata.toString(), automaticGroups = groups))
+        save(context, current.copy(generatedContent = protected, nodeAliases = aliases, hostMetadata = metadata.toString(), automaticGroups = groups, proxyChain = chain))
         MobilecoreRuntime.configEvent("modified")
     }
 
@@ -150,8 +172,7 @@ object ConfigRepository {
         val current = load(context)
         val recorded = ProxyGroupEditing.recording(current.generatedContent, edit, current.automaticGroups.firstOrNull { it.tag == edit.tag })
         val content = ProxyGroupEditing.apply(current.generatedContent, recorded)
-        io.nekohasekai.mobilecore.Mobilecore.validateConfigJSON(content)
-        io.nekohasekai.libbox.Libbox.checkConfig(content)
+        validateRuntime(current, content)
         val groups = current.automaticGroups.filterNot { it.tag == edit.tag } + if (ProxyGroupEditing.followsGeneratedNodes(recorded)) listOf(recorded) else emptyList()
         save(context, current.copy(generatedContent = content, automaticGroups = groups))
         MobilecoreRuntime.configEvent("modified")
@@ -159,10 +180,8 @@ object ConfigRepository {
 
     fun saveGeneratedEdit(context: Context, content: String) {
         val protected = io.nekohasekai.mobilecore.Mobilecore.prepareTailscaleConnectivityJSON(content)
-        io.nekohasekai.mobilecore.Mobilecore.validateConfigJSON(protected)
-        // libbox validates semantic options and outbound references as well.
-        io.nekohasekai.libbox.Libbox.checkConfig(protected)
         val current = load(context)
+        validateRuntime(current, protected)
         save(context, current.copy(generatedContent = protected))
         MobilecoreRuntime.configEvent("modified")
     }
@@ -199,8 +218,7 @@ object ConfigRepository {
         if (added.size == current.policy.size) return
         route.put("rules", next)
         val content = root.toString()
-        io.nekohasekai.mobilecore.Mobilecore.validateConfigJSON(content)
-        io.nekohasekai.libbox.Libbox.checkConfig(content)
+        validateRuntime(current, content)
         save(context, current.copy(generatedContent = content, policy = added))
         MobilecoreRuntime.configEvent("modified")
     }
@@ -231,8 +249,7 @@ object ConfigRepository {
             if (!matchesOriginal) next.put(rule)
         }
         route.put("rules", next)
-        io.nekohasekai.mobilecore.Mobilecore.validateConfigJSON(root.toString())
-        io.nekohasekai.libbox.Libbox.checkConfig(root.toString())
+        validateRuntime(current, root.toString())
         val policy = current.policy.filterNot { it == original }.let { if (replacement == null) it else it + replacement }
         save(context, current.copy(generatedContent = root.toString(), policy = policy))
         MobilecoreRuntime.configEvent("modified")
@@ -262,7 +279,7 @@ object ConfigRepository {
 
     /** The config content the tunnel service loads (BoxService start/reload). */
     fun readGeneratedContent(context: Context): String? {
-        val content = load(context).generatedContent
+        val content = load(context).runtimeContent
         return content.ifBlank { null }
     }
 }

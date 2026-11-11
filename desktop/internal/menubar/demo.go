@@ -38,7 +38,8 @@ func NewDemo() *Demo {
 		management: desktop.Management{Policies: []config.PolicyRule{{Match: "existing.example", Action: "direct"}}},
 		learning:   desktop.Learning{Mode: "auto", LearnedCount: 2, Checks: []desktop.LearningCheck{{Domain: "failed.example", State: "no_improvement", Detail: "Direct origin check failed", Time: time.Now()}}, Failures: []desktop.LearningCheck{{Domain: "failed.example", State: "no_improvement", Time: time.Now()}}},
 		configuration: desktop.Configuration{Fields: []desktop.ConfigurationField{
-			{Section: "Network", Key: "chain_enabled", Label: "Chain SOCKS exit", Kind: desktop.ConfigBool, Value: "on"},
+			{Section: "Network", Key: "chain_enabled", Label: "Chain exit", Kind: desktop.ConfigBool, Value: "on"},
+			{Section: "Network", Key: "chain_exit", Label: "Chain exit node", Kind: desktop.ConfigText, Value: "Demo Tokyo"},
 			{Section: "Network", Key: "strict_route", Label: "Strict routing", Kind: desktop.ConfigBool, Value: "off"},
 			{Section: "Network", Key: "tun_stack", Label: "TUN stack", Kind: desktop.ConfigChoice, Value: "gvisor", Choices: []string{"system", "gvisor", "mixed"}},
 			{Section: "DNS", Key: "dns_enabled", Label: "Protected system DNS", Kind: desktop.ConfigBool, Value: "off"},

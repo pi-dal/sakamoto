@@ -36,10 +36,19 @@ func RepairAt(ctx context.Context, cfgPath string, options RepairOptions) (Repai
 			Capabilities []string `json:"capabilities"`
 		}
 		_ = json.Unmarshal([]byte(reply), &info)
-		available := false
+		available, chainAvailable := false, false
 		for _, capability := range info.Capabilities {
+			if capability == ChainExitCapability {
+				chainAvailable = true
+			}
 			if capability == configRepairCapability {
 				available = true
+			}
+		}
+		if options.Regenerate {
+			if cfg, err := config.Load(cfgPath); err == nil && cfg.ChainEnabled && (cfg.ChainExit != "" || cfg.SocksExit != "") && !chainAvailable {
+				result := RepairResult{State: "failed", Action: "none", Stage: "prepare", Problem: "service_upgrade_required", UpgradeRequired: true, Detail: "update the background service before applying the configured chain exit"}
+				return result, errors.New(result.Detail)
 			}
 		}
 		if !available {

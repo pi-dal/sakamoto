@@ -76,6 +76,6 @@ func reportGeneration(p *parsedConf, cfgPath, finalTag, exitTag string, chain []
 			reportf("  ? [General] unmapped option: %s = %s\n", k, v)
 		}
 	}
-	reportf("→ %s  final route=%s, proxy exit=%s (detour to MainProxy)\n", cfgPath, finalTag, exitTag)
+	reportf("→ %s  final route=%s, chain exit=%s (detour to MainProxy)\n", cfgPath, finalTag, exitTag)
 	reportf("   fallback chain: %v\n", chain)
 }

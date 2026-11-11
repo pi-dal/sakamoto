@@ -5,7 +5,7 @@ in the TUI Settings page. Open Settings, then **Edit configuration**.
 
 ## Groups
 
-- Network: chain SOCKS exit, strict routing and TUN stack
+- Network: chain exit, strict routing and TUN stack
 - DNS: protected system DNS, network service and private suffixes
 - Traffic policy: Cloudflare region handling, unmatched policy and failure threshold
 - Privacy: STUN and QUIC blocking

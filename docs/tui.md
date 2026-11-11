@@ -7,7 +7,7 @@ The status bar distinguishes *TUN started* from *network probe passed*. The prob
 ## Home
 
 - **Connect / Disconnect** toggles sakamoto TUN. Disconnect Shadowrocket VPN first; Tailscale can remain connected. A pending `sakamoto rotate-api` key is applied before the next normal TUI connection (not while the TUN is already connected).
-- The chain summary shows the current entry selection and SOCKS exit.
+- The chain summary shows the current entry selection and configured chain exit.
 - Click **Mode** or press `m` to cycle **Rule → Global → Direct**. The TUI checks that the native core exposes the requested mode and verifies the result; an old generated config is reported as needing regeneration/reconnection rather than showing a false success. Global sends ordinary public traffic through the selected chain, including domains otherwise marked DIRECT. Direct sends ordinary public traffic directly. Both retain private/Tailscale exclusions, ad rejects and enabled STUN/QUIC blocks. Changing modes affects new connections; existing streams are not forcibly closed.
 - **Test all** tests each distinct protocol node rather than treating groups as nodes; wait for the final success/failure count.
 - Left-click a node for manual selection. Right-click for **Use / Test / Details**. Wheel scrolls the list. A filled dot means selected, not reachable.

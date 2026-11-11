@@ -15,7 +15,7 @@ object RoutingSnapshot {
         val rules = route.optJSONArray("rules") ?: JSONArray()
         val outbounds = config.optJSONArray("outbounds") ?: JSONArray()
         val exits = (0 until outbounds.length()).map { outbounds.getJSONObject(it) }
-            .filter { it.optString("type") in listOf("socks", "http") && it.optString("detour").isNotEmpty() }
+            .filter { it.optString("detour").isNotEmpty() && it.optString("type") !in setOf("", "selector", "urltest", "direct", "block", "dns") }
             .map { Exit(it.optString("tag"), it.optString("type"), it.optString("server"), it.optInt("server_port"), it.optString("detour"), it.optString("username").isNotEmpty() || it.optString("password").isNotEmpty()) }
         return Snapshot((0 until rules.length()).map { index ->
             val rule = rules.getJSONObject(index)

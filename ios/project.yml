@@ -27,8 +27,8 @@ settings:
   base:
     DEVELOPMENT_TEAM: ""
     CODE_SIGN_STYLE: Automatic
-    CURRENT_PROJECT_VERSION: 34
-    MARKETING_VERSION: 0.1.25
+    CURRENT_PROJECT_VERSION: 35
+    MARKETING_VERSION: 0.1.26
     SWIFT_VERSION: "5.10"
   configs:
     Release:

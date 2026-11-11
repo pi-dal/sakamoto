@@ -27,5 +27,6 @@ let package = Package(
         // against the macOS/iOS SDK without signing; runtime behavior needs
         // an entitlement-bearing app target (not created yet).
         .target(name: "SakamotoNE", dependencies: ["SakamotoKit"]),
+        .executableTarget(name: "ChainScenario", dependencies: ["SakamotoKit"], path: "Scenarios/Chain"),
     ]
 )

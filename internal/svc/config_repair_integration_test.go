@@ -18,6 +18,7 @@ import (
 
 	"github.com/pi-dal/sakamoto/internal/config"
 	"github.com/pi-dal/sakamoto/internal/recovery"
+	"github.com/sagernet/sing-box/common/srs"
 )
 
 // Exercise real native validation, API processes and Unix repair requests.
@@ -151,6 +152,7 @@ func TestRepairConfigurationFallbackAndRegeneration(t *testing.T) {
 	}
 	unchanged(before, first.PID)
 	cfg.LogLevel = "info"
+	cfg.PolicyRules = []config.PolicyRule{{Match: "*.mistral.ai", Action: "proxy"}}
 	recoveryOK(t, cfg.Save(path))
 	recoveryOK(t, os.WriteFile(filepath.Join(dir, "api-rotation.pending.json"), []byte(`{"secret":"pending-is-not-consumed"}`), 0600))
 	before = snapshot()
@@ -180,6 +182,9 @@ func TestRepairConfigurationFallbackAndRegeneration(t *testing.T) {
 	}
 	pointer, err := os.ReadFile(filepath.Join(dir, "recovery", "last-good.json"))
 	recoveryOK(t, err)
+	// Restoring the known working bundle also restores its old sidecar.
+	// Save the new policy again before requesting regeneration.
+	recoveryOK(t, cfg.Save(path))
 	regenerated, err := RepairAt(ctx, path, RepairOptions{Regenerate: true, Restart: true})
 	recoveryOK(t, err)
 	if !regenerated.Verified || regenerated.Action != "regenerated" || regenerated.PID == restored.PID {
@@ -187,6 +192,51 @@ func TestRepairConfigurationFallbackAndRegeneration(t *testing.T) {
 	}
 	current, err := os.ReadFile(s.cfgPath)
 	recoveryOK(t, err)
+	// Read the exact file passed to the new native process, not only config.json.
+	loaded, err := os.ReadFile(filepath.Join(dir, fmt.Sprintf("isolated-process-%d.json", launches)))
+	recoveryOK(t, err)
+	var running struct {
+		Route struct {
+			Rules []struct {
+				RuleSet  []string `json:"rule_set"`
+				Outbound string   `json:"outbound"`
+			} `json:"rules"`
+			RuleSet []struct {
+				Tag  string `json:"tag"`
+				Path string `json:"path"`
+			} `json:"rule_set"`
+		} `json:"route"`
+	}
+	recoveryOK(t, json.Unmarshal(loaded, &running))
+	appliedPolicy := false
+	for _, rule := range running.Route.Rules {
+		for _, tag := range rule.RuleSet {
+			if tag != "rs-proxy" || rule.Outbound != "LocalExit" {
+				continue
+			}
+			for _, asset := range running.Route.RuleSet {
+				if asset.Tag != tag {
+					continue
+				}
+				file, e := os.Open(asset.Path)
+				recoveryOK(t, e)
+				decoded, e := srs.Read(file, true)
+				closeErr := file.Close()
+				recoveryOK(t, e)
+				recoveryOK(t, closeErr)
+				for _, item := range decoded.Options.Rules {
+					for _, domain := range item.DefaultOptions.DomainSuffix {
+						if domain == "mistral.ai" {
+							appliedPolicy = true
+						}
+					}
+				}
+			}
+		}
+	}
+	if !appliedPolicy {
+		t.Fatal("saved policy missing from the configuration loaded by the new native process")
+	}
 	var doc struct {
 		Services []struct {
 			ListenPort int    `json:"listen_port"`
@@ -329,5 +379,5 @@ func TestRepairConfigurationFallbackAndRegeneration(t *testing.T) {
 	if lateRunning || lateBlocked || syscall.Kill(hungPID, 0) != syscall.ESRCH {
 		t.Fatal("manual stop left a restarted, blocked or orphaned core")
 	}
-	writeRecoveryArtifact(t, map[string]any{"service_update_config_checked_before_disconnect": true, "manual_stop_cancels_reconnect_grace": true, "scenario": "configuration-repair", "real_native_check": true, "real_native_api": true, "corrupt_json_and_sidecar_fallback": true, "generation_failure_retains_pid_and_files": true, "empty_nodes_rejected": true, "pending_api_preserved": true, "api_identity_mismatch_detected": true, "custom_api_port_preserved": true, "assets_retained": true, "prepared_not_promoted": true, "generated_engine_failure_rolled_back": true, "missing_fallback_retains_live_core": true, "manual_stop_cancels_preparation": true, "uses_real_tun": false})
+	writeRecoveryArtifact(t, map[string]any{"saved_policy_loaded_by_new_native_process": true, "service_update_config_checked_before_disconnect": true, "manual_stop_cancels_reconnect_grace": true, "scenario": "configuration-repair", "real_native_check": true, "real_native_api": true, "corrupt_json_and_sidecar_fallback": true, "generation_failure_retains_pid_and_files": true, "empty_nodes_rejected": true, "pending_api_preserved": true, "api_identity_mismatch_detected": true, "custom_api_port_preserved": true, "assets_retained": true, "prepared_not_promoted": true, "generated_engine_failure_rolled_back": true, "missing_fallback_retains_live_core": true, "manual_stop_cancels_preparation": true, "uses_real_tun": false})
 }

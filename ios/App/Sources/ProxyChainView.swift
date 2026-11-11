@@ -21,33 +21,34 @@ struct ProxyChainView: View {
                 Section { Text("Add an upstream node or subscription in Config → Nodes & sources, then generate the configuration.").font(.footnote) }
             }
             Section {
-                Toggle("Use proxy chain", isOn: $settings.enabled)
+                Toggle("Use proxy chain", isOn: $settings.enabled).accessibilityIdentifier("ChainEnabled")
                 Picker("Upstream", selection: $settings.upstream) {
                     Text("Choose upstream").tag("")
                     ForEach(upstreamTags, id: \.self) { Text($0).tag($0) }
-                }
-                Picker("Exit server", selection: $settings.exit) {
+                }.accessibilityIdentifier("ChainUpstream")
+                Picker("Exit node", selection: $settings.exit) {
                     Text("Choose exit").tag("")
-                    ForEach(outbounds.filter { ["socks", "http"].contains($0["type"] as? String ?? "") }.compactMap { $0["tag"] as? String }, id: \.self) { Text($0).tag($0) }
-                }
-                Text("Device → \(settings.upstream.isEmpty ? "upstream" : settings.upstream) → \(settings.exit.isEmpty ? "exit server" : settings.exit) → website")
+                    ForEach(outbounds.filter { ProxyChainSettings.isChainable($0) }.compactMap { $0["tag"] as? String }, id: \.self) { Text($0).tag($0) }
+                }.accessibilityIdentifier("ChainExit")
+                Text("Device → \(settings.upstream.isEmpty ? "upstream" : settings.upstream) → \(settings.exit.isEmpty ? "exit node" : settings.exit) → website")
                     .font(.footnote).foregroundStyle(.secondary)
                 Button("Save chain") {
                     do { try store.saveProxyChain(settings); notice = "Saved. Apply changes in Config." }
                     catch { notice = error.localizedDescription }
-                }.disabled(store.generating || store.applying || store.content.isEmpty || (settings.enabled && settings.exit.isEmpty))
+                }.accessibilityIdentifier("ChainSave").disabled(store.generating || store.applying || store.content.isEmpty || (settings.enabled && settings.exit.isEmpty))
             } footer: { Text("PROXY rules and Global mode use this chain. DIRECT and REJECT rules keep their behavior. Saving does not interrupt the running VPN.") }
-            Section("Add a SOCKS exit") {
-                TextField("SOCKS share link", text: $exitLink)
+            Section("Add a chain exit") {
+                TextField("Node share link", text: $exitLink)
                     .textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive()
                 Button(store.generating ? "Generating…" : "Add exit & generate") {
                     Task {
                         do {
-                            guard var components = URLComponents(string: exitLink), ["socks", "socks5"].contains(components.scheme?.lowercased() ?? "") else { throw TunnelProfile.InvalidProfile("Use a SOCKS share link, or choose an HTTP exit from an imported configuration.") }
-                            // The shared Shadowrocket parser expects userinfo;
-                            // empty userinfo represents an unauthenticated exit.
-                            if components.user == nil { components.user = "" }
-                            let node = try ConfigModel.validateNode(components.string ?? exitLink)
+                            var link = exitLink
+                            if var components = URLComponents(string: exitLink), ["socks", "socks5"].contains(components.scheme?.lowercased() ?? ""), components.user == nil {
+                                components.user = ""
+                                link = components.string ?? exitLink
+                            }
+                            let node = try ConfigModel.validateNode(link)
                             store.commitNodesSources(store.nodesSources.adding(node: node))
                             try await store.generateFromSources()
                             exitLink = ""; notice = "Exit added. Choose it above and save the chain."
