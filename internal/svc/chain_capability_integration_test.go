@@ -18,7 +18,9 @@ import (
 // An installed 0.2.25 supervisor can regenerate, but would silently ignore
 // chain_exit. The new client must require its explicit generator capability.
 func TestRepairRefusesSupervisorWithoutGenericChain(t *testing.T) {
-	dir := t.TempDir()
+	dir, err := os.MkdirTemp("/tmp", "chain-cap-")
+	recoveryOK(t, err)
+	defer func() { _ = os.RemoveAll(dir) }()
 	path := filepath.Join(dir, "sakamoto.yaml")
 	cfg := config.Default()
 	cfg.ChainExit = "Landing"
