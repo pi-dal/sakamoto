@@ -31,4 +31,11 @@ iOS and Android expose **Proxy chain** in Config. Choose the upstream and exit, 
 
 ## Verification
 
+```sh
+SAKAMOTO_CHAIN_ARTIFACT_DIR="$PWD/dist/chain-e2e" mise exec sing-box@1.14.2 -- go test ./internal/gen -run TestNativeGenericChainExit -count=1
+mise exec sing-box@1.14.2 -- swift run --package-path ios ChainScenario "$PWD/dist/chain-e2e"
+```
+
+After building/installing the Android debug and instrumentation APKs on an isolated emulator, run `adb shell am instrument -w -e chain true com.pidal.sakamoto.test/com.pidal.sakamoto.NativeBindingSmokeTest`. Its private cache contains `android-chain.json`. The iOS Xcode UI test is `SakamotoEditorUITests/NodeGroupUITests/testVLESSChainExitSavesReopensAndDisables`; use a signed simulator build so App Group access is available, and set simulator appearance through `simctl ui` when checking both themes. Keep its xcresult bundle and screenshots.
+
 Repeatable native scenarios use only loopback listeners and synthetic credentials, without a TUN or owner configuration. Retain JSON evidence under `dist/chain-e2e`. Cover VLESS-to-VLESS traffic, unavailable exits, entry-group exclusion, DNS/rule projections, legacy SOCKS selection, switching/disabling intent, and rejected cycles. Platform builds verify all app call sites. Release artifacts must describe the same clean source commit and pass signing/version/hash checks.

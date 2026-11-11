@@ -48,7 +48,7 @@ Shared Go packages provide consistent configuration semantics across platforms. 
 
 | Feature | Implemented behavior |
 |---|---|
-| Home | Connect/disconnect; separate core-start and network-probe states; chain and SOCKS exit summary; group latency; mouse selection, testing and details |
+| Home | Connect/disconnect; separate core-start and network-probe states; chain and proxy exit summary; group latency; mouse selection, testing and details |
 | Traffic mode | Cycle Rule, Global and Direct through the native API and verify the result; report when an old configuration needs regeneration; retain private/Tailscale exclusions, ad rejection and configured STUN/QUIC blocking |
 | Config | Import local or remote Shadowrocket `.conf` with relative includes; inspect General, rules and DNS; manage sources, node links and proxy/direct/reject policies |
 | Policy forms | Exact names, `*.` suffixes, `keyword:`, `cidr:` and supported remote rule URLs |
