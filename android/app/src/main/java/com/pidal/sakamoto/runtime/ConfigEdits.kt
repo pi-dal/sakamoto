@@ -37,6 +37,15 @@ object ConfigEdits {
         return (0 until array.length()).map { array.getJSONObject(it).getString("tag") }
     }
 
+    fun chainableOutboundTags(content: String): List<String> {
+        val array = JSONObject(content).optJSONArray("outbounds") ?: JSONArray()
+        return (0 until array.length()).mapNotNull { index ->
+            val row = array.optJSONObject(index) ?: return@mapNotNull null
+            row.optString("tag").takeIf { it.isNotEmpty() && isChainableType(row.optString("type")) }
+        }
+    }
+
+    private fun isChainableType(type: String): Boolean = type !in setOf("", "selector", "urltest", "direct", "block", "dns")
     fun logLevel(content: String, level: String): String {
         require(level in setOf("trace", "debug", "info", "warn", "error", "fatal", "panic"))
         val root = JSONObject(content)
@@ -131,7 +140,7 @@ object ConfigEdits {
         val array = root.getJSONArray("outbounds")
         val outbounds = (0 until array.length()).map { array.getJSONObject(it) }
         val exit = outbounds.first { it.optString("tag") == tag }
-        require(exit.optString("type") in setOf("socks", "http")) { "This outbound is not an exit proxy" }
+        require(exit.optString("type") in setOf("socks", "http")) { "Use the protocol node editor for this exit" }
         validateDetour(content, tag, detour)
         if (detour.isNotEmpty()) exit.put("detour", detour) else exit.remove("detour")
         exit.put("server", server.trim()).put("server_port", port)

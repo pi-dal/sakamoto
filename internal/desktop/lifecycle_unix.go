@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pi-dal/sakamoto/internal/config"
 	"github.com/pi-dal/sakamoto/internal/security"
 	"github.com/pi-dal/sakamoto/internal/svc"
 )
@@ -112,10 +113,17 @@ func runtimeRecoveryStatus(ctx context.Context, path string) (known, supported, 
 	if json.Unmarshal([]byte(reply), &info) != nil || info.Capabilities == nil {
 		return false, false, false
 	}
+	chainSupported := false
 	for _, capability := range info.Capabilities {
+		if capability == svc.ChainExitCapability {
+			chainSupported = true
+		}
 		if capability == "configuration-repair-v1" {
 			supported = true
 		}
+	}
+	if cfg, err := config.Load(path); err == nil && cfg.ChainEnabled && (cfg.ChainExit != "" || cfg.SocksExit != "") && !chainSupported {
+		supported = false
 	}
 	return true, supported, info.Working.Present
 }

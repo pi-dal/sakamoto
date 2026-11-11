@@ -24,6 +24,33 @@ final class NodeGroupUITests: XCTestCase {
     private func attachment(_ name: String) {
         let item = XCTAttachment(screenshot: app.screenshot()); item.name = name; item.lifetime = .keepAlways; add(item)
     }
+    func testVLESSChainExitSavesReopensAndDisables() {
+        app.terminate()
+        app.launchArguments = ["--editor-ui-test", "--chain-ui-test"]
+        app.launch()
+        let open = app.buttons["Proxy chain"]
+        XCTAssertTrue(open.waitForExistence(timeout: 6))
+        if !open.isHittable { app.swipeUp() }
+        open.tap()
+        let picker = app.buttons["ChainExit"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 4)); picker.tap()
+        app.buttons["Review B"].tap()
+        app.switches["ChainEnabled"].coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertEqual(app.switches["ChainEnabled"].value as? String, "1")
+        app.buttons["ChainSave"].tap()
+        XCTAssertTrue(app.staticTexts["Saved. Apply changes in Config."].waitForExistence(timeout: 4))
+        attachment("vless-chain-saved")
+        app.navigationBars.buttons.firstMatch.tap()
+        app.buttons["Proxy chain"].tap()
+        XCTAssertEqual(app.switches["ChainEnabled"].value as? String, "1")
+        XCTAssertTrue(app.buttons["ChainExit"].label.contains("Review B"))
+        app.switches["ChainEnabled"].coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertEqual(app.switches["ChainEnabled"].value as? String, "0")
+        app.buttons["ChainSave"].tap()
+        XCTAssertTrue(app.staticTexts["Saved. Apply changes in Config."].waitForExistence(timeout: 4))
+        attachment("vless-chain-disabled")
+    }
+
     func testDeleteConfirmsAndRemovesRowOnCurrentPage() {
         openSources()
         app.buttons["DeleteSourceNode-Review A"].tap()

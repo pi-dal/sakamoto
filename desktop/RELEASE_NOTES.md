@@ -1,3 +1,17 @@
+# Desktop 0.2.26
+
+Proxy chains now accept leaf proxy exits such as VLESS, VMess and Trojan, alongside the existing SOCKS and HTTP protocols.
+
+- Set **Chain exit** to the exact node tag, save, then apply the configuration through the explicit connect/reconnect workflow.
+- The selected exit is removed from entry groups and their defaults. PROXY rules, Global mode and ordinary proxy DNS use the complete chain.
+- Missing exits, empty entry choices and proxy loops fail preparation. A failed exit is not bypassed by dialing destinations directly.
+- Existing configurations retain automatic first-SOCKS selection when the exit field is empty; `socks_exit` remains a compatibility alias.
+- Background services that cannot honor an explicit exit offer **Update service and apply** before regeneration.
+
+A real loopback VLESS entry → VLESS exit → HTTP origin scenario verifies both hops and failure when the exit stops. Native iOS and Android scenarios cover save/reload, switching, disabled-chain restoration and validation. Group latency still measures the entry alone.
+
+See [proxy chain configuration](https://github.com/pi-dal/sakamoto/blob/main/docs/proxy-chain.md).
+
 # Desktop 0.2.25
 
 Desktop policy management now includes an explicit apply workflow.

@@ -22,6 +22,16 @@ enum EditorUITestFixture {
             store.commitNodesSources(NodesSourcesBook(nodes: try links.map(ConfigModel.validateNode)))
             let config = #"{"log":{"level":"warn"},"dns":{"servers":[{"type":"udp","tag":"dns-direct","server":"1.1.1.1"}]},"inbounds":[{"type":"tun","tag":"tun-in","address":["172.19.0.1/30"],"auto_route":true,"stack":"mixed"}],"outbounds":[{"type":"selector","tag":"MainProxy","outbounds":["Review A","Review B"],"default":"Review A"},{"type":"trojan","tag":"Review A","server":"a.example","server_port":443,"password":"test","tls":{"enabled":true}},{"type":"trojan","tag":"Review B","server":"b.example","server_port":443,"password":"test","tls":{"enabled":true}},{"type":"direct","tag":"direct"}],"route":{"final":"MainProxy","auto_detect_interface":true}}"#
             var fixtureConfig = config
+            if ProcessInfo.processInfo.arguments.contains("--chain-ui-test"),
+               var root = try JSONSerialization.jsonObject(with: Data(config.utf8)) as? [String: Any],
+               var rows = root["outbounds"] as? [[String: Any]],
+               let index = rows.firstIndex(where: { $0["tag"] as? String == "Review B" }) {
+                rows[index]["type"] = "vless"
+                rows[index].removeValue(forKey: "password")
+                rows[index]["uuid"] = "00000000-0000-4000-8000-000000000001"
+                root["outbounds"] = rows
+                fixtureConfig = String(decoding: try JSONSerialization.data(withJSONObject: root), as: UTF8.self)
+            }
             if ProcessInfo.processInfo.arguments.contains("--reality-group-ui-test") {
                 fixtureConfig = try ProxyGroupEditing.applying([
                     ProxyGroupEdit(tag: "RealityAuto", type: "urltest", members: ["Review A", "Review B"]),

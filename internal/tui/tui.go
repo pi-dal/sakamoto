@@ -347,7 +347,20 @@ func (m *model) settingsRows(c *config.Config) []cfgRow {
 	}
 	return []cfgRow{
 		{label: "TUN · Network"},
-		toggle("Chain SOCKS exit", &c.ChainEnabled),
+		toggle("Chain exit", &c.ChainEnabled),
+		{label: "Chain exit node", value: func() string {
+			if c.ChainExit != "" {
+				return c.ChainExit
+			}
+			return c.SocksExit
+		}, edit: func(s string) error {
+			if strings.ContainsAny(s, "\x00\r\n") {
+				return fmt.Errorf("chain exit must be one node tag")
+			}
+			c.ChainExit = strings.TrimSpace(s)
+			c.SocksExit = ""
+			return nil
+		}},
 		toggle("Sync sources to iCloud", &c.ICloud.Enabled),
 		toggle("Include conf and rule includes", &c.ICloud.IncludeConf),
 		{label: "iCloud directory", value: func() string { return c.ICloud.Directory }, edit: func(s string) error {

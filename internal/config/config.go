@@ -42,7 +42,8 @@ type Config struct {
 	ConfPath      string      `yaml:"conf"`          // Shadowrocket .conf rule skeleton
 	SRJSONPath    string      `yaml:"srjson"`        // Shadowrocket JSON export for manual nodes
 	AllowHosts    []string    `yaml:"allow_hosts"`   // host allowlist for manual nodes from srjson
-	SocksExit     string      `yaml:"socks_exit"`    // chained SOCKS exit tag (detours to MainProxy)
+	SocksExit     string      `yaml:"socks_exit"`    // legacy chained exit tag; accepts any leaf proxy outbound
+	ChainExit     string      `yaml:"chain_exit"`    // preferred chained exit tag; any leaf proxy outbound
 	BlockQUIC     bool        `yaml:"block_quic"`    // reject UDP:443 to force TCP; default true
 	BlockSTUN     bool        `yaml:"block_stun"`    // reject detected STUN; default true
 	Experiment    struct {
@@ -52,7 +53,7 @@ type Config struct {
 	} `yaml:"experiment"`
 
 	// Shadowrocket application-level setting equivalents.
-	ChainEnabled bool   `yaml:"chain_enabled"` // ChainProxyEnabled: SOCKS detours to MainProxy
+	ChainEnabled bool   `yaml:"chain_enabled"` // ChainProxyEnabled: the selected chain exit detours to MainProxy
 	StrictRoute  bool   `yaml:"strict_route"`  // TunnelEnforceRoutesKey; default false
 	TunStack     string `yaml:"tun_stack"`     // system/gvisor/mixed; default gvisor
 	LogLevel     string `yaml:"log_level"`     // info/debug; default info

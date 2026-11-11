@@ -10,7 +10,7 @@ This file is intentionally short and safe to load into an agent context.
 
 1. Never commit user runtime files or credentials. Fresh-install runtime lives under `~/.sakamoto`; a live legacy daemon may still use `~/.config/sakamoto` until explicit migration.
 2. Do not reintroduce subscription URLs or node secrets into source, fixtures, README, screenshots, or tests.
-3. A SOCKS exit is chained through `MainProxy` with sing-box `detour`; do not silently change chain direction. Preserve Shadowrocket `FINAL,DIRECT` as `route.final=direct` while `PROXY` rules still use the chained exit.
+3. A configured chain exit is chained through `MainProxy` with sing-box `detour`; do not silently change chain direction. Preserve Shadowrocket `FINAL,DIRECT` as `route.final=direct` while `PROXY` rules use the configured chain exit.
 4. `fallback_enabled` controls the ordered `RealityAuto -> OthersAuto` policy. Fresh URL-test results must be consumed before switching. Manual selector choices outside that chain are respected.
 5. The macOS TUN stack defaults to `gvisor` on this machine. `system` was able to start but did not provide working browser TCP routing.
 6. Browser support depends on `system_proxy.enabled: true` and `mixed_inbound.enabled: true`; the watcher restores prior macOS proxy settings on disconnect.

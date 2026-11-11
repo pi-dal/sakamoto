@@ -100,7 +100,7 @@ func exitFromConfig(cfgPath string) string {
 		return "Invalid config"
 	}
 	for _, o := range cfg.Outbounds {
-		if o.Type == "socks" && o.Detour == "MainProxy" && o.Server != "" {
+		if o.Detour == "MainProxy" && o.Server != "" {
 			return fmt.Sprintf("%s:%d", o.Server, o.ServerPort)
 		}
 	}
@@ -251,7 +251,7 @@ func (m *model) View() string {
 	m.addHit(x, x+lipgloss.Width(action), 1, "testall", 0)
 	path := "Entry " + m.activeNode()
 	if m.cfg.ChainEnabled {
-		path += "  →  SOCKS " + m.exitLabel
+		path += "  →  Exit " + m.exitLabel
 	}
 	b.WriteString(framedLine(" "+muted.Render(path), inner))
 	b.WriteString("└" + strings.Repeat("─", w-2) + "┘\n")

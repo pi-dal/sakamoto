@@ -249,12 +249,12 @@ object ExperimentRuntime {
         var committed = false
         try {
             currentCoroutineContext().ensureActive()
-            check.compare(probe, Mobileexperiment.proxyOutbound(before.generatedContent))
+            check.compare(probe, Mobileexperiment.proxyOutbound(before.runtimeContent))
             currentCoroutineContext().ensureActive(); unchanged()
             if (!check.ready()) return
             check(ConfigRepository.load(context) == before && MobilecoreRuntime.state.value.configState == "Clean") { "Configuration changed during verification" }
             candidate = addOwnedRule(before.generatedContent, known + domain)
-            Libbox.checkConfig(candidate)
+            Libbox.checkConfig(before.proxyChain?.applying(candidate) ?: candidate)
             val prefs = context.getSharedPreferences("experiments", Context.MODE_PRIVATE)
             check(prefs.edit().putString("pendingBefore", before.generatedContent).putString("pendingCandidate", candidate).commit())
             ConfigRepository.save(context, before.copy(generatedContent = candidate)); wrote = true

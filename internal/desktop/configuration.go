@@ -51,7 +51,13 @@ func configurationFromConfig(c *config.Config) Configuration {
 	}
 	return Configuration{
 		Fields: []ConfigurationField{
-			field("Network", "chain_enabled", "Chain SOCKS exit", ConfigBool, boolValue(c.ChainEnabled)),
+			field("Network", "chain_enabled", "Chain exit", ConfigBool, boolValue(c.ChainEnabled)),
+			field("Network", "chain_exit", "Chain exit node", ConfigText, func() string {
+				if c.ChainExit != "" {
+					return c.ChainExit
+				}
+				return c.SocksExit
+			}()),
 			field("Network", "strict_route", "Strict routing", ConfigBool, boolValue(c.StrictRoute)),
 			field("Network", "tun_stack", "TUN stack", ConfigChoice, c.TunStack, "system", "gvisor", "mixed"),
 			field("DNS", "dns_enabled", "Protected system DNS", ConfigBool, boolValue(c.DNSGuard.Enabled)),
@@ -202,6 +208,12 @@ func applyConfigurationField(cfg *config.Config, key, value string) error {
 			return err
 		}
 		cfg.ChainEnabled = v
+	case "chain_exit":
+		if strings.ContainsAny(value, "\x00\r\n") {
+			return errors.New("chain exit must be one node tag")
+		}
+		cfg.ChainExit = strings.TrimSpace(value)
+		cfg.SocksExit = ""
 	case "strict_route":
 		v, err := boolValue()
 		if err != nil {

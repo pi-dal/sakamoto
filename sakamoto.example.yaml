@@ -14,6 +14,9 @@ automatic_group_exclusions:
   OthersAuto: []
 
 chain_enabled: true
+# Optional explicit chain exit tag. Any leaf proxy node is accepted;
+# empty preserves the legacy automatic SOCKS selection.
+chain_exit: ""
 block_quic: true
 block_stun: true
 # Experimental unmatched policy: off preserves the imported FINAL rule.
