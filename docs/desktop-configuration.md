@@ -18,6 +18,8 @@ in the TUI Settings page. Open Settings, then **Edit configuration**.
 API URL and API secret are not shown in the GUI. The API identity remains preserved
 when a configuration is saved. Nodes, subscription sources and policy rules also
 have in-panel collection editors with secret-aware input and stale-edit checks.
+**Proxy groups** edits RealityAuto/OthersAuto membership using persistent node
+exclusions, with search, absent-node retention and a guard against empty groups.
 Learning exposes recent checks and explicit selection of failed domains for saved
 proxy rules. See [Desktop learning and source editing](desktop-management.md).
 

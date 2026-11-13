@@ -16,11 +16,19 @@
 
 ## Workflow
 
-Settings exposes Learning and Nodes & sources. Configuration also links to Learning, Nodes & sources, and Routing policy. Each page uses the existing panel navigation, search, accessible controls and light/dark palette.
+Settings and Configuration expose Learning, Nodes & sources, Proxy groups, and Routing policy. Each page uses the existing panel navigation, search, accessible controls and light/dark palette.
 
 Learning displays saved mode, learned route count and the latest twenty checks. Selecting a domain adds an exact proxy rule to the sidecar policy after revalidation, without changing the active runtime. Existing exact overrides are retained. Apply saved changes through Check & repair or the Apply saved configuration action on Nodes & sources and Routing policy (external-core users apply through their service).
 
 Nodes, subscriptions and policy rules have searchable lists and in-panel add/edit/remove forms. Existing nodes expose remark, server and single-port fields without exposing credentials; full-link replacement remains available for advanced options or malformed entries. Hopping ports are retained. Sensitive link fields are masked by default. Saves validate inputs and reject stale source revisions. Node files retain comments and unrelated lines.
+
+## Automatic group membership
+
+Open **Settings → Proxy groups** (also available from **Edit configuration**), then edit **RealityAuto** or **OthersAuto**. Each node has an inclusion switch; turn it off to exclude that node from automatic selection. Search filters the visible rows without discarding changes to other nodes. Counts show the complete draft, including excluded nodes that are currently absent.
+
+**Save group** persists the exclusions in `automatic_group_exclusions`; **Cancel edit** and Back discard the draft. Excluded nodes remain available in ManualPick. Regeneration keeps exclusions, automatically admits new matching nodes, and reapplies exclusions when an absent node returns. Chain exits are omitted from entry-node candidates. At least one available node must remain included in each populated automatic group.
+
+A changed sidecar or generated configuration invalidates an open editor; reopen Proxy groups before saving again. Missing generated configuration shows guidance to generate it before choosing available nodes. Saving leaves generated files and the running service untouched. Choose **Apply saved configuration…** and confirm regeneration/reconnection to activate the saved policy, or use the external service manager in external-core mode.
 
 ## Applying saved policy
 
@@ -30,4 +38,4 @@ A supervisor without configuration recovery exposes **Update service and apply�
 
 ## Repeatable evidence
 
-Run `rtk proxy python3 scripts/check-desktop.py --race`. With `SAKAMOTO_MENUBAR_ARTIFACT_DIR` set, integration workflows retain JSON receipts and light/dark MyGo content renders. These are isolated source/controller and input-driven UI fixtures; they do not use owner configuration or a real TUN. The policy application workflow retains `policy-apply-e2e.json` and light/dark captures of saved, confirmation and legacy-service states. `mise run go:recovery` includes watcher replacement/rollback fixtures and checks the policy inside the compiled rules referenced by a real native core process.
+Run `rtk proxy python3 scripts/check-desktop.py --race`. With `SAKAMOTO_MENUBAR_ARTIFACT_DIR` set, integration workflows retain JSON receipts and light/dark MyGo content renders. These are isolated source/controller and input-driven UI fixtures; they do not use owner configuration or a real TUN. The automatic-group workflows retain `automatic-groups-e2e.json`, `automatic-groups-view-e2e.json`, and light/dark group-list, editor and validation captures. They exercise the real source writer and generator, stale edits, absent/restored nodes, new nodes, chain exits, unchained SOCKS, manual selection, cancellation and explicit application. The policy application workflow retains `policy-apply-e2e.json` and light/dark captures of saved, confirmation and legacy-service states. `mise run go:recovery` includes watcher replacement/rollback fixtures and checks the policy inside the compiled rules referenced by a real native core process.

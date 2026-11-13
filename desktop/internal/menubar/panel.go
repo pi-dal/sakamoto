@@ -28,6 +28,8 @@ type Backend interface {
 	Configuration() (desktop.Configuration, error)
 	SaveConfiguration(context.Context, desktop.Configuration) error
 	Management() (desktop.Management, error)
+	AutomaticGroups() (desktop.AutomaticGroups, error)
+	SaveAutomaticGroup(context.Context, desktop.AutomaticGroups, string, []string) error
 	Learning() (desktop.Learning, error)
 	SaveNode(context.Context, desktop.ManualNode, string) error
 	SaveSubscriptions(context.Context, desktop.Management, []config.SubSource) error
@@ -86,6 +88,8 @@ type Panel struct {
 	managementPage                  string
 	managementReturnConfig          bool
 	managementDraft                 desktop.Management
+	automaticGroups                 desktop.AutomaticGroups
+	groupDraft                      desktop.AutomaticGroup
 	learningData                    desktop.Learning
 	managementQuery                 string
 	managementEditor                string

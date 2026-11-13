@@ -1,3 +1,15 @@
+# Desktop 0.2.27
+
+Desktop Proxy groups now expose the existing automatic-group exclusion policy.
+
+- Open **Settings → Proxy groups** or **Edit configuration → Proxy groups** to edit `RealityAuto` and `OthersAuto`.
+- Exclude or restore individual nodes with searchable inclusion switches; excluded nodes remain available in `ManualPick`.
+- Exclusions survive regeneration, absent nodes retain their saved policy, and new matching nodes join automatically.
+- Saving remains source-only. Applying the saved policy uses the existing explicit regeneration and reconnect boundary.
+- Stale edits, empty automatic groups, chain exits and unchained SOCKS candidates are validated by the desktop E2E workflow.
+
+This release updates the shared desktop client. The CLI Homebrew formula remains independent.
+
 # Desktop 0.2.26
 
 Proxy chains now accept leaf proxy exits such as VLESS, VMess and Trojan, alongside the existing SOCKS and HTTP protocols.

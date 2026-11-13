@@ -3,6 +3,7 @@ package menubar
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"time"
 
@@ -23,6 +24,7 @@ type Demo struct {
 	configurationSaved bool
 	management         desktop.Management
 	learning           desktop.Learning
+	automaticGroups    desktop.AutomaticGroups
 }
 
 func NewDemo() *Demo {
@@ -35,6 +37,10 @@ func NewDemo() *Demo {
 		{Tag: "Demo San Francisco", Type: "test", UrlTestDelay: 145, UrlTestTime: now},
 	}
 	return &Demo{changes: make(chan struct{}, 1),
+		automaticGroups: desktop.AutomaticGroups{Generated: true, Groups: []desktop.AutomaticGroup{
+			{Tag: "RealityAuto", Nodes: []desktop.AutomaticGroupNode{{Tag: "Demo Tokyo", Present: true}, {Tag: "Demo Osaka", Present: true}, {Tag: "Demo Absent", Excluded: true}}},
+			{Tag: "OthersAuto", Nodes: []desktop.AutomaticGroupNode{{Tag: "Demo Singapore", Present: true}, {Tag: "Demo Frankfurt", Present: true}, {Tag: "Demo San Francisco", Present: true}}},
+		}},
 		management: desktop.Management{Policies: []config.PolicyRule{{Match: "existing.example", Action: "direct"}}},
 		learning:   desktop.Learning{Mode: "auto", LearnedCount: 2, Checks: []desktop.LearningCheck{{Domain: "failed.example", State: "no_improvement", Detail: "Direct origin check failed", Time: time.Now()}}, Failures: []desktop.LearningCheck{{Domain: "failed.example", State: "no_improvement", Time: time.Now()}}},
 		configuration: desktop.Configuration{Fields: []desktop.ConfigurationField{
@@ -80,6 +86,29 @@ func (d *Demo) Management() (desktop.Management, error) {
 	m.Subscriptions = append([]config.SubSource(nil), m.Subscriptions...)
 	m.Policies = append([]config.PolicyRule(nil), m.Policies...)
 	return m, nil
+}
+func (d *Demo) AutomaticGroups() (desktop.AutomaticGroups, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	value := d.automaticGroups
+	value.Groups = slices.Clone(value.Groups)
+	for i := range value.Groups {
+		value.Groups[i].Nodes = slices.Clone(value.Groups[i].Nodes)
+	}
+	return value, nil
+}
+func (d *Demo) SaveAutomaticGroup(_ context.Context, _ desktop.AutomaticGroups, tag string, excluded []string) error {
+	return d.update(func(s *desktop.Snapshot) {
+		for i := range d.automaticGroups.Groups {
+			if d.automaticGroups.Groups[i].Tag == tag {
+				for j := range d.automaticGroups.Groups[i].Nodes {
+					node := &d.automaticGroups.Groups[i].Nodes[j]
+					node.Excluded = slices.Contains(excluded, node.Tag)
+				}
+			}
+		}
+		s.Notice = core.Successf("Configuration saved. Regenerate to apply.")
+	})
 }
 func (d *Demo) Learning() (desktop.Learning, error) {
 	d.mu.Lock()

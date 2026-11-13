@@ -14,7 +14,7 @@ import (
 )
 
 func (p *Panel) managementLinks(c *ui.Context) {
-	for _, page := range []string{"Learning", "Nodes & sources", "Routing policy"} {
+	for _, page := range []string{"Learning", "Nodes & sources", "Proxy groups", "Routing policy"} {
 		panelButton(c, page, components.ButtonSecondary, false).OnClick(func() { p.openManagement(page) })
 	}
 }
@@ -36,6 +36,15 @@ func (p *Panel) openManagement(page string) {
 	p.setConnections(false)
 }
 func (p *Panel) loadManagement() bool {
+	if p.managementPage == "Proxy groups" {
+		groups, err := p.backend.AutomaticGroups()
+		if err != nil {
+			p.localNotice = "Could not read proxy groups. Regenerate configuration and reopen this page."
+			return false
+		}
+		p.automaticGroups = groups
+		return true
+	}
 	m, err := p.backend.Management()
 	if err != nil {
 		p.localNotice = "Could not read saved sources. Check the configuration folder and reopen."
@@ -76,6 +85,10 @@ func (p *Panel) submitManagement(action func(context.Context) error) {
 }
 func (p *Panel) managementView(c *ui.Context) {
 	ui.Scroll(c.Key("management-" + p.managementPage + "-" + p.managementEditor)).Grow(1).Gap(12).PaddingEnd(8).Children(func() {
+		if p.managementPage == "Proxy groups" {
+			p.automaticGroupsView(c)
+			return
+		}
 		if p.managementEditor != "" {
 			p.sourceEditor(c)
 			return
@@ -116,7 +129,12 @@ func (p *Panel) managementApply(c *ui.Context) {
 			panelButton(c, "Cancel apply", components.ButtonSecondary, busy).OnClick(func() { p.confirmConfig = "" })
 			panelButton(c, label, components.ButtonPrimary, busy).OnClick(func() {
 				p.confirmConfig = ""
-				p.submitAction(func(ctx context.Context) error { return p.backend.RepairConfiguration(ctx, false) })
+				action := func(ctx context.Context) error { return p.backend.RepairConfiguration(ctx, false) }
+				if p.managementPage == "Proxy groups" {
+					p.submitManagement(action)
+				} else {
+					p.submitAction(action)
+				}
 			})
 		})
 		return
