@@ -35,6 +35,15 @@ activation.
 
 ## Core stability and repair
 
+iOS **0.1.27 (36)** fixes automatic relaunch admission after an unclean provider
+exit: the same launch waits for the bounded 2/4/8-second backoff. OS network,
+sleep and update stops no longer consume the core-crash budget. DNS restoration
+rejects obsolete callbacks, and automatic fallback stops selecting further
+groups after cancellation or a mode change. Recent stop reasons, memory/reset
+and lifecycle events remain available in Data when the core log stream is
+unavailable. Simulator integration verifies these recovery boundaries; physical
+NetworkExtension relaunch and the original device incident remain unverified.
+
 iOS **0.1.24 (33)** adds Home → **Check and repair VPN**, **Check core only** in
 Connection details, and a confirmed reconnect action for an unresponsive core.
 Healthy native instances are retained. NetworkExtension disconnect remains

@@ -18,6 +18,12 @@ The integration lane must exercise these failures before accepting recovery beha
 10. A repair is queued, not completed. Starting is not repaired; a confirmed core instance is distinct from a DNS/HTTPS reachability check.
 11. Explicit disconnect cancels recovery, including app-side pending work. iOS disconnect disables on-demand. Android retains START_NOT_STICKY and respects system VPN revocation; Always-on/lockdown remain system policy.
 12. Neither platform introduces high-frequency background probing. Stable promotion uses a single delayed check, canceled on stop/replacement.
+13. iOS receives only one automatic relaunch after an unclean exit. That invocation must honor the persisted 2/4/8-second backoff and then admit one start, without depending on a second OS launch. Blocked, held, corrupt or unreadable journals must fail immediately; no retry may reset the episode.
+14. Stop or task cancellation arrives during admission backoff. The pending admission must exit promptly without opening the core, consuming another attempt or clearing the manual stop hold. A malformed or implausible deadline must not keep the extension starting indefinitely.
+15. A provider stop or system disconnect error is followed by a successful startup. The current error may clear, but bounded, sanitized incident history must remain available. A late system-error response must not publish an obsolete disconnected state over a running connection.
+16. Repeated OS-owned network loss, handoff, sleep, idle timeout, VPN supersession, user-session changes and app updates must not consume the core-crash budget. Suspending preserves prior real failures and invalidates old tickets; it cannot reset an exhausted budget or a manual stop hold.
+17. A DNS flush restore fails after stop or replacement supersedes the captured network settings. It must not cancel the newer tunnel or restore obsolete settings. A genuine failure of both restore attempts still cancels the affected active runtime.
+18. Memory pressure, sleep/wake, reload and automatic fallback events must leave bounded evidence without adding periodic background probes. An unclean journal marker may establish an unexpected exit, but must never be labeled as jetsam without OS evidence.
 
 ## Common semantics
 
@@ -42,6 +48,42 @@ The Go journal lives at `recovery/mobile/mobile-runtime.json`, and immutable con
 Snapshots stream local rule/TLS inputs into private retained assets, rewrite their paths, and start the native core from those captured bytes. A prepared replacement cannot delete the active core's assets or receive a stable receipt before native application. Stable promotion requires five minutes of the same confirmed instance, unchanged captured inputs, and verified snapshot hashes. Retention preserves current dependencies and a predecessor. Learning pauses during fallback so newly staged rules cannot overwrite the recovered runtime. Staged UI configuration is not reported as applied when a different retained profile is running.
 
 Recovery protocol **1**, native core version, and running instance are independent facts. Both native builders validate the pinned upstream source and embed **`1.14.2-sakamoto`** through the upstream linker flags, rather than relying on a missing Git tag in a temporary module copy; native integration tests assert that the loaded library reports it. iOS app/extension and Android JNI bind `pkg/mobilecore` alongside libbox in one Go runtime per process. Platform recovery never installs or executes an unsigned/previous engine. Android's current native service shares the app process: an irrecoverably hung native call may require Android App info > Force stop, then reopening the app; system VPN settings remain available to release routing. Do not start a second core while shutdown is unconfirmed.
+
+## iOS automatic relaunch and disconnect evidence
+
+An unclean provider exit leaves a Starting/Running marker. Previously the first OS relaunch called `Begin(false)`, which persisted a failure and a future retry deadline, then immediately rejected the launch. There was no caller waiting for that deadline, so recovery depended on another launch by NetworkExtension. The native integration scenario reproduced this rejection before the fix.
+
+The provider now waits within that same launch for the journal's bounded 2/4/8-second backoff, then requests admission once more. The shared Go journal still owns the budget. Stop and task cancellation abort the wait; blocked, held, corrupt or implausibly distant deadlines do not retry. This does not enable on-demand, schedule a new extension process, reset the episode or guarantee a relaunch after jetsam.
+
+Provider stop reasons (including the numeric system reason and core identity), startup, running, network changes and errors retain a private bounded history. Clearing the current error after a successful start does not erase that history. App and provider use separate history slots. Data shows retained events when the native log stream is unavailable. Stopped-state observations and foreground refresh also fetch the system disconnect error with a three-second deadline, and reject obsolete callbacks after a status transition. Histories retain at most 24 visible entries, with URLs redacted; they do not capture configurations or credentials.
+
+### System stops, DNS restoration and automatic selection
+
+OS lifecycle stops are distinct from core failures. No-network, unrecoverable network change, idle timeout, supersession by another VPN, user-session changes, system sleep and app update use the shared journal's `Suspend` operation. It records a stopped owner and invalidates old tickets without consuming or clearing the existing crash budget. User/provider/configuration disable and configuration removal retain the explicit stop hold. Provider/configuration/connection/internal failures and unknown reasons retain bounded crash recovery. Suspension cannot convert an already-failed core into a clean stop or clear failed-fallback blocking. The former failure-only stop path and a recovery round continuing after a mode change were both reproduced by regression scenarios before correction.
+
+A DNS flush restores only the captured active network settings and rechecks ownership after every system callback, including failed retries. If a stop/replacement supersedes the operation, it cannot cancel the replacement. A successful retry is recorded as recovered; two genuine restore failures still cancel the affected active tunnel. These injected failure scenarios test the transaction boundary, not physical-device NetworkExtension callbacks.
+
+Fallback rounds recheck cancellation, Rule mode, connectivity and pending edits before each selection after an awaited native operation. This prevents a later group from being changed after the user switches to Direct/Global or stops the round. Applied automatic changes retain an event explaining that existing connections may restart. This does not promise to cancel an RPC already accepted by the native core.
+
+Memory footprint is sampled at startup/running/stop, sleep/wake, reload and OS memory-pressure events, without a new periodic probe. An unclean previous journal marker records an unexpected exit with cause unknown. On lifecycle and foreground provider-ping demand, a bounded 64 KiB tail read extracts only numeric native memory-reset events from `Working/oom_draft/events.jsonl`; malformed/partial lines, report-only events and symlink files are ignored. Config, logs and heap snapshots in the OOM report remain private and are not read into the history. Native resets can therefore be distinguished from OS termination even while VPN status remains connected. Absence of a recorded pressure/reset event does not exclude jetsam.
+
+Other possible transport failures still require incident evidence: node/server downtime or credentials, NAT/UDP idle expiry, DERP/peer reachability, captive portals and DNS interception, and MTU/IPv6 path differences. A live core with failed traffic is distinct from a provider process exit. This change does not raise memory limits, disable OOM protection or change default node/MTU/on-demand policy without evidence.
+
+Run the isolated simulator scenarios using the project's XcodeGen version and an explicitly selected test simulator:
+
+```sh
+mise exec xcodegen@2.46.0 -- xcodegen generate --spec ios/project-native-tests.yml
+xcodebuild -project ios/SakamotoNativeTests.xcodeproj -scheme SakamotoNativeTests \
+  -destination "platform=iOS Simulator,id=$SAKAMOTO_TEST_SIMULATOR" \
+  -resultBundlePath /tmp/sakamoto-disconnect.xcresult \
+  CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- \
+  -only-testing:SakamotoNativeTests/NativeRecoveryIntegrationTests \
+  -only-testing:SakamotoNativeTests/NativeNetworkRecoveryIntegrationTests \
+  -only-testing:SakamotoNativeTests/NativeLearningIntegrationTests \
+  -only-testing:SakamotoNativeTests/NativePowerIntegrationTests test
+```
+
+The result bundle retains `ios-automatic-relaunch`, `ios-admission-boundaries`, `ios-disconnect-history`, `ios-system-stop-policy`, `ios-dns-restore-transactions`, `ios-fallback-mode-change`, `ios-runtime-memory-evidence`, `ios-native-memory-reset-evidence`, `mobile-learning-transactions`, `mobile-core-recovery` and `power-observation` attachments. These exercise the actual native bridge/private journal, bounded admission, cancellation, corruption, retained diagnostics and live core/command transport. They do not establish the cause of a particular phone's disconnect or test physical NetworkExtension memory pressure. Capture device jetsam/crash and retained events to distinguish process termination from libbox memory-protection resets or ordinary network handoff.
 
 ## Repeatable verification
 

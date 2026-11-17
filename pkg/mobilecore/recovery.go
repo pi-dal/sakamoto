@@ -188,6 +188,16 @@ func (s *RecoverySession) Replaced(ticket, instance, version string) error {
 	return nil
 }
 func (s *RecoverySession) Failed(ticket string) error { return s.journal.Fail(ticket) }
+
+// Suspend ends this provider owner while preserving the real crash episode.
+// It must not enable recovery after a failed core or a manual stop hold.
+func (s *RecoverySession) Suspend(ticket string) error {
+	s.lifecycle.Lock()
+	defer s.lifecycle.Unlock()
+	s.canceled = true
+	return s.journal.Suspend(ticket)
+}
+
 func (s *RecoverySession) Stop() error {
 	// Persist cancellation before waiting for disk capture to finish.
 	s.lifecycle.Lock()

@@ -244,10 +244,14 @@ final class HomeModel: ObservableObject {
         stateReadID &+= 1
         let readID = stateReadID
         do {
-            let state = try await tunnel.status()
+            let observed = try await tunnel.status()
+            let stopped = observed == .stopped || observed == .unavailable
+            let snapshot = stopped ? try await tunnel.ping() : TunnelStateSnapshot(serviceState: observed)
+            let state = snapshot.serviceState
             guard readID == stateReadID else { return }
             clearStatusReadNotice()
             serviceState = state
+            if let detail = snapshot.detail, !detail.isEmpty { notice = Notice(kind: .warning, text: detail) }
             confirmRequestedConfiguration()
             store.reconcileAppliedConnection(service: state)
             if notice?.kind == .progress && state != .starting && state != .stopping { notice = nil }

@@ -353,20 +353,26 @@ final class ProviderExperimentRunner {
                 guard !self.stopped, self.connected, self.mode == "rule", !self.editsPending() else { return }
                 var healthyRound = true
                 for (selector, chain) in eligible {
+                    try Task.checkCancellation()
+                    guard !self.stopped, self.connected, self.mode == "rule", !self.editsPending() else { throw CancellationError() }
                     guard let current = self.groups.first(where: { $0.tag == selector })?.selected,
                           current == selectedBefore[selector] else { self.recovery.reset(); healthyRound = false; continue }
                     let healthy = ExperimentGroup.candidate(selector: selector, chain: chain, groups: self.groups, since: started)
                     if healthy != current { healthyRound = false }
                     if let candidate = self.recovery.decision(selector: selector, chain: chain, selected: current, healthy: healthy, required: self.settings.recoverAfter) {
                         try await commands.select(selector, candidate)
+                        TunnelRuntimeEvidence.record(stage: "Automatic fallback", message: "selector=\(selector); from=\(current); to=\(candidate); existing connections may restart")
                         self.status("Fallback selection requested")
                     }
                 }
                 self.schedule.record(healthy: healthyRound)
                 self.status("Recovery round completed; fresh results only")
+            } catch is CancellationError {
+                self.schedule.reset()
+                if !self.stopped { self.status("Recovery interrupted; remaining selections skipped") }
             } catch {
                 self.schedule.reset()
-                if !self.stopped && !Task.isCancelled { self.status("Recovery failed; selection retained") }
+                if !self.stopped { self.status("Recovery failed; review current selections") }
             }
         }
     }

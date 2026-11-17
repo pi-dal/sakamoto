@@ -59,6 +59,7 @@ final class DataModel: ObservableObject {
     func activate() {
         guard !activated else { return }
         activated = true
+        logs = Self.persistedLogs()
         guard let commanding else { return }
         tasks.append(Task { [weak self] in
             let availability = commanding.availability()
@@ -66,6 +67,7 @@ final class DataModel: ObservableObject {
                 guard let self else { return }
                 self.channelActive = active
                 self.channelError = active ? nil : commanding.lastChannelError
+                if !active { self.logs = Self.persistedLogs() }
             }
         })
         tasks.append(Task { [weak self] in
@@ -83,9 +85,15 @@ final class DataModel: ObservableObject {
         tasks.append(Task { [weak self] in
             let stream = commanding.logs()
             for await lines in stream {
-                self?.logs = lines
+                guard let self else { return }
+                self.logs = self.channelActive && !lines.isEmpty ? lines : Self.persistedLogs()
             }
         })
+    }
+
+    private static func persistedLogs() -> [String] {
+        let formatter = ISO8601DateFormatter()
+        return TunnelDiagnostics.history().map { "\(formatter.string(from: $0.date)) [\($0.stage)] \($0.message)" }
     }
 
     func deactivate() {

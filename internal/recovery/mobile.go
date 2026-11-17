@@ -272,6 +272,25 @@ func (m *Mobile) Stable(token, instance string) error {
 		return nil
 	})
 }
+
+// Suspend records an OS-owned lifecycle stop without counting it as a core
+// failure or resetting earlier failures. Invalidate the old native owner so
+// late startup, failure and stable callbacks cannot mutate the next episode.
+func (m *Mobile) Suspend(token string) error {
+	return m.mutate(token, func(s *MobileState) error {
+		if s.Phase != "starting" && s.Phase != "running" {
+			return errors.New("only an active core can be suspended")
+		}
+		s.Phase = "stopped"
+		s.Token = ""
+		s.Instance = ""
+		s.Started = time.Time{}
+		s.RetryAt = time.Time{}
+		s.Stable = false
+		return nil
+	})
+}
+
 func (m *Mobile) Stop() error {
 	unlock, err := LockRules(m.dir)
 	if err != nil {

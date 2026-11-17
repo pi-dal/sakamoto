@@ -97,10 +97,10 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
         try await loadProviderPreferences()
         let service = Self.serviceState(for: manager.connection.status)
         if service != .running {
-            let failure = TunnelDiagnostics.latest()
             let systemError: Error? = service == .stopped || service == .unavailable ? await lastDisconnectError() : nil
-            let detail = failure.map { "\($0.stage): \($0.message)" } ?? systemError.map { "System VPN: \(TunnelDiagnostics.sanitized($0.localizedDescription))" }
-            return TunnelStateSnapshot(serviceState: service, detail: detail)
+            // The system error callback may arrive after a reconnect.
+            let current = Self.serviceState(for: manager.connection.status)
+            return TunnelStateSnapshot(serviceState: current, detail: current == service ? disconnectDetail(systemError: systemError) : nil)
         }
         let response = try await send(.ping)
         guard response.ok else {
@@ -162,16 +162,36 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
         AsyncStream { continuation in
             // NEVPNStatusDidChange is the unified cross-platform status
             // notification (iOS 9+ / macOS 10.11+).
+            let sequence = TunnelRequestFence()
+            let emit: @Sendable () -> Void = { [weak self] in
+                guard let self else { return }
+                let ticket = sequence.begin()
+                let observed = self.manager.connection.status
+                continuation.yield(self.currentObservation())
+                guard observed == .disconnected || observed == .invalid else { return }
+                Task { [weak self] in
+                    guard let self else { return }
+                    let error = await self.lastDisconnectError()
+                    guard self.manager.connection.status == observed, (try? sequence.check(ticket)) != nil else { return }
+                    if let error {
+                        let native = error as NSError
+                        TunnelDiagnostics.recordEvent(stage: "System VPN", message: "\(native.domain) [\(native.code)]: \(native.localizedDescription)")
+                        continuation.yield(self.currentObservation(systemError: error))
+                    }
+                }
+            }
             let observer = NotificationCenter.default.addObserver(
                 forName: .NEVPNStatusDidChange,
                 object: nil,
                 queue: nil
-            ) { [weak self] _ in
+            ) { [weak self] notification in
                 guard let self else { return }
-                continuation.yield(self.currentObservation())
+                if let connection = notification.object as? NEVPNConnection, connection !== self.manager.connection { return }
+                emit()
             }
-            continuation.yield(currentObservation())
+            emit()
             continuation.onTermination = { _ in
+                _ = sequence.begin()
                 NotificationCenter.default.removeObserver(observer)
             }
         }
@@ -221,16 +241,27 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
     private func lastDisconnectError() async -> Error? {
         if #available(iOS 16.0, macOS 13.0, *) {
             return await withCheckedContinuation { continuation in
-                manager.connection.fetchLastDisconnectError { continuation.resume(returning: $0) }
+                let reply = DisconnectErrorReply(continuation)
+                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 3) { reply.finish(nil) }
+                manager.connection.fetchLastDisconnectError { reply.finish($0) }
             }
         }
         return nil
     }
 
-    private func currentObservation() -> TunnelObservation {
+    private func disconnectDetail(systemError: Error?) -> String? {
+        var details = TunnelDiagnostics.latest().map { ["\($0.stage): \($0.message)"] } ?? []
+        if let systemError {
+            let native = systemError as NSError
+            details.append("System VPN: \(native.domain) [\(native.code)]: \(TunnelDiagnostics.sanitized(native.localizedDescription))")
+        }
+        return details.isEmpty ? nil : details.joined(separator: "\n")
+    }
+
+    private func currentObservation(systemError: Error? = nil) -> TunnelObservation {
         let state = Self.serviceState(for: manager.connection.status)
-        let failure = state == .stopped || state == .unavailable ? TunnelDiagnostics.latest() : nil
-        return TunnelObservation(serviceState: state, conflict: false, detail: failure.map { "\($0.stage): \($0.message)" })
+        let detail = state == .stopped || state == .unavailable ? disconnectDetail(systemError: systemError) : nil
+        return TunnelObservation(serviceState: state, conflict: false, detail: detail)
     }
 
     private func loadProviderPreferences(refresh: Bool = false) async throws {
@@ -296,6 +327,16 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
                 }
             } catch { reply.finish(.failure(error)) }
         }
+    }
+}
+
+private final class DisconnectErrorReply: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Error?, Never>?
+    init(_ continuation: CheckedContinuation<Error?, Never>) { self.continuation = continuation }
+    func finish(_ error: Error?) {
+        lock.lock(); let pending = continuation; continuation = nil; lock.unlock()
+        pending?.resume(returning: error)
     }
 }
 

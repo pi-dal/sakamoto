@@ -21,6 +21,8 @@ public enum TunnelDiagnostics {
     private static let controlKey = "sakamoto.tunnel.lastControlFailure"
     private static let executionKey = "sakamoto.tunnel.lastControlExecution"
     private static let profileReadKey = "sakamoto.tunnel.lastControlProfileRead"
+    private static let historyKeys = ["sakamoto.tunnel.providerEvents", "sakamoto.tunnel.appEvents"]
+    private static let historyLock = NSLock()
     private static var defaults: UserDefaults? {
         guard let group = Bundle.main.object(forInfoDictionaryKey: "SakamotoAppGroupIdentifier") as? String else { return nil }
         return UserDefaults(suiteName: group)
@@ -28,9 +30,33 @@ public enum TunnelDiagnostics {
     public static func sanitized(_ message: String) -> String {
         String(message.replacingOccurrences(of: #"[a-zA-Z][a-zA-Z0-9+.-]*://[^\s\"']+"#, with: "[redacted URL]", options: .regularExpression).prefix(600))
     }
-    public static func record(stage: String, error: Error) {
-        let failure = TunnelFailure(stage: stage, message: sanitized(error.localizedDescription), date: Date())
-        if let data = try? JSONEncoder().encode(failure) { defaults?.set(data, forKey: key) }
+    public static func record(stage: String, error: Error, defaults override: UserDefaults? = nil) {
+        let store = override ?? defaults
+        let native = error as NSError
+        let message = "\(native.domain) [\(native.code)]: \(native.localizedDescription)"
+        let failure = TunnelFailure(stage: stage, message: sanitized(message), date: Date())
+        if let data = try? JSONEncoder().encode(failure) { store?.set(data, forKey: key) }
+        recordEvent(stage: stage, message: message, defaults: store)
+    }
+    /// Keep bounded private lifecycle evidence when successful startup clears
+    /// the current error. Separate process owners avoid app/provider overwrites.
+    public static func recordEvent(stage: String, message: String, defaults override: UserDefaults? = nil) {
+        guard let store = override ?? defaults else { return }
+        let owner = Bundle.main.bundleIdentifier?.hasSuffix(".PacketTunnel") == true ? historyKeys[0] : historyKeys[1]
+        historyLock.lock(); defer { historyLock.unlock() }
+        var events = readHistory(key: owner, defaults: store)
+        let event = TunnelFailure(stage: sanitized(stage), message: sanitized(message), date: Date())
+        // Repeated identical system reads must not evict the useful timeline.
+        if let last = events.last, last.stage == event.stage, last.message == event.message { return }
+        events.append(event)
+        if let data = try? JSONEncoder().encode(Array(events.suffix(24))) { store.set(data, forKey: owner) }
+    }
+    public static func history(defaults override: UserDefaults? = nil) -> [TunnelFailure] {
+        guard let store = override ?? defaults else { return [] }
+        return Array(historyKeys.flatMap { readHistory(key: $0, defaults: store) }.sorted { $0.date < $1.date }.suffix(24))
+    }
+    private static func readHistory(key: String, defaults: UserDefaults) -> [TunnelFailure] {
+        defaults.data(forKey: key).flatMap { try? JSONDecoder().decode([TunnelFailure].self, from: $0) } ?? []
     }
     /// Preserve a rejected system action across a later successful provider
     /// start. Widget callers use the shared suite, without app Info.plist keys.
@@ -77,7 +103,7 @@ public enum TunnelDiagnostics {
     }
 
     public static func clear(defaults override: UserDefaults? = nil) { (override ?? defaults)?.removeObject(forKey: key) }
-    public static func latest() -> TunnelFailure? {
-        defaults?.data(forKey: key).flatMap { try? JSONDecoder().decode(TunnelFailure.self, from: $0) }
+    public static func latest(defaults override: UserDefaults? = nil) -> TunnelFailure? {
+        (override ?? defaults)?.data(forKey: key).flatMap { try? JSONDecoder().decode(TunnelFailure.self, from: $0) }
     }
 }

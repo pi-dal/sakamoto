@@ -32,6 +32,10 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
     private lazy var platformInterface = ExtensionPlatformInterface(self)
 
     private var commandServer: LibboxCommandServer?
+    private var memoryPressureSource: DispatchSourceMemoryPressure?
+    private let memorySourceLock = NSLock()
+    private let memoryResetLock = NSLock()
+    private var lastMemoryReset: String?
     private let locationRuntime = ProviderLocationRuntime()
     var locationProxyPort: Int? { locationRuntime.snapshot().enabled ? locationRuntime.port : nil }
     func setLocationFallback(_ address: String) { locationRuntime.setFallback(address) }
@@ -92,14 +96,17 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
     override open func startTunnel(options startOptions: [String: NSObject]?) async throws {
         operationGate.start()
         TunnelDiagnostics.clear()
+        TunnelRuntimeEvidence.record(stage: "VPN startup", message: "Provider launched")
+        startMemoryObservation()
         do {
             try await startTunnelService(options: startOptions)
         } catch {
             let canceled = operationGate.state == .stopping
             operationGate.stop()
+            stopMemoryObservation()
             if let recoveryTicket { try? recoverySession?.failed(recoveryTicket) }
             await cancelStableVerification()
-            TunnelDiagnostics.record(stage: "VPN startup", error: error)
+            if !canceled { TunnelDiagnostics.record(stage: "VPN startup", error: error) }
             await stopExperiments()
             locationRuntime.close()
             try? commandServer?.closeService()
@@ -116,6 +123,7 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
 
     private func startTunnelService(options startOptions: [String: NSObject]?) async throws {
         let sharedDirectory = try Paths.sharedDirectory()
+        captureNativeMemoryReset()
         var recoveryError: NSError?
         recoverySession = MobilecoreNewRecoverySession(sharedDirectory, &recoveryError)
         if let recoveryError { throw recoveryError }
@@ -126,7 +134,15 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
         guard operationGate.state != .stopping else { try recoverySession.stop(); throw CancellationError() }
         // Explicit payloads originate in an app/system control action. Cold
         // on-demand starts must respect the persisted budget and stop hold.
-        recoveryTicket = try checkedNativeValue { recoverySession.begin(startOptions?["configContent"] != nil, error: $0) }
+        if let previous = try? checkedNativeValue({ recoverySession.statusJSON($0) }) {
+            TunnelRuntimeEvidence.recordPreviousExit(previous)
+        }
+        recoveryTicket = try await TunnelRecoveryAdmission.begin(
+            manual: startOptions?["configContent"] != nil,
+            isActive: { self.operationGate.state != .stopping },
+            begin: { manual in try checkedNativeValue { recoverySession.begin(manual, error: $0) } },
+            status: { try checkedNativeValue { recoverySession.statusJSON($0) } })
+        guard operationGate.state != .stopping else { try recoverySession.stop(); throw CancellationError() }
         let workingDirectory = sharedDirectory + "/Working"
         let cacheDirectory = sharedDirectory + "/Library/Caches"
         try FileManager.default.createDirectory(atPath: workingDirectory, withIntermediateDirectories: true)
@@ -192,6 +208,7 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
             reloadSystemSurfaces()
         }) else { throw CancellationError() }
         writeTunnelMessage("(packet-tunnel): Here I stand")
+        TunnelRuntimeEvidence.record(stage: "VPN running", message: "Core instance \(commandServer?.runningInstanceID() ?? 0); \(LibboxVersion())")
     }
 
     private func reloadSystemSurfaces() {
@@ -203,9 +220,28 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
 
     override open func stopTunnel(with reason: NEProviderStopReason) async {
         operationGate.stop()
-        if reason == .userInitiated || reason == .configurationDisabled || reason == .configurationRemoved {
-            try? recoverySession?.stop()
-        } else if let recoveryTicket { try? recoverySession?.failed(recoveryTicket) }
+        stopMemoryObservation()
+        captureNativeMemoryReset()
+        let footprint = TunnelRuntimeEvidence.memoryBytes().map(String.init) ?? "unavailable"
+        let detail = "\(Self.stopReasonDescription(reason)); reason=\(reason.rawValue); core_instance=\(commandServer?.runningInstanceID() ?? 0); footprint_bytes=\(footprint)"
+        let stopAction = TunnelStopPolicy.action(reason: reason.rawValue)
+        if stopAction == .failure {
+            TunnelDiagnostics.record(stage: "VPN stopped", error: NSError(domain: "NEProviderStopReason", code: reason.rawValue,
+                userInfo: [NSLocalizedDescriptionKey: detail]))
+        } else {
+            TunnelDiagnostics.recordEvent(stage: "VPN stopped", message: detail)
+        }
+        do {
+            switch stopAction {
+            case .hold: try recoverySession?.stop()
+            case .suspend:
+                if let recoveryTicket { try recoverySession?.suspend(recoveryTicket) }
+            case .failure:
+                if let recoveryTicket { try recoverySession?.failed(recoveryTicket) }
+            }
+        } catch {
+            TunnelDiagnostics.recordEvent(stage: "Recovery stop journal", message: error.localizedDescription)
+        }
         await cancelStableVerification()
         SystemSurfaceStore.write(SystemSurfaceSnapshot(serviceState: .stopping, phase: .stopping))
         defer {
@@ -245,6 +281,7 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
                 return try? TunnelResponse(ok: true, location: snapshot).encode()
             } catch { return try? TunnelResponse.failure(TunnelDiagnostics.sanitized(error.localizedDescription)).encode() }
         case .ping:
+            captureNativeMemoryReset()
             let snapshot = TunnelStateSnapshot(
                 serviceState: operationGate.state ?? (commandServer?.isServiceRunning() == true ? .running : .unavailable),
                 detail: TunnelDiagnostics.latest().map { "\($0.stage): \($0.message)" },
@@ -283,12 +320,14 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
 
     override open func sleep() async {
         writeTunnelMessage("(packet-tunnel) ne-sleep; core_running=\(commandServer?.isServiceRunning() == true)")
+        TunnelRuntimeEvidence.record(stage: "VPN sleep", message: "Core running=\(commandServer?.isServiceRunning() == true)")
         commandServer?.pause()
     }
 
     override open func wake() {
         writeTunnelMessage("(packet-tunnel) ne-wake; core_running=\(commandServer?.isServiceRunning() == true)")
         commandServer?.wake()
+        TunnelRuntimeEvidence.record(stage: "VPN wake", message: "Core running=\(commandServer?.isServiceRunning() == true)")
         experimentNetworkChanged()
     }
 
@@ -436,6 +475,7 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
         let gate = operationGate
         let started = Date()
         writeTunnelMessage("(packet-tunnel) core apply started")
+        TunnelRuntimeEvidence.record(stage: "Core apply", message: "Started")
         try await Task.detached(priority: .userInitiated) {
             guard gate.isCurrent(ticket) else { throw CancellationError() }
             if MobilegenTailscaleForceDERPEnabled() != forceDERP {
@@ -454,6 +494,7 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
             }
         }.value
         writeTunnelMessage("(packet-tunnel) core apply completed; elapsed_ms=\(Int(Date().timeIntervalSince(started) * 1000))")
+        TunnelRuntimeEvidence.record(stage: "Core apply", message: "Completed; core_instance=\(commandServer.runningInstanceID()); elapsed_ms=\(Int(Date().timeIntervalSince(started) * 1000))")
     }
 
     @MainActor private func cancelStableVerification() { stableVerification?.cancel(); stableVerification = nil }
@@ -475,6 +516,8 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
     /// CommandServerHandler.serviceStop entry point (ExtensionPlatformInterface).
     func stopTunnelService() {
         operationGate.stop()
+        stopMemoryObservation()
+        TunnelRuntimeEvidence.record(stage: "Core control stop", message: "Native service stop requested")
         try? recoverySession?.stop()
         Task { @MainActor [weak self] in self?.cancelStableVerification() }
         locationRuntime.close()
@@ -503,6 +546,45 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
     /// Error-level message into the libbox log ring (upstream writeMessage).
     func writeTunnelMessage(_ message: String) {
         commandServer?.writeMessage(2, message: message)
+    }
+
+    private func captureNativeMemoryReset() {
+        guard let root = try? Paths.sharedDirectory(),
+              let reset = TunnelRuntimeEvidence.latestNativeMemoryReset(workingDirectory: URL(fileURLWithPath: root).appendingPathComponent("Working")) else { return }
+        memoryResetLock.lock()
+        let changed = lastMemoryReset != reset
+        lastMemoryReset = reset
+        memoryResetLock.unlock()
+        if changed { TunnelDiagnostics.recordEvent(stage: "Native memory reset", message: reset) }
+    }
+
+    private func startMemoryObservation() {
+        memorySourceLock.lock(); defer { memorySourceLock.unlock() }
+        guard memoryPressureSource == nil, operationGate.state != .stopping else { return }
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: DispatchQueue(label: "com.pidal.sakamoto.memory-pressure"))
+        source.setEventHandler { [weak self, weak source] in
+            guard let self, let source, self.operationGate.state != .stopping else { return }
+            let critical = source.data.rawValue & DispatchSource.MemoryPressureEvent.critical.rawValue != 0
+            TunnelRuntimeEvidence.record(stage: "Memory pressure", message: "System signal=\(critical ? "critical" : "warning")")
+        }
+        memoryPressureSource = source
+        source.resume()
+    }
+
+    private func stopMemoryObservation() {
+        memorySourceLock.lock()
+        let source = memoryPressureSource
+        memoryPressureSource = nil
+        memorySourceLock.unlock()
+        source?.cancel()
+    }
+
+    private static func stopReasonDescription(_ reason: NEProviderStopReason) -> String {
+        let names = ["No specific reason", "User disconnected", "Provider failed", "No network available",
+            "Unrecoverable network change", "Provider disabled", "Authentication canceled", "Configuration failed",
+            "Idle timeout", "Configuration disabled", "Configuration removed", "Another VPN took priority",
+            "User logged out", "User switched", "Connection failed", "System sleep", "App update", "NetworkExtension internal error"]
+        return reason.rawValue >= 0 && reason.rawValue < names.count ? names[reason.rawValue] : "Unknown system stop reason"
     }
 
     private func appVersion() -> String {

@@ -363,6 +363,7 @@ final class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoco
             listener.updateNetworkPath(networkPath)
             if lastNetworkPath != nil {
                 tunnel.writeTunnelMessage("(packet-tunnel) network path changed: \(networkPath)")
+                TunnelDiagnostics.recordEvent(stage: "Network changed", message: networkPath)
             }
             lastNetworkPath = networkPath
         }
@@ -486,30 +487,22 @@ final class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoco
                 try await self.configureNetwork {
                     guard let settings = self.networkSettings, self.tunnel.canConfigureNetwork() else { return }
                     let started = Date()
-                    var withdrawn = false
                     self.tunnel.reasserting = true
                     defer { self.tunnel.reasserting = false }
                     self.tunnel.writeTunnelMessage("(packet-tunnel) system DNS flush started")
-                    do {
-                        try await self.tunnel.setTunnelNetworkSettings(nil)
-                        withdrawn = true
-                        guard self.networkSettings === settings, self.tunnel.canConfigureNetwork() else { return }
-                        try await self.tunnel.setTunnelNetworkSettings(settings)
-                        self.tunnel.writeTunnelMessage("(packet-tunnel) system DNS flush completed; elapsed_ms=\(Int(Date().timeIntervalSince(started) * 1000))")
-                    } catch {
-                        // Restore only this runtime's settings. A stopping or
-                        // replacement provider must never receive the old set.
-                        if withdrawn, self.networkSettings === settings, self.tunnel.canConfigureNetwork() {
-                            do { try await self.tunnel.setTunnelNetworkSettings(settings) }
-                            catch {
-                                self.tunnel.cancelTunnelWithError(error)
-                                throw error
-                            }
-                        }
-                        throw error
-                    }
+                    let result = try await TunnelNetworkSettingsTransaction.flush(
+                        isCurrent: { self.networkSettings === settings && self.tunnel.canConfigureNetwork() },
+                        withdraw: { try await self.tunnel.setTunnelNetworkSettings(nil) },
+                        restore: { try await self.tunnel.setTunnelNetworkSettings(settings) },
+                        cancel: { self.tunnel.cancelTunnelWithError($0) })
+                    let elapsed = Int(Date().timeIntervalSince(started) * 1000)
+                    let detail = "\(result.rawValue); elapsed_ms=\(elapsed)"
+                    self.tunnel.writeTunnelMessage("(packet-tunnel) system DNS flush completed; \(detail)")
+                    TunnelDiagnostics.recordEvent(stage: "System DNS flush", message: detail)
                 }
             }
+        } catch is CancellationError {
+            tunnel.writeTunnelMessage("(packet-tunnel) system DNS flush superseded by stop or replacement")
         } catch {
             TunnelDiagnostics.record(stage: "System DNS flush", error: error)
             tunnel.writeTunnelMessage("(packet-tunnel) system DNS flush failed: \(TunnelDiagnostics.sanitized(error.localizedDescription))")
