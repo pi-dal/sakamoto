@@ -82,6 +82,7 @@ class ConfigFragment : androidx.fragment.app.Fragment() {
         page.setting(manage, getString(R.string.proxy_groups_title), icon = R.drawable.ic_route) { open(ProxyGroupsFragment(), R.string.proxy_groups_title) }
         page.setting(manage, getString(R.string.profiles_title), icon = R.drawable.ic_node) { open(ProfilesFragment(), R.string.profiles_title) }
         page.setting(manage, getString(R.string.policy_effective_rules), icon = R.drawable.ic_route) { open(RoutingPolicyFragment(), R.string.policy_effective_rules) }
+        page.setting(manage, getString(R.string.regional_dns_title), icon = R.drawable.ic_route) { open(RegionalDNSFragment(), R.string.regional_dns_title) }
         page.setting(manage, getString(R.string.proxy_chain_title), icon = R.drawable.ic_route) { open(ProxyChainFragment(), R.string.proxy_chain_title) }
         page.setting(manage, getString(R.string.experiments_title), icon = R.drawable.ic_route) { open(ExperimentsFragment(), R.string.experiments_title) }
         page.setting(manage, getString(R.string.profile_source_title), icon = R.drawable.ic_sync) { open(SourcesManagerFragment(), R.string.profile_source_title) }

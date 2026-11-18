@@ -49,9 +49,14 @@ object ConfigRepository {
         val subscriptions: List<Triple<String, String, String>> = emptyList(), // name, url, format
         val nodeAliases: Map<String, String> = emptyMap(),
         val automaticGroups: List<ProxyGroupEdit> = emptyList(),
+        val regionalDNS: Map<String, String> = emptyMap(),
         val proxyChain: ProxyChainSettings? = null,
     ) {
-        val runtimeContent: String get() = proxyChain?.applying(generatedContent) ?: generatedContent
+        val runtimeContent: String get() {
+            val content = proxyChain?.applying(generatedContent) ?: generatedContent
+            if (content.isBlank()) return content
+            return io.nekohasekai.mobilecore.Mobilecore.applyRegionalDNS(content, regionalDNS["domains"].orEmpty(), regionalDNS["resolver_ip"].orEmpty(), regionalDNS["tls_name"].orEmpty(), regionalDNS["relay"].orEmpty(), regionalDNS["relay_fingerprint"].orEmpty())
+        }
     }
 
     private fun file(context: Context): File = File(context.filesDir, FILE_NAME)
@@ -76,6 +81,7 @@ object ConfigRepository {
                         PolicyRule(o.optString("match"), o.optString("action"))
                     }
                 } ?: emptyList(),
+                regionalDNS = root.optJSONObject("regionalDNS")?.let { dns -> dns.keys().asSequence().associateWith { dns.getString(it) } } ?: emptyMap(),
                 proxyChain = ProxyChainSettings.decode(root.optJSONObject("proxyChain")),
                 automaticGroups = ProxyGroupEditing.decodeSaved(root.optJSONArray("automaticGroups")),
                 nodeAliases = root.optJSONObject("nodeAliases")?.let { aliases -> aliases.keys().asSequence().associateWith { aliases.getString(it) } } ?: emptyMap(),
@@ -110,6 +116,7 @@ object ConfigRepository {
                 config.policy.forEach { put(JSONObject().put("match", it.match).put("action", it.action)) }
             },
         )
+        root.put("regionalDNS", JSONObject(config.regionalDNS))
         root.put("proxyChain", config.proxyChain?.json())
         root.put("automaticGroups", ProxyGroupEditing.encodeSaved(config.automaticGroups))
         root.put("nodeAliases", JSONObject(config.nodeAliases))
@@ -136,14 +143,23 @@ object ConfigRepository {
         require(current == expected) { "Configuration changed. Reopen the chain editor." }
         val base = if (current.proxyChain == null) ProxyChainSettings.unchained(current.generatedContent) else current.generatedContent
         val candidate = settings.applying(base)
-        io.nekohasekai.mobilecore.Mobilecore.validateConfigJSON(candidate)
-        io.nekohasekai.libbox.Libbox.checkConfig(candidate)
+        validateRuntime(current.copy(proxyChain = null), candidate)
         save(context, current.copy(generatedContent = base, proxyChain = settings))
         MobilecoreRuntime.configEvent("modified")
     }
 
+    fun saveRegionalDNS(context: Context, expected: StagedConfig, values: Map<String, String>) {
+        require(load(context) == expected) { "Configuration changed. Reopen Regional DNS." }
+        val approved = if (values.getValue("domains").isEmpty()) emptyMap() else values +
+            ("relay_fingerprint" to io.nekohasekai.mobilecore.Mobilecore.regionalRelayFingerprint(expected.generatedContent, values.getValue("relay")))
+        val candidate = expected.copy(regionalDNS = approved)
+        validateRuntime(candidate, candidate.generatedContent)
+        save(context, candidate)
+        MobilecoreRuntime.configEvent("modified")
+    }
+
     private fun validateRuntime(current: StagedConfig, content: String) {
-        val runtime = current.proxyChain?.applying(content) ?: content
+        val runtime = current.copy(generatedContent = content).runtimeContent
         io.nekohasekai.mobilecore.Mobilecore.validateConfigJSON(runtime)
         io.nekohasekai.libbox.Libbox.checkConfig(runtime)
     }

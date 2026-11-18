@@ -172,6 +172,7 @@ class TunnelBoxService(private val service: Service, private val platformInterfa
     private fun retainedProfile(journal: RecoverySession): Profile = Profile(journal.retainedConfig(), journal.retainedMetadata(), retained = true)
     private fun startProfile(server: CommandServer, journal: RecoverySession, profile: Profile, operation: Long, initial: Boolean, beforeNative: (() -> Unit)? = null) {
         current(operation)
+        if (profile.retained) Mobilecore.checkRegionalDNSRecovery(currentProfile().content, profile.content)
         Libbox.checkConfig(profile.content)
         val receipt = checkNotNull(journalTicket)
         journal.prepare(receipt, profile.content, profile.metadata, service.filesDir.absolutePath)

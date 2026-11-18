@@ -15,6 +15,7 @@ import (
 	"github.com/pi-dal/sakamoto/internal/config"
 	"github.com/pi-dal/sakamoto/internal/gen"
 	"github.com/pi-dal/sakamoto/internal/icloud"
+	"github.com/pi-dal/sakamoto/pkg/regionaldns"
 	"github.com/pi-dal/sakamoto/pkg/sourcesync"
 	"github.com/sagernet/sing-box/common/srs"
 	C "github.com/sagernet/sing-box/constant"
@@ -102,9 +103,10 @@ func GenerateProfileWithFetcherJSON(bundleJSON, settingsJSON string, fetcher Sou
 	}
 	cfg.ChainEnabled = false
 	var settings struct {
-		Mode          string `json:"mode"`
-		Threshold     int    `json:"threshold"`
-		CFRegionBlock bool   `json:"cfRegionBlock"`
+		RegionalDNS   *regionaldns.Profile `json:"regionalDNS"`
+		Mode          string               `json:"mode"`
+		Threshold     int                  `json:"threshold"`
+		CFRegionBlock bool                 `json:"cfRegionBlock"`
 	}
 	if settingsJSON != "" {
 		if json.Unmarshal([]byte(settingsJSON), &settings) != nil {
@@ -113,6 +115,11 @@ func GenerateProfileWithFetcherJSON(bundleJSON, settingsJSON string, fetcher Sou
 		cfg.Experiment.Mode = settings.Mode
 		cfg.Experiment.Threshold = settings.Threshold
 		cfg.Experiment.CFRegionBlock = settings.CFRegionBlock
+	}
+	if settings.RegionalDNS != nil {
+		if err := settings.RegionalDNS.Validate(nil); err != nil {
+			return "", err
+		}
 	}
 	if err := cfg.ValidateExperiment(); err != nil {
 		return "", err
@@ -157,7 +164,7 @@ func GenerateProfileWithFetcherJSON(bundleJSON, settingsJSON string, fetcher Sou
 	cfg.ConfPath = filepath.Join(work, "sources", filepath.FromSlash(main))
 	cfg.NodesFile = filepath.Join(work, "sources", "nodes.txt")
 	out := filepath.Join(work, "runtime")
-	if err := gen.Run(gen.Options{ConfPath: cfg.ConfPath, NodesFile: cfg.NodesFile, Cfg: cfg, OutDir: out, Quiet: true, OmitLearningProbe: true, HTTPClient: sourceClient(fetcher)}); err != nil {
+	if err := gen.Run(gen.Options{RegionalPreflight: settings.RegionalDNS, ConfPath: cfg.ConfPath, NodesFile: cfg.NodesFile, Cfg: cfg, OutDir: out, Quiet: true, OmitLearningProbe: true, HTTPClient: sourceClient(fetcher)}); err != nil {
 		return "", fmt.Errorf("generation failed: %s", sanitizeGenerationError(err))
 	}
 	raw, err := os.ReadFile(filepath.Join(out, "config.json"))

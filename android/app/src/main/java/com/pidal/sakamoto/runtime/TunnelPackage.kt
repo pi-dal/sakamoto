@@ -77,8 +77,10 @@ object TunnelPackage {
             val groups = if (current.generatedContent.isBlank()) emptyList() else ProxyGroupEditing.forImport(current.generatedContent, current.automaticGroups, current.nodeAliases)
             val check = prepare(staging, staging, groups)
             io.nekohasekai.mobilecore.Mobilecore.validateConfigJSON(check.generated)
-            io.nekohasekai.libbox.Libbox.checkConfig(check.generated)
+            val runtime = current.copy(generatedContent = check.generated, proxyChain = ProxyChainSettings.decode(check.state.optJSONObject("proxyChain"))).runtimeContent
+            io.nekohasekai.libbox.Libbox.checkConfig(runtime)
             val prepared = prepare(staging, context.filesDir, groups)
+            prepared.state.put("regionalDNS", JSONObject(current.regionalDNS))
             prepared.state.put("generatedContent", prepared.generated)
             File(staging, "sakamoto-config.json").writeText(prepared.state.toString())
             File(staging, "imports/local/config.json").apply { parentFile?.mkdirs(); writeText(JSONObject(prepared.generated).toString(2)) }

@@ -14,6 +14,7 @@ public struct TunnelProfile: Codable, Equatable, Identifiable, Sendable {
     public var pendingApply: Bool? = true
     public var experiment: ExperimentSettings?
     public var proxyChain: ProxyChainSettings?
+    public var regionalDNS: [String: String]?
     public var proxyGroups: [ProxyGroupEdit]?
     public var nodeOverrides: [String: String]?
     /// Immutable rule snapshot directory, independent of logical profile ID.

@@ -21,7 +21,7 @@ import (
 func (s *Server) SetVersion(version string) { s.mu.Lock(); s.version = version; s.mu.Unlock() }
 func (s *Server) info() string {
 	s.mu.Lock()
-	value := map[string]any{"version": s.version, "protocol": 2, "capabilities": []string{"native-dns-v1", "offline-recovery-v1", "lifecycle-cancel-v1", "runtime-bundle-v1", "quick-repair-v1", configRepairCapability, ChainExitCapability}, "circuit": s.circuit, "state_error": s.stateErr != nil}
+	value := map[string]any{"version": s.version, "protocol": 2, "capabilities": []string{"native-dns-v1", "offline-recovery-v1", "lifecycle-cancel-v1", "runtime-bundle-v1", "quick-repair-v1", configRepairCapability, ChainExitCapability, RegionalDNSCapability}, "circuit": s.circuit, "state_error": s.stateErr != nil}
 	if s.child != nil {
 		value["core"] = map[string]any{"pid": s.child.Process.Pid, "executable": s.child.Path, "started": s.started, "alive": s.runningLocked(), "applied_input_sha256": s.activeConfigHash}
 	}
@@ -219,6 +219,9 @@ func (s *Server) rollbackLocked() string {
 	if err != nil {
 		return "error: known-working runtime unavailable: " + err.Error()
 	}
+	if err := checkRetainedRegionalDNS(s.workDir, point.Dir); err != nil {
+		return "error: " + err.Error()
+	}
 	if _, err := os.Lstat(s.dnsStatePath()); err == nil {
 		cfg, err := config.Load(filepath.Join(point.Dir, "sakamoto.yaml"))
 		if err != nil || !cfg.DNSGuard.Enabled {
@@ -235,7 +238,7 @@ func (s *Server) rollbackLocked() string {
 	if err := s.saveCircuitLocked(state); err != nil {
 		return "error: rollback journal: " + err.Error()
 	}
-	if err := point.Apply(s.workDir); err != nil {
+	if err := point.ApplyChecked(s.workDir, func() error { return checkRetainedRegionalDNS(s.workDir, point.Dir) }); err != nil {
 		return "error: rollback incomplete; maintenance required: " + err.Error()
 	}
 	s.mu.Lock()

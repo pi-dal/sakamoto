@@ -323,6 +323,9 @@ func (m *model) settingsRows(c *config.Config) []cfgRow {
 		row.choices = allowed
 		return row
 	}
+	textField := func(label string, field *string) cfgRow {
+		return cfgRow{label: label, value: func() string { return *field }, edit: func(value string) error { *field = strings.TrimSpace(value); return nil }}
+	}
 	cycleChoice := func(label string, p *string, allowed ...string) cfgRow {
 		row := choice(label, p, allowed...)
 		row.choices = allowed
@@ -416,6 +419,11 @@ func (m *model) settingsRows(c *config.Config) []cfgRow {
 			c.DNSGuard.LocalDomains = parts
 			return nil
 		}},
+		{label: "Regional DNS · encrypted queries only"},
+		textField("Resolver IP", &c.RegionalDNS.ResolverIP),
+		textField("Resolver TLS name", &c.RegionalDNS.TLSName),
+		textField("Approved relay node", &c.RegionalDNS.Relay),
+		textField("Exact domains (comma-separated)", &c.RegionalDNS.Domains),
 		{label: "UDP · Privacy"},
 		toggle("Block STUN / WebRTC", &c.BlockSTUN),
 		toggle("Block QUIC (UDP 443)", &c.BlockQUIC),

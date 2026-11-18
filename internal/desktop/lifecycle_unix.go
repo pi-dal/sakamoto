@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -123,6 +124,9 @@ func runtimeRecoveryStatus(ctx context.Context, path string) (known, supported, 
 		}
 	}
 	if cfg, err := config.Load(path); err == nil && cfg.ChainEnabled && (cfg.ChainExit != "" || cfg.SocksExit != "") && !chainSupported {
+		supported = false
+	}
+	if cfg, err := config.Load(path); err == nil && svc.NeedsRegionalDNSService(cfg, path) && !slices.Contains(info.Capabilities, svc.RegionalDNSCapability) {
 		supported = false
 	}
 	return true, supported, info.Working.Present

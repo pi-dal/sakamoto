@@ -2,17 +2,22 @@ package svc
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/pi-dal/sakamoto/internal/config"
+	"github.com/pi-dal/sakamoto/pkg/regionaldns"
 )
 
 // Send sends one command to the supervisor socket and returns its reply.
@@ -64,6 +69,32 @@ func SendToContext(ctx context.Context, socketPath, cmd string) (string, error) 
 	return string(buf), nil
 }
 
+// NeedsRegionalDNSService includes the interval between revoking consent and regenerating the core.
+func NeedsRegionalDNSService(cfg *config.Config, path string) bool {
+	if cfg.RegionalDNS.Domains != "" {
+		return true
+	}
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(path), "config.json"))
+	return err == nil && json.Valid(raw) && regionaldns.Verify(raw, cfg.RegionalDNS, nil) != nil
+}
+
+// RequireRegionalDNS checks capability before any client operation that may
+// start or regenerate a core with a scoped DNS policy.
+func RequireRegionalDNS(cfg *config.Config, path string) error {
+	if !NeedsRegionalDNSService(cfg, path) {
+		return nil
+	}
+	reply, err := SendTo(filepath.Join(filepath.Dir(path), SockName), "info")
+	if err != nil {
+		return err
+	}
+	var info struct{ Capabilities []string }
+	if json.Unmarshal([]byte(reply), &info) != nil || !slices.Contains(info.Capabilities, RegionalDNSCapability) {
+		return errors.New("upgrade the background service before connecting with regional DNS")
+	}
+	return nil
+}
+
 // RequireDNSLifecycle prevents a new client from mistaking an old root daemon
 // (which cannot save/restore DNS) for a safe protected-DNS controller.
 func RequireDNSLifecycle() error {
@@ -99,6 +130,9 @@ func ReconnectAt(cfgPath string) error {
 	}
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
+		return err
+	}
+	if err := RequireRegionalDNS(cfg, cfgPath); err != nil {
 		return err
 	}
 	if cfg.DNSGuard.Enabled {

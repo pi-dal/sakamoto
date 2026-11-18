@@ -124,35 +124,29 @@ final class NativeNetworkRecoveryIntegrationTests: XCTestCase {
 
     func testDNSRestoreFailuresRespectTheCapturedRuntime() async throws {
         var evidence: [[String: Any]] = []
-        for scenario in ["success", "withdraw_failure", "retry_success", "both_failed", "stop_after_withdraw", "replace_during_retry"] {
-            var current = true
+        for scenario in ["success", "retry_success", "both_failed", "stopped", "replace_during_retry"] {
+            var current = scenario != "stopped"
             var restoreCalls = 0
-            var cancelCalls = 0
             var outcome = ""
             do {
-                let result = try await TunnelNetworkSettingsTransaction.flush(isCurrent: { current }, withdraw: {
-                    if scenario == "withdraw_failure" { throw NSError(domain: "DNSFixture", code: 1) }
-                    if scenario == "stop_after_withdraw" { current = false }
-                }, restore: {
+                let result = try await TunnelNetworkSettingsTransaction.refresh(isCurrent: { current }, reapply: {
                     restoreCalls += 1
                     if scenario == "success" { return }
                     if scenario == "retry_success", restoreCalls == 2 { return }
                     if scenario == "replace_during_retry", restoreCalls == 2 { current = false }
                     throw NSError(domain: "DNSFixture", code: 2)
-                }, cancel: { _ in cancelCalls += 1 })
+                })
                 outcome = result.rawValue
             } catch is CancellationError { outcome = "superseded" }
             catch { outcome = "failed" }
             switch scenario {
             case "success": XCTAssertEqual(outcome, "restored"); XCTAssertEqual(restoreCalls, 1)
-            case "withdraw_failure": XCTAssertEqual(outcome, "failed"); XCTAssertEqual(restoreCalls, 0)
             case "retry_success": XCTAssertEqual(outcome, "recovered"); XCTAssertEqual(restoreCalls, 2)
             case "both_failed": XCTAssertEqual(outcome, "failed"); XCTAssertEqual(restoreCalls, 2)
-            case "stop_after_withdraw": XCTAssertEqual(outcome, "superseded"); XCTAssertEqual(restoreCalls, 0)
+            case "stopped": XCTAssertEqual(outcome, "superseded"); XCTAssertEqual(restoreCalls, 0)
             default: XCTAssertEqual(outcome, "superseded"); XCTAssertEqual(restoreCalls, 2)
             }
-            XCTAssertEqual(cancelCalls, scenario == "both_failed" ? 1 : 0)
-            evidence.append(["scenario": scenario, "outcome": outcome, "restore_calls": restoreCalls, "cancel_calls": cancelCalls])
+            evidence.append(["scenario": scenario, "outcome": outcome, "restore_calls": restoreCalls])
         }
         let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys]), uniformTypeIdentifier: "public.json")
         attachment.name = "ios-dns-restore-transactions"; attachment.lifetime = .keepAlways; add(attachment)

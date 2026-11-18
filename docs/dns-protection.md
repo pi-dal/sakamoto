@@ -21,6 +21,22 @@ dns_guard:
 
 `dns_mode: hijack` alone is not sufficient for the raw macOS CLI. Native Apple Network Extension clients manage interface DNS; the bare Darwin TUN path mainly manages routes. Our current private exclusions can even route a derived TUN DNS peer outside TUN. Loopback DNS avoids that dependency, and sakamoto performs the small system-setting transaction.
 
+## Regional DNS for direct applications
+
+Use regional DNS when an application connects directly but its CDN selection follows a distant resolver. Configure the exact service names, the regional DoH resolver's literal address and certificate name, and one approved relay node. Choose a TLS-verified proxy node with a literal address and a direct connection to its endpoint. This gives the resolver the relay's address. The application service still sees the direct connection's source address.
+
+- In the TUI open **Config → Edit settings → Regional DNS**. In Desktop open **Settings → Edit configuration → Regional DNS**. Enable protected system DNS, save, regenerate and apply through the service owner. Save pins the selected relay from the existing generated configuration. Regeneration checks its configuration fingerprint, including its endpoint, TLS identity and credentials. For a changed node, review the replacement under a new tag and select it explicitly. To migrate a legacy unpinned profile, clear and save its domain list, then reselect the reviewed node and save the domains before applying.
+- On iOS and Android open **Config → Regional DNS**, save, then use the existing Apply flow. Keep the application's traffic rule set to Direct. Enter a comma-separated list of exact public names. Clear it to disable the exception.
+- Generation checks the approved relay before resolving proxy endpoints and refuses protected names as source hosts or proxy endpoints. Mobile import and core startup also check proxy endpoints and latency test URLs. A protected name must differ from the core's built-in latency target (`www.gstatic.com`), since individual node tests use it even when a group has a custom URL.
+- Connection checks also reject leftover regional rules after revocation. Mobile recovery checks the saved DNS policy and relay against the selected configuration before starting a retained snapshot. Apply the configuration to change a running tunnel. On Android, include the input method itself in the VPN app selection.
+- Domain-based SOCKS and HTTP proxy dials resolve matching names through the same protected DNS rules before dialing. The traffic rule still selects the outbound.
+- The captured queries use certificate-verified DoH through the nominated relay. The core removes client subnet information, disables its cache for this branch, rejects private address answers and terminates failed lookups locally. Existing explicit private DNS routes take precedence or block conflicting configuration. Diagnostic exports and real-world speed comparisons should use only aggregate results.
+- The scope is DNS requests handled by the active core. An application's own encrypted resolver, an OS resolver outside the tunnel, cached addresses and connections already open have their own behavior. Test mobile handoffs on the device. To assess CDN benefit, compare speech-to-first-text and speech-to-final-text in fresh sessions.
+
+Run `mise exec sing-box@1.14.2 -- go test -v ./internal/gen -run TestRegionalDNSGenerationAndRecovery -count=1` to reproduce the generation and recovery checks using synthetic names and a counting resolver.
+
+Run the synthetic two-core TLS workflow with `mise exec sing-box@1.14.2 -- go test -v ./pkg/regionaldns -run TestResolverIsolation -count=1`. It exercises a direct application behind SOCKS, a captured DNS query, TLS handshake rejection, relay outage and same-tag relay replacement on loopback fixtures. The output reports counts of approved answers, unauthorized queries and forwarded client subnet options.
+
 ## Root-supervisor lifecycle
 
 The root daemon owns DNS changes, not the user watcher:

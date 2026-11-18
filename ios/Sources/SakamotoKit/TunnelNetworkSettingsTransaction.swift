@@ -5,28 +5,23 @@ import Foundation
 public enum TunnelNetworkSettingsTransaction {
     public enum Result: String, Sendable { case restored, recovered }
 
-    public static func flush(
+    public static func refresh(
         isCurrent: () -> Bool,
-        withdraw: () async throws -> Void,
-        restore: () async throws -> Void,
-        cancel: (Error) -> Void
+        reapply: () async throws -> Void
     ) async throws -> Result {
         guard isCurrent() else { throw CancellationError() }
-        try await withdraw()
-        guard isCurrent() else { throw CancellationError() }
         do {
-            try await restore()
+            try await reapply()
             guard isCurrent() else { throw CancellationError() }
             return .restored
         } catch {
             guard isCurrent() else { throw CancellationError() }
             do {
-                try await restore()
+                try await reapply()
                 guard isCurrent() else { throw CancellationError() }
                 return .recovered
             } catch {
                 guard isCurrent() else { throw CancellationError() }
-                cancel(error)
                 throw error
             }
         }

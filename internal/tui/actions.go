@@ -819,6 +819,10 @@ func (m *model) saveConfigForm() tea.Cmd {
 			return nil
 		}
 	}
+	if err := m.formCfg.ApproveRegionalRelay(m.cfg.RegionalDNS, m.cfgPath); err != nil {
+		m.formNotice = err.Error()
+		return nil
+	}
 	if err := m.formCfg.Save(m.cfgPath); err != nil {
 		m.formNotice = "Save failed: " + err.Error()
 		return nil

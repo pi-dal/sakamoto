@@ -490,14 +490,13 @@ final class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoco
                     self.tunnel.reasserting = true
                     defer { self.tunnel.reasserting = false }
                     self.tunnel.writeTunnelMessage("(packet-tunnel) system DNS flush started")
-                    let result = try await TunnelNetworkSettingsTransaction.flush(
+                    // Keep the DNS scope installed throughout a best-effort refresh.
+                    let result = try await TunnelNetworkSettingsTransaction.refresh(
                         isCurrent: { self.networkSettings === settings && self.tunnel.canConfigureNetwork() },
-                        withdraw: { try await self.tunnel.setTunnelNetworkSettings(nil) },
-                        restore: { try await self.tunnel.setTunnelNetworkSettings(settings) },
-                        cancel: { self.tunnel.cancelTunnelWithError($0) })
+                        reapply: { try await self.tunnel.setTunnelNetworkSettings(settings) })
                     let elapsed = Int(Date().timeIntervalSince(started) * 1000)
                     let detail = "\(result.rawValue); elapsed_ms=\(elapsed)"
-                    self.tunnel.writeTunnelMessage("(packet-tunnel) system DNS flush completed; \(detail)")
+                    self.tunnel.writeTunnelMessage("(packet-tunnel) DNS settings reapplied; \(detail)")
                     TunnelDiagnostics.recordEvent(stage: "System DNS flush", message: detail)
                 }
             }

@@ -11,6 +11,7 @@ import (
 	"github.com/pi-dal/sakamoto/internal/config"
 	"github.com/pi-dal/sakamoto/internal/recovery"
 	"github.com/pi-dal/sakamoto/internal/sysdns"
+	"github.com/pi-dal/sakamoto/pkg/regionaldns"
 )
 
 func (s *Server) dnsStatePath() string { return filepath.Join(s.workDir, sysdns.StateName) }
@@ -21,12 +22,15 @@ func dnsPlanFor(dir, path string) (*config.Config, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	if !cfg.DNSGuard.Enabled {
-		return cfg, false, nil
-	}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, false, err
+	}
+	if err := regionaldns.Verify(b, cfg.RegionalDNS, cfg.DNSGuard.LocalDomains); err != nil {
+		return nil, false, err
+	}
+	if !cfg.DNSGuard.Enabled {
+		return cfg, false, nil
 	}
 	var core struct {
 		Inbounds []struct {

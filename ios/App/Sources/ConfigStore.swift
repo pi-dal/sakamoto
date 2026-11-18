@@ -253,7 +253,13 @@ final class ConfigStore: ObservableObject {
         let root = try AppPaths.sharedDirectory().appendingPathComponent(profile.ruleRevisionID.map { "RuleSnapshots/\($0)" } ?? "Profiles/\(profile.id)", isDirectory: true)
         var runtimeProfile = profile
         runtimeProfile.config = try profile.proxyChain?.applying(to: profile.config) ?? profile.config
-        let config = try protectServers(in: runtimeProfile.preparedConfig(ruleDirectory: root))
+        var config = try protectServers(in: runtimeProfile.preparedConfig(ruleDirectory: root))
+        do {
+            let dns = profile.regionalDNS ?? [:]
+            var error: NSError?
+            config = MobilecoreApplyRegionalDNS(config, dns["domains"] ?? "", dns["resolver_ip"] ?? "", dns["tls_name"] ?? "", dns["relay"] ?? "", dns["relay_fingerprint"] ?? "", &error)
+            if let error { throw error }
+        }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         for (name, data) in profile.files {
             guard TunnelProfile.validFileName(name) else { throw TunnelProfile.InvalidProfile("Invalid rule file path") }
@@ -325,6 +331,26 @@ final class ConfigStore: ObservableObject {
         let bundle = try AutomaticGroupSources.updating(sourceBundle, edits: profile.proxyGroups ?? [], content: profile.config, overrides: profile.nodeOverrides ?? [:])
         let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
         profile.sourceBundleJSON = String(decoding: try encoder.encode(bundle), as: UTF8.self)
+    }
+
+    func saveRegionalDNS(_ dns: [String: String], expected: TunnelProfile?) throws {
+        guard !generating && !applying, selectedProfile == expected,
+              let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) else {
+            throw TunnelProfile.InvalidProfile("Configuration changed. Reopen Regional DNS.")
+        }
+        var candidate = profiles[index]
+        if dns["domains", default: ""].isEmpty { candidate.regionalDNS = nil } else {
+            var approved = dns
+            var error: NSError?
+            approved["relay_fingerprint"] = MobilecoreRegionalRelayFingerprint(candidate.config, dns["relay"] ?? "", &error)
+            if let error { throw error }
+            candidate.regionalDNS = approved
+        }
+        _ = try prepare(candidate)
+        candidate.pendingApply = true
+        profiles[index] = candidate
+        persistProfiles(); transition(.modified)
+        lastAction = "DNS settings saved. Apply to use them on this device."
     }
 
     func saveProxyGroup(_ edit: ProxyGroupEdit, expectedProfile: String?, expectedContent: String) throws {
@@ -476,6 +502,14 @@ final class ConfigStore: ObservableObject {
                                   forceTailscaleDERP: selectedProfile?.forceTailscaleDERP)
     }
 
+    func checkRecoveryDNS(_ retained: String) throws {
+        guard let profile = selectedProfile else { throw TunnelProfile.InvalidProfile("Select a profile before recovery.") }
+        var error: NSError?
+        let current = try prepare(profile)
+        _ = MobilecoreCheckRegionalDNSRecovery(current, retained, &error)
+        if let error { throw error }
+    }
+
     func connectionContent() throws -> String {
         guard let profile = selectedProfile, !profile.sourcesChanged else {
             throw TunnelProfile.InvalidProfile("Generate the selected sources in Config before connecting.")
@@ -496,16 +530,19 @@ final class ConfigStore: ObservableObject {
         let contentBefore = content
         let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
         let bundleJSON = String(decoding: try encoder.encode(sourceBefore), as: UTF8.self)
-        let settingsJSON = String(decoding: try encoder.encode(settingsBefore), as: UTF8.self)
+        let regional = selectedProfile?.regionalDNS
+        var settingsObject = try JSONSerialization.jsonObject(with: encoder.encode(settingsBefore)) as? [String: Any] ?? [:]
+        settingsObject["regionalDNS"] = regional
+        let settingsJSON = String(decoding: try JSONSerialization.data(withJSONObject: settingsObject), as: UTF8.self)
         generating = true
         defer { generating = false }
         let raw = try await Task.detached(priority: .userInitiated) {
             var error: NSError?
-            let result = MobilegenGenerateProfileWithFetcherJSON(bundleJSON, settingsJSON, NativeSourceFetcher(), &error)
+            let result = MobilegenGenerateProfileWithFetcherJSON(bundleJSON, settingsJSON, NativeSourceFetcher(protectedDomains: regional?["domains"] ?? ""), &error)
             if let error { throw error }
             return result
         }.value
-        guard selectedProfileID == idBefore, try encoder.encode(sourceBundle) == Data(bundleJSON.utf8), experimentSettings == settingsBefore, content == contentBefore else {
+        guard selectedProfileID == idBefore, try encoder.encode(sourceBundle) == Data(bundleJSON.utf8), experimentSettings == settingsBefore, selectedProfile?.regionalDNS == regional, content == contentBefore else {
             throw TunnelProfile.InvalidProfile("Sources or selection changed during generation. No runtime was replaced; retry.")
         }
         var candidate = try TunnelProfile.decodePackage(Data(raw.utf8))
@@ -513,6 +550,7 @@ final class ConfigStore: ObservableObject {
         candidate.id = idBefore ?? UUID().uuidString
         candidate.ruleRevisionID = revision
         candidate.name = selectedProfile?.name ?? "Generated configuration"
+        candidate.regionalDNS = selectedProfile?.regionalDNS
         candidate.experiment = settingsBefore
         candidate.forceTailscaleDERP = selectedProfile?.forceTailscaleDERP
         candidate.proxyChain = selectedProfile?.proxyChain ?? ProxyChainSettings.importedChain(in: contentBefore)

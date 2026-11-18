@@ -63,6 +63,10 @@ func configurationFromConfig(c *config.Config) Configuration {
 			field("DNS", "dns_enabled", "Protected system DNS", ConfigBool, boolValue(c.DNSGuard.Enabled)),
 			field("DNS", "dns_service", "DNS network service", ConfigText, c.DNSGuard.Service),
 			field("DNS", "dns_local_domains", "Private DNS suffixes", ConfigText, strings.Join(c.DNSGuard.LocalDomains, ", ")),
+			field("Regional DNS", "regional_ip", "Resolver IP", ConfigText, c.RegionalDNS.ResolverIP),
+			field("Regional DNS", "regional_tls", "Resolver TLS name", ConfigText, c.RegionalDNS.TLSName),
+			field("Regional DNS", "regional_relay", "Approved relay node", ConfigText, c.RegionalDNS.Relay),
+			field("Regional DNS", "regional_domains", "Exact domains (comma-separated)", ConfigText, c.RegionalDNS.Domains),
 			field("Traffic policy", "cf_region_block", "CF region auto-proxy", ConfigBool, boolValue(c.Experiment.CFRegionBlock)),
 			field("Traffic policy", "experiment_mode", "Unmatched policy", ConfigChoice, c.Experiment.Mode, "off", "on", "auto"),
 			field("Traffic policy", "experiment_threshold", "Direct failure threshold", ConfigText, strconv.Itoa(c.Experiment.Threshold)),
@@ -115,7 +119,11 @@ func (c *Controller) SaveConfiguration(ctx context.Context, value Configuration)
 		if err != nil {
 			return err
 		}
+		previous := cfg.RegionalDNS
 		if err := applyConfigurationFields(cfg, value.Fields); err != nil {
+			return err
+		}
+		if err := cfg.ApproveRegionalRelay(previous, c.path); err != nil {
 			return err
 		}
 		return saveConfigurationAtomically(cfg, c.path)
@@ -244,6 +252,14 @@ func applyConfigurationField(cfg *config.Config, key, value string) error {
 			}
 		}
 		cfg.DNSGuard.LocalDomains = parts
+	case "regional_ip":
+		cfg.RegionalDNS.ResolverIP = value
+	case "regional_tls":
+		cfg.RegionalDNS.TLSName = value
+	case "regional_relay":
+		cfg.RegionalDNS.Relay = value
+	case "regional_domains":
+		cfg.RegionalDNS.Domains = value
 	case "cf_region_block":
 		v, err := boolValue()
 		if err != nil {

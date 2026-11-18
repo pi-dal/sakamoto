@@ -81,7 +81,13 @@ def patch(root):
 \t\t\t\treturn false
 \t\t\t}
 ''', "backend health logging")
+    instance = root / "daemon/instance.go"
+    native = replace_once(instance.read_text(), "type Instance struct {\n",
+        "type Instance struct {\n\tregionalProbePolicy *regionalProbePolicy\n", "probe policy ownership")
+    native = replace_once(native, "\ti := &Instance{\n",
+        "\tpolicy, err := newRegionalProbePolicy(options.DNS, options.Outbounds, options.Endpoints)\n\tif err != nil { cancel(); return nil, err }\n\ti := &Instance{\n\t\tregionalProbePolicy: policy,\n", "probe policy binding")
     # Validate every upstream anchor before writing. Never edit GOMODCACHE.
+    instance.write_text(native)
     server.write_text(source)
     monitor.write_text(network)
     endpoint.write_text(transport)

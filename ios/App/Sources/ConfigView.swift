@@ -420,6 +420,44 @@ final class ConfigModel: ObservableObject {
     }
 }
 
+private struct RegionalDNSView: View {
+    @ObservedObject var store: ConfigStore
+    @State private var original: TunnelProfile?
+    @State private var domains = ""
+    @State private var resolver = ""
+    @State private var tlsName = ""
+    @State private var relay = ""
+    @State private var notice = ""
+    var body: some View {
+        Form {
+            Section { TextField("Exact domains, separated by commas", text: $domains) } header: { Text("Domains") } footer: { Text("Clear the domain list to use your usual DNS policy. Application connections follow their existing routing rules.") }
+            Section("Encrypted DNS path") {
+                TextField("Resolver IP", text: $resolver)
+                TextField("Resolver TLS name", text: $tlsName)
+                TextField("Approved relay node", text: $relay)
+            }
+            Section {
+                Button("Approve relay and save") {
+                    do {
+                        try store.saveRegionalDNS(["domains":domains, "resolver_ip":resolver, "tls_name":tlsName, "relay":relay], expected: original)
+                        original = store.selectedProfile
+                        notice = "Saved. Apply changes to use this DNS path."
+                    } catch { notice = TunnelDiagnostics.sanitized(error.localizedDescription) }
+                }.disabled(original == nil)
+                if !notice.isEmpty { Text(notice).font(.footnote) }
+            } footer: { Text("If the relay is unavailable, matching lookups fail.") }
+        }
+        .textInputAutocapitalization(.never).autocorrectionDisabled()
+        .navigationTitle("Regional DNS")
+        .onAppear {
+            original = store.selectedProfile
+            let dns = original?.regionalDNS ?? [:]
+            domains = dns["domains"] ?? ""; resolver = dns["resolver_ip"] ?? ""
+            tlsName = dns["tls_name"] ?? ""; relay = dns["relay"] ?? ""
+        }
+    }
+}
+
 struct ConfigView: View {
     @ObservedObject var model: ConfigModel
     @ObservedObject var sync: ICloudSyncModel
@@ -486,6 +524,7 @@ struct ConfigView: View {
                             .navigationTitle("Custom overrides")
                     }
                 } label: { Label("Routing rules", systemImage: "arrow.triangle.branch") }
+                NavigationLink { RegionalDNSView(store: model.store) } label: { Label("Regional DNS", systemImage: "network") }
                 NavigationLink { ProxyGroupsView(store: model.store) } label: { Label("Proxy groups", systemImage: "square.stack.3d.up") }
                 NavigationLink { ProxyChainView(store: model.store) } label: { Label("Proxy chain", systemImage: "point.3.connected.trianglepath.dotted") }
                 NavigationLink { ExperimentView(model: settings) } label: {

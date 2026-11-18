@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pi-dal/sakamoto/pkg/regionaldns"
 	"github.com/pi-dal/sakamoto/pkg/sourcesync"
 	"gopkg.in/yaml.v3"
 )
@@ -66,7 +67,8 @@ type Config struct {
 		Enabled bool   `yaml:"enabled"` // browser hostname proxy alongside the TUN; restored on disconnect
 		Service string `yaml:"service"` // macOS network service; default Wi-Fi
 	} `yaml:"system_proxy"`
-	DNSGuard struct {
+	RegionalDNS regionaldns.Profile `yaml:"regional_dns,omitempty"`
+	DNSGuard    struct {
 		Enabled             bool     `yaml:"enabled"`       // native DNS + system takeover; opt-in
 		Service             string   `yaml:"service"`       // macOS network service
 		LocalDomains        []string `yaml:"local_domains"` // explicitly private namespaces only
@@ -161,7 +163,7 @@ func Default() *Config {
 	c.ICloud.Files = []string{"nodes.txt"}
 	c.ICloud.IncludeConf = true
 	c.TailscaleOptimize = true
-	c.URLTest.URL = "https://www.gstatic.com/generate_204"
+	c.URLTest.URL = regionaldns.DefaultLatencyURL
 	c.URLTest.Interval = "10m"
 	c.URLTest.Tolerance = 100
 	c.S3.Region = "us-east-1"
@@ -274,6 +276,12 @@ func (c *Config) ValidateAPIEndpoint() error {
 
 // ValidateDNSGuard validates system-service and TLS-bootstrap inputs.
 func (c *Config) ValidateDNSGuard() error {
+	if c.RegionalDNS.Domains != "" && !c.DNSGuard.Enabled {
+		return errors.New("enable protected system DNS before regional DNS")
+	}
+	if err := c.RegionalDNS.Validate(c.DNSGuard.LocalDomains); err != nil {
+		return err
+	}
 	if !c.DNSGuard.Enabled {
 		return nil
 	}

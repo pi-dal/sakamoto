@@ -603,4 +603,5 @@
     <string name="repair_core_instance">Core instance</string>
     <string name="repair_protocol">Recovery protocol</string>
     <string name="repair_status">Core check</string>
+    <string name="regional_dns_title">Regional DNS</string>
 </resources>

@@ -198,6 +198,7 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
             let retainedMetadata = try checkedNativeValue { recoverySession.retainedMetadata($0) }
             var retained = try JSONDecoder().decode(TunnelStartOptions.self, from: Data(retainedMetadata.utf8))
             retained.configContent = retainedContent; retained.experimentJSON = nil
+            try checkRecoveryDNS(current: options.configContent, retained: retainedContent)
             recoveryTicket = try checkedNativeValue { recoverySession.beginFallback($0) }
             try await applyProfile(retained)
             TunnelDiagnostics.record(stage: "Configuration recovered", error: ProviderStartupError("Using the verified saved configuration; learning paused. Review Config before applying changes."))
@@ -209,6 +210,12 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
         }) else { throw CancellationError() }
         writeTunnelMessage("(packet-tunnel): Here I stand")
         TunnelRuntimeEvidence.record(stage: "VPN running", message: "Core instance \(commandServer?.runningInstanceID() ?? 0); \(LibboxVersion())")
+    }
+
+    private func checkRecoveryDNS(current: String, retained: String) throws {
+        var error: NSError?
+        _ = MobilecoreCheckRegionalDNSRecovery(current, retained, &error)
+        if let error { throw error }
     }
 
     private func reloadSystemSurfaces() {
@@ -424,6 +431,7 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
                 do {
                     await stopExperiments()
                     let (oldContent, oldSettings) = try ProviderExperimentRunner.prepared(previous, root: root)
+                    try checkRecoveryDNS(current: content, retained: oldContent)
                     var capturedPrevious = oldContent
                     if let recoverySession, let recoveryTicket {
                         let metadata = String(decoding: try JSONEncoder().encode(previous), as: UTF8.self)

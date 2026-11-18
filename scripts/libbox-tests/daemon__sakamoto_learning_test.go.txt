@@ -10,11 +10,13 @@ import (
     "net/http"
     "os"
     "path/filepath"
+    "strings"
     "sync"
     "sync/atomic"
     "testing"
     "time"
 
+    "github.com/pi-dal/sakamoto/pkg/regionaldns"
     "github.com/pi-dal/sakamoto/pkg/mobileexperiment"
     "github.com/sagernet/sing-box/daemon"
     "github.com/sagernet/sing-box/include"
@@ -77,7 +79,61 @@ func TestSakamotoVerifiedLearningThroughNativeExits(t *testing.T) {
     }
 }
 
-func mobileOriginSOCKS(t *testing.T, code *atomic.Int32) int {
+func TestSakamotoRegionalProbeIsolation(t *testing.T) {
+    var code, directConnections, proxyConnections atomic.Int32
+    code.Store(200)
+    dp := mobileOriginSOCKS(t, &code, &directConnections)
+    pp := mobileOriginSOCKS(t, &code, &proxyConnections)
+    base := []byte(fmt.Sprintf(`{"log":{"disabled":true},"dns":{"servers":[{"type":"udp","tag":"ordinary","server":"127.0.0.1"}]},"route":{"final":"direct","rules":[]},"outbounds":[{"type":"socks","tag":"direct","server":"127.0.0.1","server_port":%d},{"type":"socks","tag":"proxy","server":"127.0.0.1","server_port":%d},{"type":"trojan","tag":"relay","server":"192.0.2.1","server_port":443,"password":"fixture","tls":{"enabled":true,"server_name":"relay.example"}}]}`, dp, pp))
+    profile := regionaldns.Profile{Domains:"voice.example", Relay:"relay", ResolverIP:"192.0.2.2", TLSName:"fixture.example"}
+    var err error
+    profile.RelayFingerprint, err = regionaldns.RelayFingerprint(base, profile.Relay)
+    if err != nil { t.Fatal(err) }
+    config, err := regionaldns.Apply(base, profile, nil)
+    if err != nil { t.Fatal(err) }
+    service := daemon.NewStartedService(daemon.ServiceOptions{Context:include.Context(context.Background())})
+    t.Cleanup(func(){ service.CloseService(); service.Close() })
+    if err := service.StartOrReloadService(context.Background(), string(config), nil); err != nil { t.Fatal(err) }
+    prober := mobileOriginProber{service, service.RunningInstanceID()}
+    for _, exit := range []string{"direct", "proxy"} {
+        if _, err := prober.ProbeOrigin("voice.example", 80, exit, 1000); err == nil { t.Error("protected origin probe succeeded") }
+    }
+    if directConnections.Load() != 0 || proxyConnections.Load() != 0 { t.Fatal("protected origin reached a learning exit") }
+    for _, exit := range []string{"direct", "proxy"} {
+        if status, err := prober.ProbeOrigin("control.example", 80, exit, 1000); err != nil || status != 200 { t.Fatalf("control probe failed: %d %v", status, err) }
+    }
+    if directConnections.Load() != 1 || proxyConnections.Load() != 1 { t.Fatal("control connection missing") }
+    for _, candidate := range []struct { outbound map[string]any; reason string }{
+        {map[string]any{"type":"wireguard", "tag":"wg", "peers":[]any{map[string]any{"address":"voice.example", "port":51820}}}, "proxy endpoint"},
+        {map[string]any{"type":"hysteria2", "tag":"realm", "realm":map[string]any{"server_url":"https://control.example", "stun_servers":[]string{"VOICE.example.:3478"}}}, "proxy endpoint"},
+        {map[string]any{"type":"socks", "tag":"extra", "server":"VOICE.example.", "server_port":443, "domain_resolver":"ordinary"}, "proxy endpoint"},
+        {map[string]any{"type":"urltest", "tag":"extra", "outbounds":[]string{"proxy"}, "url":"https://VOICE.example.:443/probe"}, "latency test"},
+    } {
+        var imported map[string]any
+        if err := json.Unmarshal(config, &imported); err != nil { t.Fatal(err) }
+        if candidate.outbound["type"] == "wireguard" { imported["endpoints"] = []any{candidate.outbound} } else { imported["outbounds"] = append(imported["outbounds"].([]any), candidate.outbound) }
+        raw, err := json.Marshal(imported)
+        if err != nil { t.Fatal(err) }
+        if err := service.StartOrReloadService(context.Background(), string(raw), nil); err == nil || !strings.Contains(err.Error(), candidate.reason) { t.Fatalf("unexpected admission result for %s: %v", candidate.reason, err) }
+    }
+    if directConnections.Load() != 1 || proxyConnections.Load() != 1 { t.Fatal("rejected configuration dialed a probe exit") }
+    var stale map[string]any
+    if err := json.Unmarshal(config, &stale); err != nil { t.Fatal(err) }
+    servers := stale["dns"].(map[string]any)["servers"].([]any)
+    servers[0].(map[string]any)["server"] = "VOICE.example."
+    servers[0].(map[string]any)["domain_resolver"] = "regional-protected-doh"
+    invalid, err := json.Marshal(stale)
+    if err != nil { t.Fatal(err) }
+    if err := service.StartOrReloadService(context.Background(), string(invalid), nil); err == nil || !strings.Contains(err.Error(), "overlaps a protected regional DNS name") { t.Fatalf("unexpected mobile startup result: %v", err) }
+    if dir := os.Getenv("SAKAMOTO_TEST_ARTIFACT_DIR"); dir != "" {
+        if err := os.MkdirAll(dir, 0700); err != nil { t.Fatal(err) }
+        receipt, err := json.Marshal(map[string]any{"protected_direct_connections": 0, "protected_proxy_connections": 0, "control_connections": directConnections.Load() + proxyConnections.Load(), "bootstrap_conflict_rejected": true, "secondary_outbound_conflict_rejected": true, "latency_target_conflict_rejected": true})
+        if err != nil { t.Fatal(err) }
+        if err := os.WriteFile(filepath.Join(dir, "regional-native.json"), receipt, 0600); err != nil { t.Fatal(err) }
+    }
+}
+
+func mobileOriginSOCKS(t *testing.T, code *atomic.Int32, connections ...*atomic.Int32) int {
     t.Helper()
     listener, err := net.Listen("tcp", "127.0.0.1:0"); if err != nil { t.Fatal(err) }
     var workers sync.WaitGroup
@@ -88,6 +144,7 @@ func mobileOriginSOCKS(t *testing.T, code *atomic.Int32) int {
         defer accepting.Done()
         for {
             conn, err := listener.Accept(); if err != nil { return }
+            if len(connections) != 0 { connections[0].Add(1) }
             workers.Add(1)
             go func() {
                 defer workers.Done(); defer conn.Close()

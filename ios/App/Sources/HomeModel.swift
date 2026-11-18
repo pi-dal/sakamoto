@@ -233,6 +233,7 @@ final class HomeModel: ObservableObject {
             if let session = MobilecoreNewRecoverySession(root.path, &error),
                let content = try? checkedNativeValue({ session.retainedConfig($0) }), let metadata = try? checkedNativeValue({ session.retainedMetadata($0) }),
                var retained = try? JSONDecoder().decode(TunnelStartOptions.self, from: Data(metadata.utf8)) {
+                try store.checkRecoveryDNS(content)
                 retained.configContent = content; retained.experimentJSON = nil
                 return retained
             }

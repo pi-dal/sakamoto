@@ -19,11 +19,14 @@ import (
 	"github.com/pi-dal/sakamoto/internal/config"
 	"github.com/pi-dal/sakamoto/internal/experiment"
 	"github.com/pi-dal/sakamoto/pkg/mobileconf"
+	"github.com/pi-dal/sakamoto/pkg/regionaldns"
 )
 
 // ---------------- Main generation pipeline ----------------
 
 type Options struct {
+	// Preflight profile used by mobile before it applies device-specific DNS to the generated base.
+	RegionalPreflight *regionaldns.Profile
 	Context           context.Context
 	RequireNodes      bool // recovery must not replace proxy routing with an empty placeholder
 	ConfPath          string
@@ -91,7 +94,11 @@ func Run(o Options) error {
 	if transport == nil {
 		transport = http.DefaultTransport
 	}
-	client.Transport = contextTransport{ctx, transport}
+	regional := cfg.RegionalDNS
+	if o.RegionalPreflight != nil {
+		regional = *o.RegionalPreflight
+	}
+	client.Transport = contextTransport{ctx: ctx, base: transport, regional: regional}
 	hc = &client
 
 	p, err := parseConf(o.ConfPath, hc)
@@ -139,6 +146,18 @@ func Run(o Options) error {
 		}
 	}
 	dns := buildDNS(p, cfg, nodes, exitTag, ts)
+	if regional.Domains != "" {
+		if err := regional.ValidateResolverServers(dns.servers); err != nil {
+			return err
+		}
+		raw, err := json.Marshal(outbounds)
+		if err != nil {
+			return err
+		}
+		if err = regional.ValidateOutbounds(raw); err != nil {
+			return err
+		}
+	}
 
 	// 7) route + tun
 	routeRules := []map[string]any{
@@ -291,6 +310,10 @@ func Run(o Options) error {
 		if err = experiment.WriteLiveRules(out, learned.Domains); err != nil {
 			return err
 		}
+	}
+	b, err = regionaldns.Apply(b, cfg.RegionalDNS, cfg.DNSGuard.LocalDomains)
+	if err != nil {
+		return err
 	}
 	cfgPath := filepath.Join(out, "config.json")
 	if err := os.WriteFile(cfgPath, b, 0o600); err != nil {

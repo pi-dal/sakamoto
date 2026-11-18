@@ -8,15 +8,61 @@ import (
     "net/http"
     "regexp"
     "strconv"
+    "strings"
     "time"
 
+    "github.com/pi-dal/sakamoto/pkg/regionaldns"
     "github.com/sagernet/sing-box/adapter"
+    "github.com/sagernet/sing-box/option"
     C "github.com/sagernet/sing-box/constant"
     M "github.com/sagernet/sing/common/metadata"
     "github.com/sagernet/sing/common/ntp"
 )
 
 var automaticOriginDomain = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$`)
+
+// Bind the protected names to this core instance before it can open sockets.
+// Attach-only instances have no validated configuration and cannot run probes.
+type regionalProbePolicy struct { profile regionaldns.Profile }
+
+func newRegionalProbePolicy(dns *option.DNSOptions, outbounds []option.Outbound, endpoints []option.Endpoint) (*regionalProbePolicy, error) {
+    policy := new(regionalProbePolicy)
+    if dns == nil { return policy, nil }
+    var protected []string
+    for _, rule := range dns.Rules {
+        r := rule.DefaultOptions
+        if r.Action == C.RuleActionTypeEvaluate && r.EvaluateOptions.Server == regionaldns.ResolverTag {
+            protected = append(protected, r.Domain...)
+        }
+    }
+    if len(protected) == 0 { return policy, nil }
+    policy.profile.Domains = strings.Join(protected, ",")
+    if err := policy.profile.ValidateLatencyURL(""); err != nil { return nil, err }
+    for _, endpoint := range endpoints {
+        if wg, ok := endpoint.Options.(*option.WireGuardEndpointOptions); ok {
+            for _, peer := range wg.Peers {
+                if err := policy.profile.ValidateProxyHost(peer.Address); err != nil { return nil, err }
+            }
+        }
+    }
+    for _, outbound := range outbounds {
+        if hy, ok := outbound.Options.(*option.Hysteria2OutboundOptions); ok && hy.Realm != nil {
+            if err := policy.profile.ValidateRealm(hy.Realm.ServerURL, hy.Realm.STUNServers); err != nil { return nil, err }
+        }
+        if address, ok := outbound.Options.(option.ServerOptionsWrapper); ok {
+            if err := policy.profile.ValidateProxyHost(address.TakeServerOptions().Server); err != nil { return nil, err }
+        }
+        if group, ok := outbound.Options.(*option.URLTestOutboundOptions); ok {
+            if err := policy.profile.ValidateLatencyURL(group.URL); err != nil { return nil, err }
+        }
+    }
+    for _, server := range dns.Servers {
+        if address, ok := server.Options.(interface { TakeServerOptions() option.ServerOptions }); ok {
+            if err := policy.profile.ValidateResolverHost(address.TakeServerOptions().Server); err != nil { return nil, err }
+        }
+    }
+    return policy, nil
+}
 
 // ProbeAutomaticOrigin uses the running core's protected sockets and DNS.
 // An empty outbound checks the ordinary router after the inline slot update.
@@ -31,6 +77,9 @@ func (s *StartedService) ProbeAutomaticOrigin(domain string, port int32, outboun
     valid := !s.closed && instance != nil && s.serviceStatus.Status == ServiceStatus_STARTED && expectedInstanceID != 0 && s.startedAt.UnixNano() == expectedInstanceID
     s.serviceAccess.RUnlock()
     if !valid { return 0, fmt.Errorf("core changed or stopped") }
+    if instance.regionalProbePolicy == nil || instance.regionalProbePolicy.profile.ProtectsHost(domain) {
+        return 0, fmt.Errorf("origin is ineligible for automatic probing")
+    }
     if timeoutMillis < 1 || timeoutMillis > 8000 { return 0, fmt.Errorf("invalid origin deadline") }
     ctx, cancel := context.WithTimeout(instance.ctx, time.Duration(timeoutMillis)*time.Millisecond)
     defer cancel()

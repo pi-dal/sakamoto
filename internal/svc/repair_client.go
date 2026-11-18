@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -24,6 +25,13 @@ var ErrSupervisorUnavailable = errors.New("supervisor unavailable")
 func RepairAt(ctx context.Context, cfgPath string, options RepairOptions) (RepairResult, error) {
 	if err := options.Validate(); err != nil {
 		return RepairResult{State: "failed", Action: "none", Problem: "invalid_options", Detail: err.Error()}, err
+	}
+	if !options.Fallback && !options.Regenerate {
+		if cfg, e := config.Load(cfgPath); e == nil {
+			if e = RequireRegionalDNS(cfg, cfgPath); e != nil {
+				return RepairResult{State: "failed", Action: "none", Stage: "check", Problem: "service_upgrade_required", Detail: e.Error()}, e
+			}
+		}
 	}
 	if options.Fallback || options.Regenerate {
 		infoCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
@@ -44,6 +52,10 @@ func RepairAt(ctx context.Context, cfgPath string, options RepairOptions) (Repai
 			if capability == configRepairCapability {
 				available = true
 			}
+		}
+		if cfg, err := config.Load(cfgPath); err == nil && NeedsRegionalDNSService(cfg, cfgPath) && !slices.Contains(info.Capabilities, RegionalDNSCapability) {
+			result := RepairResult{State: "failed", Action: "none", Stage: "prepare", Problem: "service_upgrade_required", UpgradeRequired: true, Detail: "update the background service before applying regional DNS"}
+			return result, errors.New(result.Detail)
 		}
 		if options.Regenerate {
 			if cfg, err := config.Load(cfgPath); err == nil && cfg.ChainEnabled && (cfg.ChainExit != "" || cfg.SocksExit != "") && !chainAvailable {

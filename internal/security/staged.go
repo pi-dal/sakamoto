@@ -188,6 +188,9 @@ func ConnectWithPending(path string) (string, bool, error) {
 	}
 	socketPath := filepath.Join(filepath.Dir(path), svc.SockName)
 	send := func(command string) (string, error) { return svc.SendTo(socketPath, command) }
+	if err := svc.RequireRegionalDNS(currentCfg, path); err != nil {
+		return "", false, err
+	}
 	if currentCfg.DNSGuard.Enabled {
 		reply, err := send("capabilities")
 		if err != nil {

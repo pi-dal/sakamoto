@@ -20,6 +20,7 @@ import (
 	"github.com/pi-dal/sakamoto/internal/gen"
 	"github.com/pi-dal/sakamoto/internal/recovery"
 	"github.com/pi-dal/sakamoto/internal/restorepoint"
+	"github.com/pi-dal/sakamoto/pkg/regionaldns"
 	"gopkg.in/yaml.v3"
 )
 
@@ -27,6 +28,7 @@ const configRepairCapability = "configuration-repair-v1"
 
 // ChainExitCapability confirms the supervisor honors explicit protocol-independent exits.
 const ChainExitCapability = "generic-chain-exit-v1"
+const RegionalDNSCapability = "regional-dns-v6"
 
 type repairFailure struct {
 	problem string
@@ -165,6 +167,9 @@ func (s *Server) prepareConfiguration(ctx context.Context, options RepairOptions
 	if options.Fallback {
 		p.point, err = restorepoint.Load(s.workDir)
 		if err != nil {
+			return p, repairIssue("fallback_unavailable", err)
+		}
+		if err = checkRetainedRegionalDNS(s.workDir, p.point.Dir); err != nil {
 			return p, repairIssue("fallback_unavailable", err)
 		}
 		if err = checkConfigurationPair(filepath.Join(p.point.Dir, "sakamoto.yaml"), filepath.Join(p.point.Dir, "config.json")); err != nil {
@@ -361,6 +366,24 @@ func checkNativeConfiguration(ctx context.Context, binary, dir, path string) err
 	}
 	return nil
 }
+
+// A verified snapshot can still carry an authorization revoked since it was captured.
+func checkRetainedRegionalDNS(currentDir, retainedDir string) error {
+	raw, err := os.ReadFile(filepath.Join(retainedDir, "config.json"))
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load(filepath.Join(currentDir, "sakamoto.yaml"))
+	if err != nil {
+		// Preserve offline recovery of damaged ordinary configurations. Only an explicit valid sidecar can authorize a regional relay.
+		cfg = config.Default()
+		if current, e := os.ReadFile(filepath.Join(currentDir, "config.json")); e == nil && json.Valid(current) && regionaldns.Verify(current, cfg.RegionalDNS, nil) != nil {
+			return errors.New("repair the current regional DNS authorization before restoring a snapshot")
+		}
+	}
+	return regionaldns.Verify(raw, cfg.RegionalDNS, cfg.DNSGuard.LocalDomains)
+}
+
 func checkConfigurationPair(sidecar, core string) error {
 	cfg, err := config.Load(sidecar)
 	if err != nil {
@@ -371,6 +394,9 @@ func checkConfigurationPair(sidecar, core string) error {
 	}
 	raw, err := os.ReadFile(core)
 	if err != nil {
+		return err
+	}
+	if err = regionaldns.Verify(raw, cfg.RegionalDNS, cfg.DNSGuard.LocalDomains); err != nil {
 		return err
 	}
 	var doc struct {
