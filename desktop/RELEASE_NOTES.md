@@ -1,3 +1,7 @@
+# Desktop 0.2.29
+
+On macOS, **Settings** in the menu bar panel opens a separate window. You can also press **Command–comma** while the panel has focus or choose **Settings** from the tray context menu.
+
 # Desktop 0.2.28
 
 - Settings opens from the tray menu after the menu closes. The Settings gear and tray menu both open the Settings page, including after using a source editor.

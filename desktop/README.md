@@ -136,6 +136,10 @@ events. Leaving it, hiding the panel or losing its stream clears live rows;
 reopening reads a fresh snapshot. Inspecting connections never closes them.
 See [protocol handling and repeatable verification](../docs/desktop-connections.md).
 
+On macOS, click **Settings** in the menu bar panel, press **Command–comma**
+while the panel has focus, or choose **Settings** from the tray’s context menu.
+Settings opens in its own window.
+
 Settings includes System/Light/Dark appearance, opt-in login startup and a
 configuration editor. The editor exposes the persistent TUI settings grouped as
 Network, DNS, Traffic policy, Privacy, Local proxy, Advanced, Cloud sync and
@@ -215,7 +219,7 @@ Artifacts under `dist/menubar-verification/` include:
 - `controls-view-e2e.json`, `settings-*.png`: routing/group keyboard choices, appearance persistence, login switching, search clearing, popup themes and opaque Radix backgrounds.
 - `panel-workflow.json`, `panel-*.png`: shared event workflow and renders.
 - `shared-external-*.png`: Unicode/long-name and external ownership renders.
-- `native-app.json`, `macos-*.png` or `desktop-*.png`: packaged demo lifecycle/capture provenance.
+- `native-app.json`, `macos-*.png` or `desktop-*.png`: packaged demo lifecycle and screenshots. The macOS receipt includes AppKit click and keyboard checks for opening Settings, editing configuration and returning to the tray panel.
 
 Native verification always requires `--demo`. macOS tries system window capture
 first, then records a content-only fallback when the current session cannot

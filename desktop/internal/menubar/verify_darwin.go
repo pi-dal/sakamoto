@@ -17,8 +17,7 @@ import (
 	"github.com/egoist/mygo"
 )
 
-// verify captures the actual packaged NSPopover, using only the demo backend.
-// View event sequences are covered separately by the panel workflow test.
+// verify exercises AppKit input and captures the packaged demo windows.
 func (a *application) verify() {
 	receipt := map[string]any{"schema": 1, "passed": false, "demo": true, "usesRealTUN": false, "arch": runtime.GOARCH, "goVersion": runtime.Version(), "captures": []string{}}
 	if err := os.MkdirAll(a.opts.VerifyDirectory, 0o755); err != nil {
@@ -32,6 +31,12 @@ func (a *application) verify() {
 		}
 		mygo.App.Quit()
 	}()
+	pointer, err := a.verifySettingsClick()
+	receipt["appKitSettingsPointer"] = pointer
+	if err != nil {
+		receipt["error"] = err.Error()
+		return
+	}
 	for _, capture := range []struct {
 		name          string
 		theme         mygo.ThemeSource
@@ -61,13 +66,14 @@ func (a *application) verify() {
 			a.panel.setConnections(capture.connections)
 			a.panel.configuration = false
 			a.panel.configReturnSettings = false
+			a.panel.settings = capture.settings
 			if capture.configuration {
+				a.panel.settings = true
 				a.panel.openConfiguration()
 			}
-			a.panel.settings = capture.settings
 			a.panel.recovery = capture.recovery
 			a.panel.confirmRestart = capture.confirm
-			a.show()
+			a.showWindow(capture.settings || capture.configuration)
 		})
 		time.Sleep(400 * time.Millisecond)
 		var number uintptr
@@ -81,7 +87,7 @@ func (a *application) verify() {
 			}
 		})
 		if number == 0 {
-			receipt["error"] = "native popover did not produce a window"
+			receipt["error"] = "AppKit did not produce a window"
 			return
 		}
 		target := filepath.Join(a.opts.VerifyDirectory, capture.name)

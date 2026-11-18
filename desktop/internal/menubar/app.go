@@ -29,6 +29,7 @@ type application struct {
 	backend      Backend
 	panel        *Panel
 	window       *mygo.Window
+	settingsHost bool
 	tray         *mygo.Tray
 	menuState    string
 	trackingMenu bool
@@ -106,11 +107,19 @@ func (a *application) ready() error {
 	}
 	mygo.Theme.SetSource(mygo.ThemeSource(strings.ToLower(appearance)))
 	var tui, recovery, updateService func() error
+	var settings, home func()
 	if runtime.GOOS == "darwin" {
 		tui, recovery, updateService = a.openTUI, a.openRecovery, a.updateService
+		settings = func() { a.navigateLater("settings") }
+		home = func() {
+			if a.settingsHost {
+				a.navigateLater("home")
+			}
+		}
 	}
 	a.panel = NewPanel(a.backend, Actions{
-		Dispatch: a.dispatchAction, OpenTUI: tui, OpenRecovery: recovery, UpdateService: updateService, RevealConfig: a.revealConfig,
+		Dispatch: a.dispatchAction, OpenSettings: settings, ReturnHome: home,
+		OpenTUI: tui, OpenRecovery: recovery, UpdateService: updateService, RevealConfig: a.revealConfig,
 		SetAppearance: a.setAppearance, SetLogin: mygo.App.SetOpenAtLogin, Quit: mygo.App.Quit,
 		Appearance: appearance, OpenAtLogin: login, Demo: a.opts.Demo,
 	})
@@ -142,7 +151,9 @@ func (a *application) ready() error {
 	return nil
 }
 
-func (a *application) show() {
+func (a *application) show() { a.showWindow(false) }
+
+func (a *application) showWindow(settings bool) {
 	a.backend.SetVisible(true)
 	a.panel.Refresh()
 	if a.window != nil {
@@ -155,7 +166,10 @@ func (a *application) show() {
 	// creates a new engine when reopened, so it needs fresh scroll state.
 	a.panel.list = ui.ListState{}
 	a.panel.connectionList = ui.ListState{}
-	if a.tray == nil {
+	a.settingsHost = settings
+	if settings {
+		a.window = mygo.NewWindow(mygo.WindowOptions{Title: "sakamoto Settings", Width: PanelWidth, Height: PanelHeight, UseContentSize: true, DisableResize: true, Content: ui.View(a.panel.View)})
+	} else if a.tray == nil {
 		a.window = mygo.NewWindow(mygo.WindowOptions{Title: "Sakamoto", Width: PanelWidth, Height: PanelHeight, DisableResize: true, Content: ui.View(a.panel.View)})
 	} else {
 		a.window = mygo.NewFlyout(mygo.FlyoutOptions{
@@ -173,6 +187,10 @@ func (a *application) show() {
 		a.panel.confirmRestart = false
 		a.panel.confirmConfig = ""
 		a.window = nil
+		if a.settingsHost {
+			a.panel.showPage("home")
+		}
+		a.settingsHost = false
 		a.backend.SetVisible(false)
 		a.panel.Refresh()
 		if a.tray == nil && a.opts.VerifyDirectory == "" {
@@ -181,6 +199,10 @@ func (a *application) show() {
 	})
 }
 func (a *application) toggle() {
+	if a.settingsHost {
+		a.openMenuPage("home")
+		return
+	}
 	if a.window != nil {
 		a.window.Close()
 	} else {
@@ -248,13 +270,26 @@ func (a *application) syncMenu() {
 	}
 }
 
+func (a *application) navigateLater(page string) {
+	// Window replacement must run after MyGo finishes the click's render pass.
+	go mygo.RunOnMain(func() {
+		if a.ctx.Err() == nil {
+			a.openMenuPage(page)
+		}
+	})
+}
+
 func (a *application) openMenuPage(page string) {
 	if a.trackingMenu {
 		a.menuPage = &page
 		return
 	}
+	settings := runtime.GOOS == "darwin" && a.tray != nil && page == "settings"
+	if a.window != nil && a.settingsHost != settings {
+		a.window.Close()
+	}
 	a.panel.showPage(page)
-	a.show()
+	a.showWindow(settings)
 }
 
 func (a *application) menu() *mygo.Menu {

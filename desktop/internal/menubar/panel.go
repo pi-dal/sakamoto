@@ -48,6 +48,8 @@ type Backend interface {
 
 type Actions struct {
 	Dispatch      func(func(context.Context) error)
+	OpenSettings  func()
+	ReturnHome    func()
 	OpenTUI       func() error
 	OpenRecovery  func() error
 	UpdateService func() error
@@ -175,7 +177,18 @@ func (p *Panel) showPage(page string) {
 	p.localNotice = ""
 }
 
+func (p *Panel) openSettings() {
+	if p.actions.OpenSettings != nil {
+		p.actions.OpenSettings()
+		return
+	}
+	p.showPage("settings")
+}
+
 func (p *Panel) View(c *ui.Context) {
+	if p.actions.OpenSettings != nil {
+		c.OnShortcut(ui.Super, ui.KeyComma, p.openSettings)
+	}
 	c.SetTheme(radixTheme(c.Theme().Dark))
 	t := c.Theme()
 	c.Root().Background(t.Background)
@@ -215,6 +228,9 @@ func (p *Panel) header(c *ui.Context) {
 					return
 				}
 				returnToSettings := p.configuration && p.configReturnSettings
+				if !returnToSettings && p.actions.ReturnHome != nil {
+					p.actions.ReturnHome()
+				}
 				p.settings = returnToSettings
 				p.setConnections(false)
 				p.configuration = false
@@ -246,7 +262,7 @@ func (p *Panel) header(c *ui.Context) {
 		}
 		if !p.settings && !p.recovery && !p.connections && !p.configuration && p.managementPage == "" {
 			panelButton(c, "Connections", components.ButtonGhost, false).Padding(4, 8).OnClick(func() { p.setConnections(true) })
-			panelIconButton(c.Key("open-settings"), lucide.Settings(), "Settings", false).OnClick(func() { p.showPage("settings") })
+			panelButton(c.Key("open-settings"), "Settings", components.ButtonGhost, false).Padding(4, 8).OnClick(p.openSettings)
 		}
 	})
 }
