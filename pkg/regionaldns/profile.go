@@ -339,7 +339,7 @@ func Apply(raw []byte, p Profile, private []string) ([]byte, error) {
 				}
 			}
 		}
-		if r["action"] == "reject" && !(r["match_response"] == true && r["ip_is_private"] == true) {
+		if r["action"] == "reject" && (r["match_response"] != true || r["ip_is_private"] != true) {
 			return nil, errors.New("regional DNS conflicts with DNS rejection policy")
 		}
 		if r["rule_set"] != nil {

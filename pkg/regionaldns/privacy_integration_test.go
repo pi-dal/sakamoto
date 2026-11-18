@@ -36,7 +36,7 @@ func TestResolverIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer upstream.Close()
+	defer func() { _ = upstream.Close() }()
 	var forbidden, controls atomic.Int32
 	go func() {
 		buf := make([]byte, 2048)
@@ -65,7 +65,9 @@ func TestResolverIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	port := socket.Addr().(*net.TCPAddr).Port
-	socket.Close()
+	if err := socket.Close(); err != nil {
+		t.Fatal(err)
+	}
 	outbound := map[string]any{"type": "trojan", "tag": "Approved", "server": "192.0.2.10", "server_port": 443, "password": "fixture", "tls": map[string]any{"enabled": true, "server_name": "relay.example"}}
 	root := map[string]any{"inbounds": []any{map[string]any{"type": "direct", "tag": "dns-in", "listen": "127.0.0.1", "listen_port": port}}, "route": map[string]any{"rules": []any{map[string]any{"inbound": "dns-in", "action": "hijack-dns"}}}, "outbounds": []any{outbound}, "dns": map[string]any{"servers": []any{map[string]any{"type": "udp", "tag": "normal", "server": "127.0.0.1", "server_port": upstream.LocalAddr().(*net.UDPAddr).Port}}, "final": "normal"}}
 	mixed, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -74,7 +76,9 @@ func TestResolverIsolation(t *testing.T) {
 	}
 	mixedAddr := mixed.Addr().String()
 	mixedPort := mixed.Addr().(*net.TCPAddr).Port
-	mixed.Close()
+	if err := mixed.Close(); err != nil {
+		t.Fatal(err)
+	}
 	root["inbounds"] = append(root["inbounds"].([]any), map[string]any{"type": "mixed", "listen": "127.0.0.1", "listen_port": mixedPort})
 	root["outbounds"] = append(root["outbounds"].([]any), map[string]any{"tag": "direct", "type": "direct"})
 	route := root["route"].(map[string]any)
@@ -166,7 +170,9 @@ func TestResolverIsolation(t *testing.T) {
 		t.Fatal(e)
 	}
 	relayPort := relaySocket.Addr().(*net.TCPAddr).Port
-	relaySocket.Close()
+	if err := relaySocket.Close(); err != nil {
+		t.Fatal(err)
+	}
 	relayConfig := map[string]any{"inbounds": []any{map[string]any{"type": "trojan", "listen": "127.0.0.1", "listen_port": relayPort, "users": []any{map[string]any{"password": "fixture"}}, "tls": map[string]any{"enabled": true, "certificate": cert, "key": string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyBytes}))}}}, "outbounds": []any{map[string]any{"type": "direct"}}}
 	relayRaw, _ := json.Marshal(relayConfig)
 	relayPath := filepath.Join(dir, "relay.json")
@@ -187,7 +193,7 @@ func TestResolverIsolation(t *testing.T) {
 	for {
 		readiness, e := net.DialTimeout("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(relayPort)), 200*time.Millisecond)
 		if e == nil {
-			readiness.Close()
+			_ = readiness.Close()
 			break
 		}
 		if time.Now().After(relayDeadline) {
@@ -209,7 +215,7 @@ func TestResolverIsolation(t *testing.T) {
 			r["ip_cidr"] = []string{"10.0.0.0/8"}
 		}
 	}
-	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "direct fixture") }))
+	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "direct fixture") }))
 	defer app.Close()
 	data, _ := json.Marshal(root)
 	path := filepath.Join(dir, "fixture.json")
@@ -250,7 +256,7 @@ func TestResolverIsolation(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	_ = conn.SetDeadline(time.Now().Add(4 * time.Second))
 	_, _ = conn.Write(packet)
 	buf := make([]byte, 2048)
@@ -270,14 +276,14 @@ func TestResolverIsolation(t *testing.T) {
 		t.Fatal("SOCKS domain dial did not reach direct application")
 	}
 	body, err := io.ReadAll(response.Body)
-	response.Body.Close()
+	_ = response.Body.Close()
 	if err != nil || string(body) != "direct fixture" || resolveCount.Load() < 2 {
 		t.Fatal("SOCKS domain dial did not use approved DNS")
 	}
 	checkFailure := func(stage string) {
 		t.Helper()
 		if r, e := httpClient.Get(target); e == nil {
-			r.Body.Close()
+			_ = r.Body.Close()
 			t.Fatalf("SOCKS succeeded during %s", stage)
 		}
 		probe, stop := context.WithTimeout(ctx, 4*time.Second)
@@ -290,7 +296,7 @@ func TestResolverIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal("absolute DNS name bypassed approved resolution")
 	}
-	dotted.Body.Close()
+	_ = dotted.Body.Close()
 	refuseTLS.Store(true)
 	doh.CloseClientConnections()
 	checkFailure("TLS failure")
