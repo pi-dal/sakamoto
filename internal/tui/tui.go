@@ -131,6 +131,7 @@ type model struct {
 	aboutScroll                                     int
 	sourceCursor, nodeCursor                        int
 	pendingDelete                                   string
+	nodeEditor                                      *nodeEditor
 	editNode                                        gen.NodeEntry
 	revealInput                                     bool
 	editing, input                                  string

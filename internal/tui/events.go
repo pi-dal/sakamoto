@@ -231,6 +231,10 @@ func (m *model) onKey(v tea.KeyMsg) tea.Cmd {
 	if m.configForm {
 		return m.handleConfigFormInput(v)
 	}
+	if m.nodeEditor != nil {
+		m.handleNodeFields(v)
+		return nil
+	}
 	if m.importing {
 		return m.handleImportInput(v)
 	}
@@ -270,6 +274,8 @@ func (m *model) onKey(v tea.KeyMsg) tea.Cmd {
 			m.cfgCursor = min(len(m.cfgRows)-1, m.cfgCursor+1)
 		case configPage:
 			switch m.configDetail {
+			case sourcesSection:
+				m.moveSourceNode(1)
 			case 2:
 				m.groupCursor = min(len(automaticGroupTags)-1, m.groupCursor+1)
 			case policySection:
@@ -288,6 +294,8 @@ func (m *model) onKey(v tea.KeyMsg) tea.Cmd {
 			m.cfgCursor = max(0, m.cfgCursor-1)
 		case configPage:
 			switch m.configDetail {
+			case sourcesSection:
+				m.moveSourceNode(-1)
 			case 2:
 				m.groupCursor = max(0, m.groupCursor-1)
 			case policySection:
@@ -306,6 +314,8 @@ func (m *model) onKey(v tea.KeyMsg) tea.Cmd {
 			return m.selectCurrent()
 		case configPage:
 			switch m.configDetail {
+			case sourcesSection:
+				m.beginNodeEdit()
 			case 2:
 				m.editAutomaticGroup(m.groupCursor)
 			case policySection:
@@ -316,6 +326,10 @@ func (m *model) onKey(v tea.KeyMsg) tea.Cmd {
 		case aboutPage:
 			m.aboutCopyright = !m.aboutCopyright
 			m.aboutScroll = 0
+		}
+	case "s":
+		if m.page == configPage {
+			m.configDetail, m.detailScroll = sourcesSection, 0
 		}
 	case "p":
 		if m.page == configPage {
@@ -348,13 +362,17 @@ func (m *model) onKey(v tea.KeyMsg) tea.Cmd {
 			m.notice = "Add a node share link"
 		}
 	case "d":
-		if m.page == configPage && m.configDetail == 3 {
+		if m.page == configPage && m.configDetail == sourcesSection {
 			return m.deleteSelectedNode()
 		}
 		if m.page == configPage && m.configDetail == policySection {
 			return m.deletePolicyRule()
 		}
 	case "e":
+		if m.page == configPage && m.configDetail == sourcesSection {
+			m.beginNodeEdit()
+			return nil
+		}
 		if m.page == configPage && m.configDetail == policySection {
 			m.beginPolicyEdit(m.policyCursor)
 			return nil

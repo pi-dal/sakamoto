@@ -164,6 +164,17 @@ func (p *Panel) local(action func() error) {
 	}
 }
 
+func (p *Panel) showPage(page string) {
+	p.setConnections(false)
+	p.settings = page == "settings"
+	p.recovery = page == "repair"
+	p.configuration = false
+	p.configReturnSettings = false
+	p.managementPage, p.managementEditor = "", ""
+	p.confirmRestart, p.confirmConfig = false, ""
+	p.localNotice = ""
+}
+
 func (p *Panel) View(c *ui.Context) {
 	c.SetTheme(radixTheme(c.Theme().Dark))
 	t := c.Theme()
@@ -235,7 +246,7 @@ func (p *Panel) header(c *ui.Context) {
 		}
 		if !p.settings && !p.recovery && !p.connections && !p.configuration && p.managementPage == "" {
 			panelButton(c, "Connections", components.ButtonGhost, false).Padding(4, 8).OnClick(func() { p.setConnections(true) })
-			panelIconButton(c, lucide.Settings(), "Settings", false).OnClick(func() { p.settings = true })
+			panelIconButton(c.Key("open-settings"), lucide.Settings(), "Settings", false).OnClick(func() { p.showPage("settings") })
 		}
 	})
 }

@@ -24,15 +24,17 @@ type AppOptions struct {
 }
 
 type application struct {
-	ctx       context.Context
-	cancel    context.CancelFunc
-	backend   Backend
-	panel     *Panel
-	window    *mygo.Window
-	tray      *mygo.Tray
-	menuState string
-	prefsPath string
-	opts      AppOptions
+	ctx          context.Context
+	cancel       context.CancelFunc
+	backend      Backend
+	panel        *Panel
+	window       *mygo.Window
+	tray         *mygo.Tray
+	menuState    string
+	trackingMenu bool
+	menuPage     *string
+	prefsPath    string
+	opts         AppOptions
 }
 
 // Run starts a menu bar client. It never installs services or auto-connects.
@@ -246,35 +248,26 @@ func (a *application) syncMenu() {
 	}
 }
 
+func (a *application) openMenuPage(page string) {
+	if a.trackingMenu {
+		a.menuPage = &page
+		return
+	}
+	a.panel.showPage(page)
+	a.show()
+}
+
 func (a *application) menu() *mygo.Menu {
 	return mygo.NewMenu([]*mygo.MenuItem{
 		{Label: "Open Sakamoto", Click: func(*mygo.MenuItem, *mygo.Window) {
-			a.panel.setConnections(false)
-			a.panel.settings = false
-			a.panel.configuration = false
-			a.panel.recovery = false
-			a.panel.confirmRestart = false
-			a.panel.confirmConfig = ""
-			a.show()
+			a.openMenuPage("home")
 		}},
 		{Label: "Check & repair…", Click: func(*mygo.MenuItem, *mygo.Window) {
-			a.panel.setConnections(false)
-			a.panel.settings = false
-			a.panel.configuration = false
-			a.panel.recovery = true
-			a.panel.confirmRestart = false
-			a.panel.confirmConfig = ""
-			a.show()
+			a.openMenuPage("repair")
 		}},
 		mygo.Separator(),
 		{Label: "Settings…", Click: func(*mygo.MenuItem, *mygo.Window) {
-			a.panel.setConnections(false)
-			a.panel.recovery = false
-			a.panel.configuration = false
-			a.panel.settings = true
-			a.panel.confirmRestart = false
-			a.panel.confirmConfig = ""
-			a.show()
+			a.openMenuPage("settings")
 		}},
 		{Role: mygo.RoleQuit, Label: "Quit Sakamoto"},
 	})
@@ -284,10 +277,17 @@ func (a *application) contextMenu() {
 	if a.window != nil {
 		a.window.Close()
 	}
-	menu := a.menu()
-	a.tray.SetMenu(menu)
-	defer a.tray.SetMenu(nil)
+	// Native menu callbacks run inside menu tracking. Open the flyout only
+	// after the tray button is released so AppKit does not dismiss it.
+	a.trackingMenu = true
+	a.tray.SetMenu(a.menu())
 	a.tray.PopUpMenu()
+	a.tray.SetMenu(nil)
+	a.trackingMenu = false
+	if page := a.menuPage; page != nil {
+		a.menuPage = nil
+		a.openMenuPage(*page)
+	}
 }
 
 func validAppearance(value string) bool {

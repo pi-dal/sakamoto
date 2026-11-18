@@ -20,11 +20,15 @@ import (
 )
 
 func (m *model) scrollBy(n int) {
-	if m.policyEditing || m.importing || m.editIndex >= 0 || m.formEditing {
+	if m.policyEditing || m.importing || m.nodeEditor != nil || m.editIndex >= 0 || m.formEditing {
 		return
 	}
 	if m.page == configPage && m.configDetail == 2 {
 		m.groupCursor = max(0, min(len(automaticGroupTags)-1, m.groupCursor+n))
+		return
+	}
+	if m.page == configPage && m.configDetail == sourcesSection {
+		m.moveSourceNode(n)
 		return
 	}
 	if m.page == configPage && m.configDetail == policySection {
@@ -81,6 +85,10 @@ func (m *model) click(x, y int) tea.Cmd {
 	}
 	if m.configForm {
 		return m.clickConfigForm(x, y)
+	}
+	if m.nodeEditor != nil {
+		m.clickNodeFields(x, y)
+		return nil
 	}
 	if m.importing {
 		return m.clickImportForm(x, y)
@@ -185,7 +193,7 @@ func (m *model) click(x, y int) tea.Cmd {
 	return nil
 }
 func (m *model) rightClick(x, y int) {
-	if m.page != homePage || m.policyEditing || m.configForm || m.importing || m.editIndex >= 0 {
+	if m.page != homePage || m.nodeEditor != nil || m.policyEditing || m.configForm || m.importing || m.editIndex >= 0 {
 		return
 	}
 	for _, h := range m.hits {
@@ -268,6 +276,10 @@ func (m *model) handleImportInput(k tea.KeyMsg) tea.Cmd {
 	case "enter":
 		source := strings.TrimSpace(m.input)
 		if m.importKind == "node-edit" {
+			if source == "" {
+				m.notice = "Paste a node share link before saving"
+				return nil
+			}
 			if err := gen.ChangeNode(m.cfg.NodesFile, m.editNode.Line, m.editNode.Raw, source); err != nil {
 				m.notice = "Edit failed: " + err.Error()
 				return nil
@@ -362,23 +374,6 @@ func splitNonEmpty(s, sep string) []string {
 		}
 	}
 	return out
-}
-func (m *model) beginNodeEdit() {
-	entries, err := gen.ReadNodes(m.cfg.NodesFile)
-	if err != nil {
-		m.notice = "Could not read nodes: " + err.Error()
-		return
-	}
-	if m.nodeCursor >= len(entries) {
-		m.notice = "Select a node first"
-		return
-	}
-	m.editNode = entries[m.nodeCursor]
-	m.importing = true
-	m.importKind = "node-edit"
-	m.input = m.editNode.Raw
-	m.revealInput = false
-	m.notice = "Replace node link (hidden by default; Ctrl+U clears, Ctrl+R reveals)"
 }
 func (m *model) deleteSelectedNode() tea.Cmd {
 	entries, err := gen.ReadNodes(m.cfg.NodesFile)

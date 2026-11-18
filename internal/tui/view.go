@@ -590,6 +590,10 @@ func (m *model) sectionDetails(i int) []string {
 	}
 }
 func (m *model) renderConfig(b *strings.Builder, startY int) {
+	if m.nodeEditor != nil {
+		m.renderNodeFields(b, startY)
+		return
+	}
 	if m.configForm {
 		m.renderConfigForm(b, startY)
 		return
@@ -611,7 +615,7 @@ func (m *model) renderConfig(b *strings.Builder, startY int) {
 		m.renderAutomaticGroups(b, startY)
 		return
 	}
-	if m.configDetail == 3 {
+	if m.configDetail == sourcesSection {
 		m.renderSources(b, startY)
 		return
 	}
@@ -636,6 +640,9 @@ func (m *model) renderConfig(b *strings.Builder, startY int) {
 	// Primary actions stay visible at the supported minimum terminal size.
 	w.buttons(control{text: "[ Import config ]", action: "import"}, control{text: "[ Regenerate ]", action: "generate"}, control{text: "[ Edit settings ]", action: "edit-config"})
 	for i, name := range configSections {
+		if i == sourcesSection {
+			name += " [s]"
+		}
 		w.row("   "+name+"  ›", "section", i, false)
 	}
 	w.line(" Subscription sources")
@@ -663,8 +670,8 @@ func (m *model) renderImportForm(b *strings.Builder, startY int) {
 		title = "Add node"
 		hint = "Paste one share link; credentials stay hidden"
 	case "node-edit":
-		title = "Edit node"
-		hint = "Ctrl+U clears input; Ctrl+R briefly reveals it"
+		title = "Replace node share link"
+		hint = "Ctrl+U clears input. Ctrl+R toggles visibility."
 	case "subscription":
 		title = "Add subscription"
 		hint = "Format: name|HTTPS URL"
@@ -884,7 +891,7 @@ func (m *model) renderSources(b *strings.Builder, startY int) {
 			w.row(fmt.Sprintf("   %-17s %s", s.Name, redactURL(s.URL)), "source", i, i == m.sourceCursor)
 		}
 	}
-	w.line(" Manual nodes (select one, then use the buttons above)")
+	w.line(" Manual nodes  ·  ↑↓ select  ·  Enter edit")
 	entries, err := gen.ReadNodes(m.cfg.NodesFile)
 	if err != nil {
 		w.line("   Read failed: " + err.Error())
@@ -894,6 +901,7 @@ func (m *model) renderSources(b *strings.Builder, startY int) {
 		w.line("   No nodes")
 		return
 	}
+	m.nodeCursor = max(0, min(len(entries)-1, m.nodeCursor))
 	available := max(1, m.height-2-w.y())
 	m.detailScroll = min(max(0, m.detailScroll), max(0, len(entries)-available))
 	if m.nodeCursor < m.detailScroll {

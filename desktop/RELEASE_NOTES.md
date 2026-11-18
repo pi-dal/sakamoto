@@ -1,3 +1,8 @@
+# Desktop 0.2.28
+
+- Settings opens from the tray menu after the menu closes. The Settings gear and tray menu both open the Settings page, including after using a source editor.
+- The bundled macOS TUI can edit a manual node’s name, address and port without replacing its share link. Existing credentials and protocol settings are preserved.
+
 # Desktop 0.2.27
 
 Desktop Proxy groups now expose the existing automatic-group exclusion policy.
