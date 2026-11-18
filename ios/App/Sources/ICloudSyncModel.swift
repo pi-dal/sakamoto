@@ -35,8 +35,9 @@ final class ICloudSyncModel: ObservableObject {
     @Published private(set) var notice: String?
     /// Additional source paths as an editable single string (one per line).
     @Published var additionalPathsDraft: String = ""
-    @Published private(set) var directoryLabel = "sakamoto"
-    @Published private(set) var directoryLocation = "App iCloud folder"
+    @Published private(set) var directoryLabel = "Choose iCloud Drive folder"
+    @Published private(set) var directoryLocation = "No shared folder selected"
+    var hasSyncDirectory: Bool { selectedDirectory != nil }
     private static let bookmarkKey = "sakamoto.icloud.sync.directory.bookmark"
     private var selectedDirectory: URL?
 
@@ -95,25 +96,35 @@ final class ICloudSyncModel: ObservableObject {
         return dir.path
     }
 
-    func selectDirectory(_ url: URL) {
+    func selectDirectory(_ result: Result<URL, Error>) {
         guard !syncing else { return }
+        let url: URL
+        do { url = try result.get() }
+        catch {
+            let failure = error as NSError
+            if failure.domain == NSCocoaErrorDomain && failure.code == NSUserCancelledError { return }
+            notice = "Could not open the selected folder. Try choosing it again."
+            return
+        }
         let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        guard scoped else {
+            notice = "Cannot access this folder. Select the shared folder in iCloud Drive."
+            return
+        }
+        defer { url.stopAccessingSecurityScopedResource() }
         do {
             let bookmark = try url.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
             defaults.set(bookmark, forKey: Self.bookmarkKey)
             selectedDirectory = url
             directoryLabel = url.lastPathComponent
             directoryLocation = "Selected folder"
-            notice = "Folder selected. Choose the same sakamoto folder as the TUI iCloud directory."
+            status = settings.enabled ? .waitingFirstRun : .disabled
+            notice = "Folder selected. Use the same folder on your Mac and iPhone."
         } catch { notice = "Could not save access to this folder. Please select it again." }
     }
 
     func activate() {
-        Task {
-            try? await syncStore.updateSettings(settings)
-            status = await syncStore.currentStatus()
-        }
+        if settings.enabled && status == .disabled { status = .waitingFirstRun }
     }
 
     // MARK: Settings mutations (every consent change is explicit)
@@ -149,21 +160,19 @@ final class ICloudSyncModel: ObservableObject {
     }
 
     private func applySettings(_ transform: (inout ICloudSyncSettings) -> Void) {
+        guard !syncing else { return }
         var next = settings
         transform(&next)
+        guard next.additionalSourcePaths.allSatisfy(ICloudSyncPaths.isValidSourceName) else {
+            notice = "Use relative paths for supported source files."
+            return
+        }
         settings = next
         if let data = try? next.encoded() {
             defaults.set(data, forKey: Self.settingsKey)
         }
-        Task {
-            do {
-                try await syncStore.updateSettings(next)
-                notice = nil
-            } catch {
-                notice = ICloudSyncStore.describe(error)
-            }
-            status = await syncStore.currentStatus()
-        }
+        notice = nil
+        status = next.enabled ? .waitingFirstRun : .disabled
     }
 
     // MARK: Payload construction
@@ -194,34 +203,38 @@ final class ICloudSyncModel: ObservableObject {
             notice = "Sync is disabled — enable it first."
             return
         }
+        guard let directory = selectedDirectory else {
+            notice = "Choose the shared folder in iCloud Drive before syncing."
+            return
+        }
         store.ensureSourceProfile()
+        let passSettings = settings
         syncing = true
         notice = nil
         Task {
             defer { syncing = false }
-            let directory = selectedDirectory
-            if defaults.data(forKey: Self.bookmarkKey) != nil && directory == nil {
-                notice = "Please choose the TUI iCloud folder again to restore access."
+            guard directory.startAccessingSecurityScopedResource() else {
+                status = .unavailable("Cannot access the selected folder. Choose it again.")
                 return
             }
-            let scoped = directory?.startAccessingSecurityScopedResource() ?? false
-            guard directory == nil || scoped else {
-                notice = "Cannot access the selected folder. Please choose it again."
-                return
-            }
-            defer { if scoped { directory?.stopAccessingSecurityScopedResource() } }
+            defer { directory.stopAccessingSecurityScopedResource() }
+            do { try await syncStore.updateSettings(passSettings) }
+            catch { status = .failed(Date(), TunnelDiagnostics.sanitized(error.localizedDescription)); return }
             let nodesBefore = store.nodesSources
             let policyBefore = store.policy
             let importBefore = store.importedSource
             let profileBefore = store.selectedProfileID
             let sourceBefore = store.selectedProfile?.sourceBundleJSON
             let (payload, skipped) = buildPayload()
+            let sourcesAreCurrent: @MainActor @Sendable () -> Bool = { [store] in
+                store.nodesSources == nodesBefore && store.policy == policyBefore && store.importedSource == importBefore && store.selectedProfileID == profileBefore && store.selectedProfile?.sourceBundleJSON == sourceBefore
+            }
             let outcome = await syncStore.syncNow(
                 staging: payload.entries, directoryURL: directory,
                 downloadNames: ["nodes.txt", "policy.json", "subscriptions.json", AutomaticGroupSources.fileName],
                 sourceScope: profileBefore ?? "unassigned",
-                mainConf: settings.includesConf ? store.sourceBundle.mainConf : "",
-                discoverConf: settings.includesConf,
+                mainConf: passSettings.includesConf ? store.sourceBundle.mainConf : "",
+                discoverConf: passSettings.includesConf,
                 validateDownload: { name, data in
                     switch name {
                     case "nodes.txt":
@@ -235,21 +248,18 @@ final class ICloudSyncModel: ObservableObject {
                         }
                     }
                 },
-                sourcesAreCurrent: { @MainActor [store] in
-                    store.nodesSources == nodesBefore && store.policy == policyBefore && store.importedSource == importBefore && store.selectedProfileID == profileBefore && store.selectedProfile?.sourceBundleJSON == sourceBefore
+                sourcesAreCurrent: { await sourcesAreCurrent() },
+                adoptDownloads: { @MainActor [self] downloads, main in
+                    guard sourcesAreCurrent() else {
+                        throw ICloudSyncError.filesystem("local sources changed during sync. Retry after editing.")
+                    }
+                    try adopt(downloads, discoveredMain: main)
                 }
             )
             let effectiveSkipped = skipped.filter { name in !outcome.downloads.contains(where: { $0.name == name }) } + outcome.skipped
-            guard store.nodesSources == nodesBefore, store.policy == policyBefore, store.importedSource == importBefore,
-                  store.selectedProfileID == profileBefore, store.selectedProfile?.sourceBundleJSON == sourceBefore else {
-                notice = "Local sources changed during sync. Retry without editing; downloads were not adopted."
-                return
-            }
-            do { try adopt(outcome.downloads, discoveredMain: outcome.discoveredMainConf) }
-            catch { notice = "Downloaded sources could not be adopted: " + TunnelDiagnostics.sanitized(error.localizedDescription); return }
             status = outcome.status
-            if case .failed(_, let message) = outcome.status {
-                notice = message
+            if case .pending = outcome.status {
+                notice = nil
             } else if !effectiveSkipped.isEmpty {
                 notice = "Skipped: " + effectiveSkipped.joined(separator: "; ")
             } else {

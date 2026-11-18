@@ -90,6 +90,49 @@ final class NativePowerIntegrationTests: XCTestCase {
         add(attachment)
     }
 
+    func testMemoryReportKeepsTheNativeCoreRunning() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let setup = LibboxSetupOptions()
+        setup.basePath = root.path
+        setup.workingPath = root.path
+        setup.tempPath = root.path
+        setup.commandServerListenPort = try freePort()
+        setup.commandServerSecret = UUID().uuidString
+        setup.crashReportSource = "MemoryReportFixture"
+        var error: NSError?
+        LibboxSetup(setup, &error)
+        if let error { throw error }
+        defer { try? AppServiceSetup.apply() }
+        let platform = ObservationTestPlatform()
+        let server = try XCTUnwrap(LibboxNewCommandServer(platform, platform, &error))
+        if let error { throw error }
+        defer { try? server.closeService(); server.close() }
+        try server.start()
+        let config = #"{"outbounds":[{"type":"direct","tag":"direct"}],"route":{"final":"direct"}}"#
+        try server.startOrReloadService(config, options: LibboxOverrideOptions())
+        let instance = server.runningInstanceID()
+        XCTAssertGreaterThan(instance, 0)
+        let client = try XCTUnwrap(LibboxNewStandaloneCommandClient())
+        try client.triggerOOMReport()
+        XCTAssertTrue(server.isServiceRunning())
+        XCTAssertEqual(server.runningInstanceID(), instance)
+
+        let reports = try FileManager.default.contentsOfDirectory(at: root.appendingPathComponent("oom_reports"), includingPropertiesForKeys: nil)
+        let report = try XCTUnwrap(reports.first)
+        let files = try FileManager.default.contentsOfDirectory(at: report, includingPropertiesForKeys: [.fileSizeKey])
+        let kinds = ["allocs", "block", "goroutine", "heap", "mutex", "threadcreate"]
+        for kind in kinds {
+            let file = try XCTUnwrap(files.first { $0.lastPathComponent.hasSuffix(".\(kind).pb") })
+            let data = try Data(contentsOf: file)
+            XCTAssertEqual(Array(data.prefix(2)), [0x1f, 0x8b], "Expected a gzip-compressed pprof profile")
+        }
+        let evidence: [String: Any] = ["passed": true, "profiles": kinds, "core_instance": instance, "native_version": LibboxVersion(), "go_version": LibboxGoVersion()]
+        let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys]), uniformTypeIdentifier: "public.json")
+        attachment.name = "ios-native-memory-report"; attachment.lifetime = .keepAlways; add(attachment)
+    }
+
     private func freePort() throws -> Int32 {
         let descriptor = socket(AF_INET, SOCK_STREAM, 0)
         guard descriptor >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }

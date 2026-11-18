@@ -55,10 +55,14 @@ public protocol ICloudFilesystem: Sendable {
     func writeAtomic(_ data: Data, toPath path: String) throws
     /// Bounded source enumeration for first-device conf discovery.
     func sourceNames(under root: String) throws -> [String]
+
+    /// Whether the provider has finished uploading the current file.
+    func uploadConfirmed(atPath path: String) throws -> Bool
 }
 
 public extension ICloudFilesystem {
     func sourceNames(under root: String) throws -> [String] { [] }
+    func uploadConfirmed(atPath path: String) throws -> Bool { true }
 }
 
 /// In-memory implementation for tests and previews.
@@ -285,12 +289,27 @@ public final class CloudFilesystem: ICloudFilesystem, @unchecked Sendable {
         try filesystemSourceNames(under: root, fileManager: fileManager)
     }
 
+    public func uploadConfirmed(atPath path: String) throws -> Bool {
+        let url = URL(fileURLWithPath: path)
+        let values = try url.resourceValues(forKeys: [
+            .isUbiquitousItemKey, .ubiquitousItemIsUploadedKey,
+            .ubiquitousItemIsUploadingKey, .ubiquitousItemUploadingErrorKey,
+        ])
+        if let error = values.ubiquitousItemUploadingError { throw error }
+        return values.isUbiquitousItem == true && values.ubiquitousItemIsUploaded == true
+            && values.ubiquitousItemIsUploading != true
+    }
+
     public func contents(atPath path: String) throws -> Data? {
-        guard fileManager.fileExists(atPath: path) else { return nil }
         let sourceURL = URL(fileURLWithPath: path)
-        let values = try sourceURL.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey])
+        let values: URLResourceValues
+        do {
+            values = try sourceURL.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey])
+        } catch {
+            return try resolveReadError(error, at: sourceURL)
+        }
         if values.isUbiquitousItem == true && values.ubiquitousItemDownloadingStatus != .current {
-            try? fileManager.startDownloadingUbiquitousItem(at: sourceURL)
+            try fileManager.startDownloadingUbiquitousItem(at: sourceURL)
             throw ICloudSyncError.sourceDownloading(path)
         }
         var readError: NSError?
@@ -307,15 +326,21 @@ public final class CloudFilesystem: ICloudFilesystem, @unchecked Sendable {
                 thrown = error
             }
         }
-        if let thrown {
-            if isICloudSourceDownloading(thrown) { try? fileManager.startDownloadingUbiquitousItem(at: sourceURL); throw ICloudSyncError.sourceDownloading(path) }
-            throw thrown
-        }
-        if let readError {
-            if isICloudSourceDownloading(readError) { try? fileManager.startDownloadingUbiquitousItem(at: sourceURL); throw ICloudSyncError.sourceDownloading(path) }
-            throw ICloudSyncError.filesystem(readError.localizedDescription)
-        }
+        if let error = thrown ?? readError { return try resolveReadError(error, at: sourceURL) }
         return data
+    }
+
+    private func resolveReadError(_ error: Error, at url: URL) throws -> Data? {
+        if isICloudSourceDownloading(error) {
+            try fileManager.startDownloadingUbiquitousItem(at: url)
+            throw ICloudSyncError.sourceDownloading(url.path)
+        }
+        let failure = error as NSError
+        if (failure.domain == NSCocoaErrorDomain && (failure.code == NSFileNoSuchFileError || failure.code == NSFileReadNoSuchFileError))
+            || (failure.domain == NSPOSIXErrorDomain && failure.code == Int(ENOENT)) {
+            return nil
+        }
+        throw error
     }
 
     public func fileExists(atPath path: String) -> Bool {

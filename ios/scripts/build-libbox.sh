@@ -38,6 +38,8 @@ cp -R "${SOURCE}" "${WORK}/sing-box"
 chmod -R u+w "${WORK}/sing-box"
 python3 "${REPO_ROOT}/scripts/patch-libbox-network.py" "${WORK}/sing-box"
 python3 "${REPO_ROOT}/scripts/patch-libbox-location.py" "${WORK}/sing-box"
+python3 "${REPO_ROOT}/ios/scripts/patch-libbox-profile.py" "${WORK}/sing-box"
+gofmt -w "${WORK}/sing-box/experimental/libbox/oom_report.go"
 gofmt -w "${WORK}/sing-box/experimental/libbox/sakamoto_location.go" "${WORK}/sing-box/daemon/sakamoto_location.go"
 gofmt -w "${WORK}/sing-box/experimental/libbox/command_server.go" "${WORK}/sing-box/experimental/libbox/monitor.go" \
     "${WORK}/sing-box/protocol/tailscale/endpoint.go" "${WORK}/sing-box/protocol/tailscale/sakamoto_transport.go" \

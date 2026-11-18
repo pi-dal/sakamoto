@@ -131,7 +131,8 @@ public actor ICloudSyncStore {
         mainConf: String = "",
         discoverConf: Bool = false,
         validateDownload: @Sendable (String, Data) throws -> Void = { _, _ in },
-        sourcesAreCurrent: @Sendable () async -> Bool = { true }
+        sourcesAreCurrent: @Sendable () async -> Bool = { true },
+        adoptDownloads: @Sendable ([ICloudSyncOutcome.Download], String?) async throws -> Void = { _, _ in }
     ) async -> ICloudSyncOutcome {
         guard settings.enabled else {
             lastStatus = .disabled
@@ -353,21 +354,25 @@ public actor ICloudSyncStore {
 
         let sourcesDirectory = localDirectory + "/" + Self.sourcesDirectoryName
 
-        for action in plan.downloads {
+        if !plan.downloads.isEmpty || discoveredMain != nil {
+            let incoming = plan.downloads.map { ICloudSyncOutcome.Download(name: $0.name, data: $0.data) }
             do {
-                let localPath = sourcesDirectory + "/" + action.name
-                try Self.writeLocal(action.data, to: localPath, filesystem: localFilesystem, root: localDirectory)
+                for item in incoming {
+                    try Self.writeLocal(item.data, to: sourcesDirectory + "/" + item.name, filesystem: localFilesystem, root: localDirectory)
+                }
+                // Advance the baseline only after the profile adopts the complete graph.
+                try await adoptDownloads(incoming, discoveredMain)
             } catch {
-                return fail(error, completed: updates, downloads: downloads, skipped: skipped)
+                return fail(ICloudSyncError.filesystem("could not adopt downloaded sources: \(error)"), completed: [], downloads: [], skipped: skipped)
             }
-            currentState[action.name] = Self.digest(action.data)
+            downloads = incoming
+            updates = plan.downloads.map(\.message)
+            for item in incoming { currentState[item.name] = Self.digest(item.data) }
             do {
                 try Self.saveState(currentState, to: statePath, filesystem: localFilesystem)
             } catch {
                 return fail(ICloudSyncError.filesystem("cannot persist baseline: \(error)"), completed: updates, downloads: downloads, skipped: skipped)
             }
-            downloads.append(.init(name: action.name, data: action.data))
-            updates.append(action.message)
         }
 
         for action in plan.uploads {
@@ -399,9 +404,28 @@ public actor ICloudSyncStore {
 
         let now = clock.now()
         let status: ICloudSyncStatus
-        if !downloading.isEmpty {
-            status = .failed(now, "Waiting for iCloud downloads: " + downloading.sorted().joined(separator: ", ") + ". Available sources synchronized; retry after download.")
-        } else { status = updates.isEmpty ? .upToDate(now) : .synced(now, updates) }
+        do {
+            var waiting: [String] = []
+            if !downloading.isEmpty {
+                waiting.append("Waiting for iCloud downloads: " + downloading.sorted().joined(separator: ", ") + ".")
+            }
+            // Identical copies can still be waiting to upload from an earlier pass.
+            let uploading = try plan.baselines.keys.sorted().filter { name in
+                try !cloudFilesystem.uploadConfirmed(atPath: cloudRoot + "/" + name)
+            }
+            if !uploading.isEmpty {
+                waiting.append("Waiting for iCloud upload confirmation: " + uploading.joined(separator: ", ") + ".")
+            }
+            if !waiting.isEmpty {
+                status = .pending(now, waiting.joined(separator: " ") + " Check again when iCloud is online.")
+            } else if plan.baselines.isEmpty {
+                status = .failed(now, "No syncable sources found in this profile or folder.")
+            } else {
+                status = updates.isEmpty ? .upToDate(now) : .synced(now, updates)
+            }
+        } catch {
+            return fail(ICloudSyncError.filesystem("Could not confirm iCloud upload. \(error.localizedDescription)"), completed: updates, downloads: downloads, skipped: skipped)
+        }
         lastStatus = status
         return ICloudSyncOutcome(status: status, updates: updates, downloads: downloads, skipped: skipped, discoveredMainConf: discoveredMain)
     }

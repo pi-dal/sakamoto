@@ -5,7 +5,8 @@
 The TUI default directory is `iCloud Drive/sakamoto` (macOS:
 `~/Library/Mobile Documents/com~apple~CloudDocs/sakamoto`). The iOS app's own
 iCloud document container is a separate location; it cannot automatically access
-the global Drive folder without Files authorization.
+the global Drive folder without Files authorization. The sync screen requires a
+shared folder selection so a pass targets the same files as the TUI.
 
 On iOS, open Settings → iCloud Sync → Choose TUI iCloud folder and select that
 same `sakamoto` folder in iCloud Drive, or the custom directory configured in the
@@ -14,6 +15,9 @@ subdirectory. Access is saved as a security-scoped bookmark; reselect the folder
 if authorization expires. Each directory has a separate conflict baseline.
 An empty device can download `nodes.txt` on first sync. Differing existing local
 and cloud nodes without a shared baseline remain a conflict and are not overwritten.
+While iCloud transfers files, the app reports the pending downloads or uploads.
+Run Sync now again to check completion. Downloaded files are staged in the
+selected profile. Use Config → Apply changes to use them.
 
 For a one-time import, use Config → Nodes & sources → Import nodes.txt from Files.
 Imports accept UTF-8 share links, blank lines and `#` comments, deduplicate links,

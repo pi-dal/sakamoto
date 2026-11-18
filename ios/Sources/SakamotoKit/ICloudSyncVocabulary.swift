@@ -98,6 +98,7 @@ public enum ICloudSyncStatus: Equatable, Sendable {
     /// Enabled but no pass has run yet in this install.
     case waitingFirstRun
     case unavailable(String)
+    case pending(Date, String)
     case upToDate(Date)
     case synced(Date, [String])
     case conflict(Date, [String])
@@ -111,7 +112,7 @@ public enum ICloudSyncStatus: Equatable, Sendable {
     public var timestamp: Date? {
         switch self {
         case .disabled, .unavailable, .waitingFirstRun: return nil
-        case .upToDate(let d), .synced(let d, _), .conflict(let d, _), .failed(let d, _): return d
+        case .upToDate(let d), .synced(let d, _), .conflict(let d, _), .pending(let d, _), .failed(let d, _): return d
         }
     }
 
@@ -124,6 +125,8 @@ public enum ICloudSyncStatus: Equatable, Sendable {
             return "Enabled — no sync run yet."
         case .unavailable(let reason):
             return "iCloud unavailable: \(reason)"
+        case .pending(_, let message):
+            return message
         case .upToDate(let date):
             return "Up to date (last sync \(ICloudSyncFormatting.timestamp(date)))"
         case .synced(let date, let updates):

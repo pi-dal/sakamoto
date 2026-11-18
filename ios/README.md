@@ -35,6 +35,13 @@ activation.
 
 ## Core stability and repair
 
+iOS **0.1.28 (37)** fixes a native crash while generating a memory report. The
+iOS Libbox build uses Go’s public profiling API to write all six profiles and
+keeps the existing memory protection. A simulator integration test triggers
+the report and checks that the same core remains running. This version also
+clarifies iCloud transfer status and requires selection of the shared iCloud
+Drive folder. See [iCloud sync setup](../docs/icloud.md).
+
 iOS **0.1.27 (36)** fixes automatic relaunch admission after an unclean provider
 exit: the same launch waits for the bounded 2/4/8-second backoff. OS network,
 sleep and update stops no longer consume the core-crash budget. DNS restoration

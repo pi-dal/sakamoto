@@ -207,6 +207,9 @@ struct SettingsView: View {
                     List { iCloudSyncSection }
                         .listStyle(.insetGrouped).navigationTitle("iCloud Sync")
                         .navigationBarTitleDisplayMode(.inline)
+                        .fileImporter(isPresented: $showSyncDirectoryPicker, allowedContentTypes: [.folder]) { result in
+                            sync.selectDirectory(result)
+                        }
                         .confirmationDialog("Sync sources to iCloud?", isPresented: $confirmSyncEnable, titleVisibility: .visible) {
                             Button("Enable sync") { sync.confirmEnable() }
                             Button("Cancel", role: .cancel) {}
@@ -225,9 +228,6 @@ struct SettingsView: View {
             }
             aboutSection
             }
-        }
-        .fileImporter(isPresented: $showSyncDirectoryPicker, allowedContentTypes: [.folder]) { result in
-            if case .success(let url) = result { sync.selectDirectory(url) }
         }
         .navigationTitle(sourcesOnly ? "Sync sources" : "Settings")
         .sakamotoRootPage()
@@ -365,7 +365,7 @@ struct SettingsView: View {
                 .accessibilityLabel("Sync folder, \(sync.directoryLabel), \(sync.directoryLocation)")
             }.disabled(sync.syncing)
         } header: { Text("Destination") } footer: {
-            Text("Choose the same folder as your Mac: iCloud Drive → sakamoto.")
+            Text("Select the same iCloud Drive folder your Mac uses. The default is iCloud Drive → sakamoto.")
         }
         Section {
             Toggle("Sync sources to iCloud", isOn: Binding(
@@ -379,7 +379,7 @@ struct SettingsView: View {
                         sync.disable()
                     }
                 }
-            ))
+            )).disabled(sync.syncing)
             if sync.settings.enabled {
                 Button {
                     sync.syncNow()
@@ -389,10 +389,10 @@ struct SettingsView: View {
                         if sync.syncing { Spacer(); ProgressView() }
                     }
                 }
-                .disabled(sync.syncing)
+                .disabled(sync.syncing || !sync.hasSyncDirectory)
             }
             HStack {
-                Text("Last sync")
+                Text("Last attempt")
                 Spacer()
                 Text(sync.status.timestamp.map { ICloudSyncFormatting.timestamp($0) } ?? "never")
                     .font(.footnote)
@@ -422,7 +422,7 @@ struct SettingsView: View {
                         .textInputAutocapitalization(.never)
                     Button("Save paths") { sync.commitAdditionalPathsDraft() }
                         .font(.footnote)
-                }
+                }.disabled(sync.syncing)
             }
             if let notice = sync.notice {
                 Text(notice)
@@ -435,7 +435,7 @@ struct SettingsView: View {
         } header: {
             Text("Sync sources")
         } footer: {
-            Text("Nodes, subscriptions and rules are synced. Keys and generated configuration stay on this device.")
+            Text("Sync shares source files. To use downloaded sources, open Config and apply changes.")
         }
     }
 
