@@ -48,11 +48,10 @@ func writeTemplate(out string, cfg *config.Config, mainMembers []string) ([]stri
 // reportGeneration lists unsupported source features without claiming parity.
 func reportGeneration(p *parsedConf, cfgPath, finalTag, exitTag string, chain []string) {
 	if len(p.rewrites) > 0 {
-		reportf("  ⚠ [URL Rewrite] %d entries omitted (sing-box has no HTTP rewriting layer): %s\n",
-			len(p.rewrites), strings.Join(p.rewrites, " | "))
+		reportf("  ⚠ [URL Rewrite] %d entries omitted\n", len(p.rewrites))
 	}
 	if len(p.mitm) > 0 {
-		reportf("  ⚠ [MITM] omitted (sing-box does not decrypt traffic): %s\n", strings.Join(p.mitm, " | "))
+		reportf("  ⚠ [MITM] %d entries omitted\n", len(p.mitm))
 	}
 	if len(p.proxies) > 0 {
 		reportf("  · [Proxy] %d entries omitted (nodes come from nodes.txt/subscriptions)\n", len(p.proxies))
@@ -71,9 +70,9 @@ func reportGeneration(p *parsedConf, cfgPath, finalTag, exitTag string, chain []
 		"always-reject-url-rewrite": true, "hijack-dns": true,
 		"tun-included-routes": true, "tun-excluded-routes": true,
 		"always-real-ip": true}
-	for k, v := range p.general {
+	for k := range p.general {
 		if !handled[k] {
-			reportf("  ? [General] unmapped option: %s = %s\n", k, v)
+			reportf("  ? [General] unmapped option omitted\n")
 		}
 	}
 	reportf("→ %s  final route=%s, chain exit=%s (detour to MainProxy)\n", cfgPath, finalTag, exitTag)

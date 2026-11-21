@@ -308,6 +308,10 @@ func Apply(raw []byte, p Profile, private []string) ([]byte, error) {
 		ordinary = append(ordinary, r)
 		for k := range r {
 			switch k {
+			case "rcode":
+				if len(r) != 3 || r["action"] != "predefined" || r["rcode"] != "SERVFAIL" || r["domain_suffix"] == nil {
+					return nil, errors.New("unsupported predefined DNS rule")
+				}
 			case "action", "domain", "domain_suffix", "server", "clash_mode", "rule_set", "ip_is_private", "match_response":
 			default:
 				return nil, errors.New("regional DNS conflicts with custom DNS rules")

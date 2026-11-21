@@ -29,13 +29,22 @@ final class ConfigStore: ObservableObject {
     static let selectedProfileKey = "sakamoto.config.selectedprofile"
     @Published private(set) var profiles: [TunnelProfile] = []
     @Published private(set) var selectedProfileID: String?
+    @Published private(set) var indexNeedsRecovery = false
+    @Published private(set) var needsRecoveryChoice = false
+    @Published private(set) var recoveryNotice: String?
+    @Published private(set) var offersRecoveryImport = false
+    private var recoveryInventory: [TunnelProfile] = []
     @Published private(set) var profileError: String?
     func reportProfileError(_ error: Error) { profileError = TunnelDiagnostics.sanitized(error.localizedDescription) }
     var selectedProfile: TunnelProfile? { profiles.first { $0.id == selectedProfileID } }
     @Published private(set) var applying = false
     @Published private(set) var generating = false
-    var canConnect: Bool { !applying && !generating && selectedProfile != nil && selectedProfile?.sourcesChanged == false && !content.isEmpty }
-    var canGenerate: Bool { !generating && (!nodesSources.nodes.isEmpty || !nodesSources.subscriptions.isEmpty) }
+    var canConnect: Bool { !applying && !generating && selectedProfile != nil && !content.isEmpty }
+    var generationUpgradeMessage: String? {
+        guard let profile = selectedProfile, !profile.sourceDigest.isEmpty, profile.hostGeneration == nil else { return nil }
+        return "Reimport a current host export from your Mac to preserve Shadowrocket nodes and TLS settings before generating."
+    }
+    var canGenerate: Bool { generationUpgradeMessage == nil && !generating && (!nodesSources.nodes.isEmpty || !nodesSources.subscriptions.isEmpty || selectedProfile?.hostGeneration?.nodes.isEmpty == false) }
 
     /// The last saved config — what Connect and Regenerate+Reconnect use.
     @Published private(set) var content: String
@@ -51,8 +60,64 @@ final class ConfigStore: ObservableObject {
     /// the Go bridge validated the content — a failed import never clobbers.
     @Published private(set) var importedSource: ImportedSource?
 
+    // Source drafts can exist before the first profile. Keep them in protected,
+    // backup-excluded files too. Preferences contain only a random directory ID.
+    private static func draftDirectory(_ defaults: UserDefaults) throws -> URL {
+        let key = "sakamoto.privateDraftDirectory"
+        let id = defaults.string(forKey: key).flatMap(UUID.init(uuidString:)) ?? UUID()
+        var root = try AppPaths.sharedDirectory().appendingPathComponent("PrivateDrafts", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        var attributes = URLResourceValues()
+        attributes.isExcludedFromBackup = true
+        try root.setResourceValues(attributes)
+        let directory = root.appendingPathComponent(id.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        defaults.set(id.uuidString, forKey: key)
+        return directory
+    }
+
+    private static func readDraft(_ key: String, defaults: UserDefaults) -> Data? {
+        if let legacy = defaults.data(forKey: key) {
+            do {
+                try writeDraft(legacy, key: key, defaults: defaults)
+                defaults.removeObject(forKey: key)
+            } catch { return legacy }
+            return legacy
+        }
+        guard let directory = try? draftDirectory(defaults) else { return nil }
+        return try? Data(contentsOf: directory.appendingPathComponent(key))
+    }
+
+    private static func writeDraft(_ data: Data?, key: String, defaults: UserDefaults) throws {
+        let file = try draftDirectory(defaults).appendingPathComponent(key)
+        if let data {
+            try data.write(to: file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        } else if FileManager.default.fileExists(atPath: file.path) {
+            try FileManager.default.removeItem(at: file)
+        }
+    }
+
+    private func migrateInstalledProfileDrafts() {
+        for key in [Self.nodesSourcesKey, Self.importKey] {
+            guard let legacy = persistence.data(forKey: key) else { continue }
+            do {
+                try Self.writeDraft(legacy, key: "legacy-" + key, defaults: persistence)
+                persistence.removeObject(forKey: key)
+            } catch { reportProfileError(error) }
+        }
+    }
+
+    private func saveDraft(_ data: Data?, key: String) {
+        do {
+            try Self.writeDraft(data, key: key, defaults: persistence)
+            if profiles.isEmpty { persistence.removeObject(forKey: key) }
+        }
+        catch { reportProfileError(error) }
+    }
+
     private let persistence: UserDefaults
-    private let keyStore: TailscaleAuthKeyStoring
+    let keyStore: TailscaleAuthKeyStoring
+    private var pendingLegacyProfile: TunnelProfile?
     private var cachedSourceJSON: String?
     private var cachedSourceBundle: SourceBundle?
 
@@ -60,108 +125,343 @@ final class ConfigStore: ObservableObject {
         self.persistence = persistence
         self.keyStore = keyStore
         self.content = persistence.string(forKey: Self.storageKey) ?? ""
-        if let data = persistence.data(forKey: Self.policyKey) {
-            self.policy = PolicyBook.decode(data) ?? PolicyBook()
-        } else {
-            self.policy = PolicyBook()
+        self.policy = PolicyBook()
+        self.nodesSources = NodesSourcesBook()
+        if let object = persistence.object(forKey: Self.profilesKey) {
+            do {
+                guard let data = object as? Data else { throw Self.indexError }
+                profiles = try JSONDecoder().decode([TunnelProfile].self, from: data)
+                guard Set(profiles.map(\.id)).count == profiles.count,
+                      profiles.allSatisfy({ UUID(uuidString: $0.id) != nil }) else { throw Self.indexError }
+            } catch {
+                requireIndexRecovery()
+                return
+            }
         }
-        if let data = persistence.data(forKey: Self.nodesSourcesKey) {
-            self.nodesSources = NodesSourcesBook.decode(data) ?? NodesSourcesBook()
-        } else {
-            self.nodesSources = NodesSourcesBook()
+        let primaryIDs = profiles.map(\.id)
+        let backupIDs = persistence.stringArray(forKey: Self.profilesKey + ".ids")
+        let savedSelection = persistence.string(forKey: Self.selectedProfileKey)
+        let missingSelection = savedSelection == nil && !primaryIDs.isEmpty
+        if missingSelection || backupIDs.map({ $0 != primaryIDs }) == true || savedSelection.map({ !primaryIDs.contains($0) }) == true {
+            requireIndexRecovery()
+            return
         }
-        if let data = persistence.data(forKey: Self.importKey) {
-            self.importedSource = ImportedSource.decode(data)
-        } else {
-            self.importedSource = nil
-        }
-        self.profiles = persistence.data(forKey: Self.profilesKey).flatMap { try? JSONDecoder().decode([TunnelProfile].self, from: $0) } ?? []
+        let initialID = savedSelection
         for index in profiles.indices {
-            if UUID(uuidString: profiles[index].id) != nil,
-               let url = try? AppPaths.sharedDirectory().appendingPathComponent("Profiles/\(profiles[index].id)/profile.json"),
-               let data = try? Data(contentsOf: url),
-               let manifest = try? JSONDecoder().decode(TunnelProfile.self, from: data) { profiles[index] = manifest }
+            let id = profiles[index].id
+            do {
+                let manifest = try readManifest(id: id)
+                if id == initialID {
+                    let sources = try decodeSources(manifest)
+                    profiles[index] = try loadRuleFiles(manifest)
+                    nodesSources = sources.nodes
+                    policy = sources.policy
+                    importedSource = sources.imported
+                    selectedProfileID = id
+                } else {
+                    profiles[index] = manifest
+                }
+            } catch {
+                if id == initialID {
+                    requireIndexRecovery()
+                    return
+                }
+            }
         }
-        let initialID = profiles.first { $0.id == persistence.string(forKey: Self.selectedProfileKey) }?.id ?? profiles.first?.id
-        if let index = profiles.firstIndex(where: { $0.id == initialID }),
-           let loaded = try? loadRuleFiles(profiles[index]) { profiles[index] = loaded }
-        self.selectedProfileID = persistence.string(forKey: Self.selectedProfileKey)
+        if profiles.isEmpty {
+            if let data = persistence.data(forKey: Self.policyKey) { policy = PolicyBook.decode(data) ?? PolicyBook() }
+            if let data = Self.readDraft(Self.nodesSourcesKey, defaults: persistence) { nodesSources = NodesSourcesBook.decode(data) ?? NodesSourcesBook() }
+            if let data = Self.readDraft(Self.importKey, defaults: persistence) { importedSource = ImportedSource.decode(data) }
+        } else {
+            migrateInstalledProfileDrafts()
+        }
         if profiles.isEmpty && !content.isEmpty {
-            let legacy = TunnelProfile(name: "Previous configuration", config: content)
-            profiles = [legacy]; selectedProfileID = legacy.id
-            persistProfiles()
+            var legacy = TunnelProfile(name: "Previous configuration", config: content)
+            let bundle = sourceBundle
+            if !bundle.files.isEmpty {
+                legacy.sourceBundleJSON = (try? JSONEncoder().encode(bundle)).map { String(decoding: $0, as: UTF8.self) }
+            }
+            legacy.adoptCheckedRouteSource()
+            pendingLegacyProfile = legacy
+            do { try finishLegacyMigration() }
+            catch { reportProfileError(error); return }
         }
         if let selected = selectedProfile {
             content = selected.config
+            do {
+                if initialID == nil {
+                    // The legacy migration created this selection after the manifest scan.
+                    let sources = try decodeSources(selected)
+                    nodesSources = sources.nodes
+                    policy = sources.policy
+                    importedSource = sources.imported
+                }
+                try TunnelProfile.validateRouteSource(selected.config, version: selected.routeSourceVersion)
+                if initialID == selected.id, !selected.config.isEmpty { persistence.removeObject(forKey: Self.storageKey) }
+            }
+            catch { reportProfileError(error) }
             if selected.sourcesChanged { configState = .needsRegenerate }
             else if selected.pendingApply != false { configState = .needsReconnect }
         }
-        else if let first = profiles.first { selectedProfileID = first.id; content = first.config; persistProfiles() }
     }
 
-    private func persistProfiles() {
-        // Complete manifests (including large conf includes) and binaries
-        // live in App Group files, not CFPreferences' limited value store.
-        do {
-            let root = try AppPaths.sharedDirectory()
-            var references: [TunnelProfile] = []
-            for profile in profiles {
-                guard UUID(uuidString: profile.id) != nil else { throw TunnelProfile.InvalidProfile("Invalid configuration identifier") }
-                var manifest = profile; manifest.files = [:]
-                let file = root.appendingPathComponent("Profiles/\(profile.id)/profile.json")
-                try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-                try JSONEncoder().encode(manifest).write(to: file, options: .atomic)
-                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
-                UserDefaults(suiteName: SystemSurfaceStore.groupIdentifier)?.set(profile.id != selectedProfileID || profile.sourcesChanged || profile.pendingApply != false, forKey: "sakamoto.experiment.pause." + profile.id)
-                manifest.config = ""; manifest.sourceBundleJSON = nil
-                references.append(manifest)
+    private func requireIndexRecovery() {
+        indexNeedsRecovery = true
+        content = ""
+        UserDefaults(suiteName: SystemSurfaceStore.groupIdentifier)?.set(true, forKey: "sakamoto.profile.requiresApply")
+        reportProfileError(Self.indexError)
+    }
+
+    private static var indexError: TunnelProfile.InvalidProfile {
+        TunnelProfile.InvalidProfile("The configuration list could not be read. Open Config and choose Recover configuration list.")
+    }
+
+    func recoverProfileIndex() throws {
+        guard indexNeedsRecovery else { return }
+        struct Reference: Decodable { let id: String }
+        let saved = persistence.data(forKey: Self.profilesKey)
+        let primary = saved.flatMap { try? JSONDecoder().decode([Reference].self, from: $0) }?.map(\.id) ?? []
+        let backup = persistence.stringArray(forKey: Self.profilesKey + ".ids") ?? []
+        let selection = persistence.string(forKey: Self.selectedProfileKey)
+        var seen = Set<String>()
+        let indexedIDs = (backup + primary).filter { seen.insert($0).inserted }
+        var candidates = indexedIDs
+        if let selection, !seen.contains(selection), UUID(uuidString: selection) != nil {
+            candidates.append(selection)
+        }
+        var inventory: [TunnelProfile] = []
+        var recovered: [TunnelProfile] = []
+        var missing: [String] = []
+        var unreadable: [String] = []
+        for id in candidates {
+            guard UUID(uuidString: id) != nil else { continue }
+            do {
+                let manifest = try readManifest(id: id)
+                inventory.append(manifest)
+                do {
+                    _ = try validatedSelection(manifest)
+                    recovered.append(manifest)
+                } catch {
+                    unreadable.append(id)
+                }
+            } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
+                if seen.contains(id) { missing.append(id) }
+            } catch {
+                // Retain the index entry so selecting it later retries the original file.
+                inventory.append(TunnelProfile(id: id, name: "Unavailable configuration (\(id))", config: ""))
+                unreadable.append(id)
             }
-            persistence.set(try JSONEncoder().encode(references), forKey: Self.profilesKey)
-            persistence.set(selectedProfileID, forKey: Self.selectedProfileKey)
-            UserDefaults(suiteName: SystemSurfaceStore.groupIdentifier)?.set(
-                selectedProfile == nil || selectedProfile?.sourcesChanged == true || selectedProfile?.pendingApply != false,
-                forKey: "sakamoto.profile.requiresApply"
-            )
-        } catch { reportProfileError(error) }
+        }
+        offersRecoveryImport = recovered.isEmpty
+        if offersRecoveryImport {
+            let entries = Dictionary(uniqueKeysWithValues: inventory.map { ($0.id, $0) })
+            recoveryInventory = candidates.filter { UUID(uuidString: $0) != nil }.map { id in
+                entries[id] ?? TunnelProfile(id: id, name: "Unavailable configuration (\(id))", config: "")
+            }
+            recoveryNotice = "Unlock the device and retry, or import a desktop .sakamoto package as a new configuration. Existing configuration files are kept."
+            return
+        }
+        if missing.isEmpty, unreadable.isEmpty, let selection, seen.contains(selection) {
+            try commitRecoveredSelection(selection, in: recovered)
+            return
+        }
+        var notices: [String] = []
+        if !missing.isEmpty {
+            notices.append("Missing configuration files (\(missing.joined(separator: ", "))). To add a missing configuration again, import its .sakamoto package.")
+        }
+        if !unreadable.isEmpty {
+            notices.append("Could not read configuration files (\(unreadable.joined(separator: ", "))). Their entries are kept. After unlocking the device or restoring a file from backup, select its entry to retry.")
+        }
+        if !notices.isEmpty { notices.append("Choose an available configuration to save the recovered list.") }
+        recoveryNotice = notices.isEmpty ? nil : notices.joined(separator: " ")
+        profiles = recovered
+        recoveryInventory = inventory
+        needsRecoveryChoice = true
     }
 
-    func installProfile(_ profile: TunnelProfile) throws {
-        _ = try prepare(profile)
+    private func commitRecoveredSelection(_ id: String, in manifests: [TunnelProfile]) throws {
+        var recovered = manifests
+        guard let index = recovered.firstIndex(where: { $0.id == id }) else { throw Self.indexError }
+        var (selected, sources) = try validatedSelection(readManifest(id: id))
+        if needsRecoveryChoice { selected.pendingApply = true }
+        recovered[index] = selected
+        try persistProfilesChecked(recovered, selection: selected.id, changedID: needsRecoveryChoice ? selected.id : nil)
+        profiles = recovered
+        selectedProfileID = selected.id
+        content = selected.config
+        nodesSources = sources.nodes
+        importedSource = sources.imported
+        policy = sources.policy
+        configState = selected.sourcesChanged ? .needsRegenerate : (selected.pendingApply != false ? .needsReconnect : .clean)
+        indexNeedsRecovery = false
+        needsRecoveryChoice = false
+        recoveryInventory = []
+        recoveryNotice = nil
+        profileError = nil
+        migrateInstalledProfileDrafts()
+    }
+
+    // Full manifests live in App Group files; preferences store lightweight references.
+    private func persistProfilesChecked(_ candidates: [TunnelProfile], selection: String?, changedID: String?) throws {
+        let root = try AppPaths.sharedDirectory()
+        var profilesDir = root.appendingPathComponent("Profiles", isDirectory: true)
+        try FileManager.default.createDirectory(at: profilesDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        var attributes = URLResourceValues()
+        attributes.isExcludedFromBackup = true
+        try profilesDir.setResourceValues(attributes)
+        var references: [TunnelProfile] = []
+        var writes: [(URL, Data)] = []
+        for profile in candidates {
+            guard UUID(uuidString: profile.id) != nil else { throw TunnelProfile.InvalidProfile("Invalid configuration identifier") }
+            var manifest = profile; manifest.files = [:]
+            let file = root.appendingPathComponent("Profiles/\(profile.id)/profile.json")
+            if profile.id == changedID { writes.append((file, try JSONEncoder().encode(manifest))) }
+            manifest.config = ""; manifest.sourceBundleJSON = nil; manifest.nodeOverrides = nil; manifest.hostGeneration = nil
+            references.append(manifest)
+        }
+        let encodedReferences = try JSONEncoder().encode(references)
+        var stagedManifest: (temp: URL, target: URL)?
+        defer { if let stagedManifest { try? FileManager.default.removeItem(at: stagedManifest.temp) } }
+        for (file, data) in writes {
+            let fm = FileManager.default
+            let directory = file.deletingLastPathComponent()
+            try fm.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            let staged = directory.appendingPathComponent(UUID().uuidString + ".tmp")
+            stagedManifest = (staged, file)
+            try data.write(to: staged, options: .completeFileProtectionUntilFirstUserAuthentication)
+            try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: staged.path)
+        }
+        // A new index entry must always point to a complete manifest. Existing
+        // manifests stay intact until their index update succeeds.
+        let newEntry = changedID.map { id in !profiles.contains(where: { $0.id == id }) } ?? false
+        func commitManifest() throws {
+            if let stagedManifest, rename(stagedManifest.temp.path, stagedManifest.target.path) != 0 {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+        }
+        if newEntry { try commitManifest() }
+        let keys = [Self.profilesKey, Self.profilesKey + ".ids", Self.selectedProfileKey]
+        let previous = keys.map { persistence.object(forKey: $0) }
+        persistence.set(encodedReferences, forKey: Self.profilesKey)
+        persistence.set(candidates.map(\.id), forKey: Self.profilesKey + ".ids")
+        persistence.set(selection, forKey: Self.selectedProfileKey)
+        do {
+            guard persistence.synchronize() else {
+                throw TunnelProfile.InvalidProfile("Could not save the configuration list. Check available storage and retry.")
+            }
+            if !newEntry { try commitManifest() }
+        } catch {
+            for (key, value) in zip(keys, previous) {
+                if let value { persistence.set(value, forKey: key) } else { persistence.removeObject(forKey: key) }
+            }
+            guard persistence.synchronize() else {
+                throw TunnelProfile.InvalidProfile("Could not confirm the saved configuration list. Check available storage and reopen Config to retry.")
+            }
+            if newEntry, let stagedManifest { try FileManager.default.removeItem(at: stagedManifest.target) }
+            throw error
+        }
+        for profile in candidates {
+            UserDefaults(suiteName: SystemSurfaceStore.groupIdentifier)?.set(profile.id != selection || profile.sourcesChanged || profile.pendingApply != false, forKey: "sakamoto.experiment.pause." + profile.id)
+        }
+        let selectedProfile = candidates.first { $0.id == selection }
+        UserDefaults(suiteName: SystemSurfaceStore.groupIdentifier)?.set(
+            selectedProfile == nil || selectedProfile?.sourcesChanged == true || selectedProfile?.pendingApply != false,
+            forKey: "sakamoto.profile.requiresApply"
+        )
+    }
+
+    private func finishLegacyMigration() throws {
+        guard let legacy = pendingLegacyProfile else { return }
+        try persistProfilesChecked([legacy], selection: legacy.id, changedID: legacy.id)
+        profiles = [legacy]
+        selectedProfileID = legacy.id
+        content = legacy.config
+        pendingLegacyProfile = nil
+        persistence.removeObject(forKey: Self.storageKey)
+    }
+
+    private func publishSelected(_ candidate: TunnelProfile) throws {
+        guard !indexNeedsRecovery else { throw Self.indexError }
+        try finishLegacyMigration()
+        var staged = profiles
+        if let index = staged.firstIndex(where: { $0.id == candidate.id }) { staged[index] = candidate }
+        else { staged.append(candidate) }
+        try persistProfilesChecked(staged, selection: candidate.id, changedID: candidate.id)
+        profiles = staged
+        selectedProfileID = candidate.id
+        content = candidate.config
+    }
+
+    func installProfile(_ profile: TunnelProfile, fromDesktopPackage: Bool = false) throws {
+        let recovering = indexNeedsRecovery && offersRecoveryImport && fromDesktopPackage
+        guard !indexNeedsRecovery || recovering else { throw Self.indexError }
+        guard !profiles.contains(where: { $0.id == profile.id }) else { throw TunnelProfile.InvalidProfile("Profile already installed") }
+        guard UUID(uuidString: profile.id) != nil, profile.ruleRevisionID == nil else {
+            throw TunnelProfile.InvalidProfile("Invalid imported configuration identifier")
+        }
         let sources = try decodeSources(profile)
-        if let old = selectedProfileID { UserDefaults(suiteName: SystemSurfaceStore.groupIdentifier)?.set(true, forKey: "sakamoto.experiment.pause." + old) }
+        let fm = FileManager.default
+        let parent = try AppPaths.sharedDirectory().appendingPathComponent("Profiles", isDirectory: true)
+        try fm.createDirectory(at: parent, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let directory = parent.appendingPathComponent(profile.id, isDirectory: true)
+        // Exclusive creation makes the entire directory safe to roll back, including partial rule writes.
+        guard mkdir(directory.path, 0o700) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         var profile = profile
-        if let groups = sources.groups { profile.proxyGroups = AutomaticGroupSources.adopting(groups, edits: profile.proxyGroups ?? [], content: profile.config, overrides: profile.nodeOverrides ?? [:]) }
-        profile.pendingApply = true
-        profiles.append(profile)
+        do {
+            _ = try prepare(profile)
+            if let groups = sources.groups { profile.proxyGroups = AutomaticGroupSources.adopting(groups, edits: profile.proxyGroups ?? [], content: profile.config, overrides: profile.nodeOverrides ?? [:]) }
+            profile.pendingApply = true
+            if recovering {
+                let restored = recoveryInventory + [profile]
+                try persistProfilesChecked(restored, selection: profile.id, changedID: profile.id)
+                profiles = restored
+                selectedProfileID = profile.id
+                content = profile.config
+                indexNeedsRecovery = false
+                offersRecoveryImport = false
+                recoveryInventory = []
+                recoveryNotice = nil
+            } else {
+                try publishSelected(profile)
+            }
+        } catch {
+            try fm.removeItem(at: directory)
+            throw error
+        }
         releaseOtherRuleFiles(keeping: profile.id)
         profileError = nil
-        selectedProfileID = profile.id
-        content = profile.config
         adoptProfileSources(sources)
-        persistence.set(content, forKey: Self.storageKey)
-        persistProfiles()
         transition(.modified)
     }
 
     func selectProfile(_ id: String) throws {
+        if indexNeedsRecovery {
+            guard needsRecoveryChoice, profiles.contains(where: { $0.id == id }) else { throw Self.indexError }
+            try commitRecoveredSelection(id, in: recoveryInventory)
+            return
+        }
         guard id != selectedProfileID else { return }
-        if let old = selectedProfileID, old != id { UserDefaults(suiteName: SystemSurfaceStore.groupIdentifier)?.set(true, forKey: "sakamoto.experiment.pause." + old) }
-        guard let index = profiles.firstIndex(where: { $0.id == id }) else { return }
-        let profile = try loadRuleFiles(profiles[index])
-        if !profile.sourcesChanged && !profile.config.isEmpty { _ = try prepare(profile) }
-        let sources = try decodeSources(profile)
+        guard profiles.contains(where: { $0.id == id }) else { return }
+        var (profile, sources) = try validatedSelection(readManifest(id: id))
+        profile.pendingApply = true
+        try publishSelected(profile)
         profileError = nil
-        selectedProfileID = id; content = profile.config
-        profiles[index] = profile
-        profiles[index].pendingApply = true
         releaseOtherRuleFiles(keeping: id)
         adoptProfileSources(sources)
-        persistence.set(content, forKey: Self.storageKey)
-        persistProfiles(); transition(.modified)
+        transition(.modified)
     }
 
     private func releaseOtherRuleFiles(keeping id: String) {
         for index in profiles.indices where profiles[index].id != id { profiles[index].files = [:] }
+    }
+
+    private func readManifest(id: String) throws -> TunnelProfile {
+        guard UUID(uuidString: id) != nil else { throw TunnelProfile.InvalidProfile("Invalid configuration identifier") }
+        let url = try AppPaths.sharedDirectory().appendingPathComponent("Profiles/\(id)/profile.json")
+        var manifest = try JSONDecoder().decode(TunnelProfile.self, from: Data(contentsOf: url))
+        guard manifest.id == id else { throw TunnelProfile.InvalidProfile("Configuration identifier does not match its manifest") }
+        manifest.adoptCheckedRouteSource()
+        return manifest
     }
 
     private func loadRuleFiles(_ profile: TunnelProfile) throws -> TunnelProfile {
@@ -187,6 +487,14 @@ final class ConfigStore: ObservableObject {
         var groups: [String: [String]]? = nil
     }
 
+    private func validatedSelection(_ manifest: TunnelProfile) throws -> (TunnelProfile, ProfileSources) {
+        let sources = try decodeSources(manifest)
+        let profile = try loadRuleFiles(manifest)
+        try TunnelProfile.validateRouteSource(profile.config, version: profile.routeSourceVersion)
+        if !profile.config.isEmpty { _ = try prepare(profile, installRuleFiles: false) }
+        return (profile, sources)
+    }
+
     private func decodeSources(_ profile: TunnelProfile) throws -> ProfileSources {
         guard let raw = profile.sourceBundleJSON else {
             return ProfileSources(nodes: NodesSourcesBook(), policy: PolicyBook(), imported: nil)
@@ -199,7 +507,7 @@ final class ConfigStore: ObservableObject {
         }
         try ICloudSyncPaths.validateConfGraph(main: bundle.mainConf, files: bundle.files.mapValues { Data($0.utf8) })
         let nodeText = bundle.files["nodes.txt"] ?? ""
-        let nodes = nodeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? [] : try NodeFileImport.parse(Data(nodeText.utf8), validate: ConfigModel.validateNode)
+        let nodes = try NodeFileImport.parse(Data(nodeText.utf8), allowEmpty: true, validate: ConfigModel.validateNode)
         let subscriptions = try JSONDecoder().decode([SyncSubscription].self, from: Data((bundle.files["subscriptions.json"] ?? "[]").utf8))
         let rules = try JSONDecoder().decode([SyncPolicy].self, from: Data((bundle.files["policy.json"] ?? "[]").utf8))
         try Self.validateStructuredSource(name: "subscriptions.json", data: Data((bundle.files["subscriptions.json"] ?? "[]").utf8))
@@ -242,12 +550,12 @@ final class ConfigStore: ObservableObject {
 
     private func adoptProfileSources(_ source: ProfileSources) {
         nodesSources = source.nodes; policy = source.policy; importedSource = source.imported
-        persistence.set(try? nodesSources.encoded(), forKey: Self.nodesSourcesKey)
+        saveDraft(try? nodesSources.encoded(), key: Self.nodesSourcesKey)
         persistence.set(try? policy.encoded(), forKey: Self.policyKey)
-        persistence.set(try? importedSource?.encoded(), forKey: Self.importKey)
+        saveDraft(try? importedSource?.encoded(), key: Self.importKey)
     }
 
-    private func prepare(_ profile: TunnelProfile) throws -> String {
+    private func prepare(_ profile: TunnelProfile, installRuleFiles: Bool = true) throws -> String {
         guard UUID(uuidString: profile.id) != nil else { throw TunnelProfile.InvalidProfile("Invalid configuration identifier") }
         if let revision = profile.ruleRevisionID, UUID(uuidString: revision) == nil { throw TunnelProfile.InvalidProfile("Invalid rule snapshot identifier") }
         let root = try AppPaths.sharedDirectory().appendingPathComponent(profile.ruleRevisionID.map { "RuleSnapshots/\($0)" } ?? "Profiles/\(profile.id)", isDirectory: true)
@@ -260,15 +568,17 @@ final class ConfigStore: ObservableObject {
             config = MobilecoreApplyRegionalDNS(config, dns["domains"] ?? "", dns["resolver_ip"] ?? "", dns["tls_name"] ?? "", dns["relay"] ?? "", dns["relay_fingerprint"] ?? "", &error)
             if let error { throw error }
         }
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        for (name, data) in profile.files {
-            guard TunnelProfile.validFileName(name) else { throw TunnelProfile.InvalidProfile("Invalid rule file path") }
-            let target = root.appendingPathComponent(name)
-            try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            if (try? Data(contentsOf: target, options: .mappedIfSafe)) != data {
-                try data.write(to: target, options: .atomic)
+        if installRuleFiles {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            for (name, data) in profile.files {
+                guard TunnelProfile.validFileName(name) else { throw TunnelProfile.InvalidProfile("Invalid rule file path") }
+                let target = root.appendingPathComponent(name)
+                try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                if (try? Data(contentsOf: target, options: .mappedIfSafe)) != data {
+                    try data.write(to: target, options: .atomic)
+                }
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
             }
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
         }
         var error: NSError?
         _ = MobilecoreValidateConfigJSON(config, &error)
@@ -295,17 +605,16 @@ final class ConfigStore: ObservableObject {
         } else { next = try TailscaleEndpointProvisioning.disable(in: content) }
         var candidate = selectedProfile ?? TunnelProfile(name: "Tailscale", config: next)
         candidate.config = next
-        _ = try prepare(candidate)
         if selectedProfile == nil {
             // Keep source ownership intact; enabling is a runtime edit.
             candidate.sourceBundleJSON = String(decoding: try JSONEncoder().encode(sourceBundle), as: UTF8.self)
             try installProfile(candidate)
         } else {
-            save(next)
-            if empty && sourceBundle.files.isEmpty, let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) {
-                profiles[index].sourcesChanged = false
-                persistProfiles()
-            }
+            _ = try prepare(candidate)
+            candidate.pendingApply = true
+            if empty && sourceBundle.files.isEmpty { candidate.sourcesChanged = false }
+            try publishSelected(candidate)
+            transition(.modified)
         }
     }
 
@@ -313,9 +622,10 @@ final class ConfigStore: ObservableObject {
         guard !generating && !applying else { throw TunnelProfile.InvalidProfile("Wait for generation or Apply to finish before changing Tailscale transport.") }
         guard let index = profiles.firstIndex(where: { $0.id == selectedProfileID }),
               TailscaleEndpointProvisioning.isEnabled(in: content) else { throw TunnelProfile.InvalidProfile("Enable a Tailscale endpoint first.") }
-        profiles[index].forceTailscaleDERP = enabled ? true : nil
-        profiles[index].pendingApply = true
-        persistProfiles()
+        var candidate = profiles[index]
+        candidate.forceTailscaleDERP = enabled ? true : nil
+        candidate.pendingApply = true
+        try publishSelected(candidate)
         transition(.modified)
         lastAction = "Tailscale transport saved. Apply & reconnect to use it."
     }
@@ -348,8 +658,8 @@ final class ConfigStore: ObservableObject {
         }
         _ = try prepare(candidate)
         candidate.pendingApply = true
-        profiles[index] = candidate
-        persistProfiles(); transition(.modified)
+        try publishSelected(candidate)
+        transition(.modified)
         lastAction = "DNS settings saved. Apply to use them on this device."
     }
 
@@ -362,10 +672,9 @@ final class ConfigStore: ObservableObject {
         candidate.proxyGroups = (candidate.proxyGroups ?? []).filter { $0.tag != edit.tag } + [saved]
         try recordGroupSources(in: &candidate)
         _ = try prepare(candidate)
-        profiles[index] = candidate
-        profiles[index].pendingApply = true
-        content = candidate.config
-        persistence.set(content, forKey: Self.storageKey); persistProfiles(); transition(.modified)
+        candidate.pendingApply = true
+        try publishSelected(candidate)
+        transition(.modified)
         lastAction = "Group saved. Apply changes to use it."
     }
 
@@ -385,6 +694,7 @@ final class ConfigStore: ObservableObject {
             if next.defaultMember == old { next.defaultMember = name }
             return next
         }
+        if profile.beforeOnFinal == old { profile.beforeOnFinal = name }
         if profile.proxyChain?.upstream == old { profile.proxyChain?.upstream = name }
         if profile.proxyChain?.exit == old { profile.proxyChain?.exit = name }
         if let priorities = profile.experiment?.fallbacks { profile.experiment?.fallbacks = priorities.mapValues { $0.map { $0 == old ? name : $0 } } }
@@ -411,9 +721,9 @@ final class ConfigStore: ObservableObject {
         var overrides = candidate.nodeOverrides ?? [:]; overrides[source] = nodeJSON; candidate.nodeOverrides = overrides
         try recordGroupSources(in: &candidate)
         _ = try prepare(candidate)
-        profiles[index] = candidate; profiles[index].pendingApply = true
-        content = candidate.config
-        persistence.set(content, forKey: Self.storageKey); persistProfiles(); transition(.modified)
+        candidate.pendingApply = true
+        try publishSelected(candidate)
+        transition(.modified)
         lastAction = "Node settings saved. Apply changes to use them."
     }
 
@@ -445,21 +755,15 @@ final class ConfigStore: ObservableObject {
                 }
             }
             candidate.nodeOverrides?.removeValue(forKey: node.tag)
-            try recordGroupSources(in: &candidate)
-            profiles[index] = candidate
-            if changed { content = candidate.config; persistence.set(content, forKey: Self.storageKey) }
-        }
-        commitNodesSources(nodesSources.removingNode(id: node.id))
+            try commitNodesSources(nodesSources.removingNode(id: node.id), profile: candidate)
+        } else { try commitNodesSources(nodesSources.removingNode(id: node.id)) }
     }
 
-    func clearNodeOverride(_ tag: String) {
-        guard let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) else { return }
-        var candidate = profiles[index]
+    private func clearNodeOverride(_ tag: String, in candidate: inout TunnelProfile) throws {
         if let json = candidate.nodeOverrides?[tag], let row = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any], let name = row["tag"] as? String {
-            try? renameNodeReferences(from: name, to: tag, profile: &candidate)
+            try renameNodeReferences(from: name, to: tag, profile: &candidate)
         }
         candidate.nodeOverrides?.removeValue(forKey: tag)
-        profiles[index] = candidate
     }
 
     func saveProxyChain(_ settings: ProxyChainSettings) throws {
@@ -471,12 +775,8 @@ final class ConfigStore: ObservableObject {
         if candidate.proxyChain == nil { candidate.config = try ProxyChainSettings.unchainedImportedConfig(candidate.config) }
         candidate.proxyChain = settings
         _ = try prepare(candidate)
-        content = candidate.config
-        persistence.set(content, forKey: Self.storageKey)
-        profiles[index] = candidate
-        profiles[index].pendingApply = true
-        UserDefaults(suiteName: SystemSurfaceStore.groupIdentifier)?.set(true, forKey: "sakamoto.experiment.pause." + candidate.id)
-        persistProfiles()
+        candidate.pendingApply = true
+        try publishSelected(candidate)
         transition(.modified)
         lastAction = "Proxy chain saved. Apply changes to use it."
     }
@@ -484,34 +784,34 @@ final class ConfigStore: ObservableObject {
     func saveExperimentSettings(_ settings: ExperimentSettings) throws {
         try settings.validate()
         guard let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) else { throw TunnelProfile.InvalidProfile("Import a configuration first") }
-        let adjusted = try SettingsOverrides.setExperiment(settings.mode == .on, in: content)
-        var candidate = profiles[index]; candidate.config = adjusted
+        var candidate = profiles[index]
+        try candidate.stageExperiment(settings, previous: experimentSettings.mode, content: content)
         _ = try prepare(candidate)
-        profiles[index].experiment = settings
-        profiles[index].pendingApply = true
-        content = adjusted; profiles[index].config = adjusted
-        persistProfiles(); persistence.set(content, forKey: Self.storageKey)
+        try publishSelected(candidate)
         transition(.modified)
     }
 
-    func connectionOptions(content prepared: String? = nil) throws -> TunnelStartOptions {
+    func connectionOptions() throws -> TunnelStartOptions {
         let settings = experimentSettings
         try settings.validate()
         let raw = String(decoding: try JSONEncoder().encode(settings), as: UTF8.self)
-        return TunnelStartOptions(configContent: try prepared ?? connectionContent(), profileID: selectedProfileID, experimentJSON: raw,
-                                  forceTailscaleDERP: selectedProfile?.forceTailscaleDERP)
+        // Preparation checks the imported rules before adding device-owned DNS rules.
+        let runtime = try TailscaleConfigInjection.withoutAuthKey(connectionContent())
+        if TailscaleEndpointProvisioning.isEnabled(in: runtime) {
+            _ = try keyStore.readAuthKey() // Migrate legacy credentials for the selected endpoint.
+        }
+        return TunnelStartOptions(configContent: runtime, profileID: selectedProfileID, experimentJSON: raw,
+                                  forceTailscaleDERP: selectedProfile?.forceTailscaleDERP, routeSourceVersion: 1)
     }
 
-    func checkRecoveryDNS(_ retained: String) throws {
-        guard let profile = selectedProfile else { throw TunnelProfile.InvalidProfile("Select a profile before recovery.") }
-        var error: NSError?
-        let current = try prepare(profile)
-        _ = MobilecoreCheckRegionalDNSRecovery(current, retained, &error)
-        if let error { throw error }
+    func matchesConnectionOptions(_ options: TunnelStartOptions) -> Bool {
+        guard selectedProfileID == options.profileID, let current = try? (applying ? connectionOptions() : systemConnectionOptions()),
+              let receipt = try? TunnelConfigurationReceipt(options: options) else { return false }
+        return receipt.matches(current)
     }
 
     func connectionContent() throws -> String {
-        guard let profile = selectedProfile, !profile.sourcesChanged else {
+        guard let profile = selectedProfile, !profile.config.isEmpty else {
             throw TunnelProfile.InvalidProfile("Generate the selected sources in Config before connecting.")
         }
         return try prepare(profile)
@@ -520,19 +820,43 @@ final class ConfigStore: ObservableObject {
     /// Compile sources through the shared Go host pipeline, then validate in
     /// Libbox. Candidate files use a new profile ID so validation failures
     /// cannot mutate the previous runtime's files.
-    func generateFromSources() async throws {
+    func generateFromSources(adding node: StagedNode? = nil) async throws {
         guard !generating else { throw TunnelProfile.InvalidProfile("Generation is already running") }
+        if let generationUpgradeMessage { throw TunnelProfile.InvalidProfile(generationUpgradeMessage) }
         guard canGenerate else { throw TunnelProfile.InvalidProfile("Add a node or subscription before generating") }
         if sourceBundle.mainConf.isEmpty && !confSources.isEmpty { throw TunnelProfile.InvalidProfile("Choose a rule source in Config before generating") }
         let idBefore = selectedProfileID
         let sourceBefore = sourceBundle
+        if let profile = selectedProfile, !profile.sourceDigest.isEmpty,
+           sourceBefore.files[AutomaticGroupSources.fileName] == nil {
+            throw TunnelProfile.InvalidProfile("Reimport a current host export to preserve automatic group exclusions before generating.")
+        }
         let settingsBefore = experimentSettings
         let contentBefore = content
         let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
-        let bundleJSON = String(decoding: try encoder.encode(sourceBefore), as: UTF8.self)
+        let originalSources = try encoder.encode(sourceBefore)
+        var input = sourceBefore
+        if let node {
+            input.files["nodes.txt"] = nodesSources.adding(node: node).nodesText
+        }
+        let bundleJSON = String(decoding: try encoder.encode(input), as: UTF8.self)
         let regional = selectedProfile?.regionalDNS
         var settingsObject = try JSONSerialization.jsonObject(with: encoder.encode(settingsBefore)) as? [String: Any] ?? [:]
+        let dnsGuard = selectedProfile?.dnsGuard
+        if let dnsGuard {
+            settingsObject["dnsGuard"] = try JSONSerialization.jsonObject(with: encoder.encode(dnsGuard))
+        } else if let root = try? JSONSerialization.jsonObject(with: Data(contentBefore.utf8)) as? [String: Any],
+                  let dns = root["dns"] as? [String: Any], let servers = dns["servers"] as? [[String: Any]],
+                  servers.contains(where: { $0["tag"] as? String == "dns-bootstrap" }) {
+            throw TunnelProfile.InvalidProfile("Reimport a current host export to preserve protected DNS before generating.")
+        }
+        var generation = selectedProfile?.hostGeneration
+        if selectedProfile?.proxyChain != nil { generation?.chainExit = nil }
+        if let generation {
+            settingsObject["hostGeneration"] = try JSONSerialization.jsonObject(with: encoder.encode(generation))
+        }
         settingsObject["regionalDNS"] = regional
+        try Task.checkCancellation()
         let settingsJSON = String(decoding: try JSONSerialization.data(withJSONObject: settingsObject), as: UTF8.self)
         generating = true
         defer { generating = false }
@@ -542,18 +866,26 @@ final class ConfigStore: ObservableObject {
             if let error { throw error }
             return result
         }.value
-        guard selectedProfileID == idBefore, try encoder.encode(sourceBundle) == Data(bundleJSON.utf8), experimentSettings == settingsBefore, selectedProfile?.regionalDNS == regional, content == contentBefore else {
+        try Task.checkCancellation()
+        guard selectedProfileID == idBefore, try encoder.encode(sourceBundle) == originalSources, experimentSettings == settingsBefore, selectedProfile?.regionalDNS == regional, content == contentBefore else {
             throw TunnelProfile.InvalidProfile("Sources or selection changed during generation. No runtime was replaced; retry.")
         }
         var candidate = try TunnelProfile.decodePackage(Data(raw.utf8))
         let revision = candidate.id
         candidate.id = idBefore ?? UUID().uuidString
         candidate.ruleRevisionID = revision
+        candidate.iCloudAdoptedBatches = selectedProfile?.iCloudAdoptedBatches
+        candidate.hostGeneration = selectedProfile?.hostGeneration
         candidate.name = selectedProfile?.name ?? "Generated configuration"
-        candidate.regionalDNS = selectedProfile?.regionalDNS
+        candidate.dnsGuard = dnsGuard
+        candidate.regionalDNS = regional
         candidate.experiment = settingsBefore
+        candidate.beforeOnFinal = selectedProfile?.beforeOnFinal
         candidate.forceTailscaleDERP = selectedProfile?.forceTailscaleDERP
-        candidate.proxyChain = selectedProfile?.proxyChain ?? ProxyChainSettings.importedChain(in: contentBefore)
+        candidate.proxyChain = selectedProfile?.proxyChain
+        if generation?.chainExit == nil && candidate.proxyChain == nil {
+            candidate.proxyChain = ProxyChainSettings.importedChain(in: contentBefore)
+        }
         var groupEdits = selectedProfile?.proxyGroups ?? []
         if let rawGroups = sourceBefore.files[AutomaticGroupSources.fileName] {
             groupEdits = AutomaticGroupSources.adopting(try AutomaticGroupSources.decode(Data(rawGroups.utf8)), edits: groupEdits, content: contentBefore, overrides: selectedProfile?.nodeOverrides ?? [:])
@@ -591,16 +923,14 @@ final class ConfigStore: ObservableObject {
         }
         do {
             _ = try prepare(candidate)
-            _ = try decodeSources(candidate)
+            let sources = try decodeSources(candidate)
+            try Task.checkCancellation()
+            try publishSelected(candidate)
+            if node != nil { adoptProfileSources(sources) }
         } catch {
             if let root = try? AppPaths.sharedDirectory() { try? FileManager.default.removeItem(at: root.appendingPathComponent("RuleSnapshots/" + revision)) }
             throw error
         }
-        if let old = idBefore { UserDefaults(suiteName: SystemSurfaceStore.groupIdentifier)?.set(true, forKey: "sakamoto.experiment.pause." + old) }
-        if let index = profiles.firstIndex(where: { $0.id == idBefore }) { profiles[index] = candidate }
-        else { profiles.append(candidate) }
-        selectedProfileID = candidate.id; content = candidate.config
-        persistence.set(content, forKey: Self.storageKey); persistProfiles()
         transition(.modified)
         transition(.regenerateSucceeded)
         lastAction = "Generated and validated on this device. Apply to use this configuration."
@@ -640,87 +970,60 @@ final class ConfigStore: ObservableObject {
         guard let body = bundle.files[name], ICloudSyncPaths.isValidSourceName(name) else { throw TunnelProfile.InvalidProfile("Unknown rule source") }
         try ICloudSyncPaths.validateConfGraph(main: name, files: bundle.files.mapValues { Data($0.utf8) })
         bundle.mainConf = name
-        commitSourceBundle(bundle)
-        commitImport(ImportedSource(displaySource: name, content: body))
+        try publishSources(bundle)
+        importedSource = ImportedSource(displaySource: name, content: body)
+        saveDraft(try? importedSource?.encoded(), key: Self.importKey)
     }
 
     /// Adopt the whole validated snapshot together, preserving original bytes
     /// for the sync baseline instead of reconstructing unrelated source files.
-    func adoptSourceBundle(_ bundle: SourceBundle) throws {
+    func adoptSourceBundle(_ bundle: SourceBundle, receipt: ICloudAdoptionReceipt? = nil) throws {
         let raw = String(decoding: try JSONEncoder().encode(bundle), as: UTF8.self)
         let decoded = try decodeSources(TunnelProfile(name: "Sources", config: "", sourceBundleJSON: raw))
-        ensureSourceProfile()
-        var groupsChanged = false
-        if let groups = decoded.groups, let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) {
-            let edits = AutomaticGroupSources.adopting(groups, edits: profiles[index].proxyGroups ?? [], content: content, overrides: profiles[index].nodeOverrides ?? [:])
-            groupsChanged = profiles[index].proxyGroups != edits
-            profiles[index].proxyGroups = edits
+        let original = selectedProfile ?? TunnelProfile(name: "Imported sources", config: "")
+        var candidate = original
+        if let receipt {
+            var batches = original.iCloudAdoptedBatches ?? [:]
+            batches[receipt.scope] = receipt.batch
+            candidate.iCloudAdoptedBatches = batches
         }
-        commitSourceBundle(bundle)
+        if let groups = decoded.groups {
+            candidate.proxyGroups = AutomaticGroupSources.adopting(groups, edits: original.proxyGroups ?? [], content: content, overrides: original.nodeOverrides ?? [:])
+        }
+        let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
+        let canonical = try encoder.encode(bundle)
+        let changed = try encoder.encode(sourceBundle) != canonical || candidate.proxyGroups != original.proxyGroups
+        candidate.sourceBundleJSON = String(decoding: canonical, as: UTF8.self)
+        if changed { candidate.sourcesChanged = true }
+        try publishSelected(candidate)
         adoptProfileSources(decoded)
-        if groupsChanged, let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) {
-            profiles[index].sourcesChanged = true
-            persistProfiles(); transition(.modified)
-        }
+        if changed { transition(.modified) }
     }
 
-    func commitSourceBundle(_ bundle: SourceBundle) {
-        ensureSourceProfile()
-        guard let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) else { return }
+    private func publishSources(_ bundle: SourceBundle, profile: TunnelProfile? = nil) throws {
+        var candidate = profile ?? selectedProfile ?? TunnelProfile(name: "Imported sources", config: "")
         let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
-        guard let data = try? encoder.encode(bundle) else { return }
-        let raw = String(decoding: data, as: UTF8.self)
-        let existing = try? encoder.encode(sourceBundle)
-        if existing != data {
-            profiles[index].sourceBundleJSON = raw
-            profiles[index].sourcesChanged = true
-            persistProfiles(); transition(.modified)
-        }
+        candidate.sourceBundleJSON = String(decoding: try encoder.encode(bundle), as: UTF8.self)
+        candidate.sourcesChanged = true
+        try publishSelected(candidate)
+        transition(.modified)
     }
 
-    func ensureSourceProfile() {
-        guard selectedProfile == nil else { return }
-        let bundle = sourceBundle
-        var profile = TunnelProfile(name: "Imported sources", config: "")
-        profile.sourceBundleJSON = (try? JSONEncoder().encode(bundle)).map { String(decoding: $0, as: UTF8.self) }
-        profile.sourcesChanged = true
-        profiles.append(profile); selectedProfileID = profile.id
-        persistProfiles()
-    }
-
-    private func invalidateProfileSources(changedFiles: Set<String>) {
-        ensureSourceProfile()
-        guard let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) else { return }
-        var bundle = sourceBundle
-        let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
-        if changedFiles.contains("nodes.txt") { bundle.files["nodes.txt"] = nodesSources.nodesText }
-        if changedFiles.contains("policy.json") { bundle.files["policy.json"] = (try? encoder.encode(policy.rules.map { SyncPolicy(match: $0.match, action: $0.action) })).map { String(decoding: $0, as: UTF8.self) } }
-        if changedFiles.contains("subscriptions.json") { bundle.files["subscriptions.json"] = (try? encoder.encode(nodesSources.subscriptions.map { SyncSubscription(name: $0.name, url: $0.url, format: $0.format) })).map { String(decoding: $0, as: UTF8.self) } }
-        if changedFiles.contains("conf"), let source = importedSource {
-            let name = ICloudSyncPaths.isValidSourceName(source.displaySource) && source.displaySource.lowercased().hasSuffix(".conf") ? source.displaySource : "conf/imported.conf"
-            bundle.mainConf = name; bundle.files[name] = source.content
-        }
-        bundle = (try? AutomaticGroupSources.updating(bundle, edits: profiles[index].proxyGroups ?? [], content: content, overrides: profiles[index].nodeOverrides ?? [:])) ?? bundle
-        if let data = try? encoder.encode(bundle) { profiles[index].sourceBundleJSON = String(decoding: data, as: UTF8.self) }
-        profiles[index].sourcesChanged = true
-        persistProfiles()
+    func ensureSourceProfile() throws {
+        if selectedProfile == nil { try publishSources(sourceBundle) }
     }
 
     /// Save a new config (Config editor draft or a validated Settings/
     /// Tailscale edit). Any actual change marks it `modified` — the tunnel
     /// still runs the previous config until Regenerate+Reconnect.
-    func save(_ newContent: String) {
+    func save(_ newContent: String) throws {
         guard newContent != content else { return }
-        content = newContent
-        if let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) {
-            profiles[index].config = newContent
-            profiles[index].pendingApply = true
-        } else {
-            let profile = TunnelProfile(name: "Imported configuration", config: newContent)
-            profiles.append(profile); selectedProfileID = profile.id
-        }
-        persistProfiles()
-        persistence.set(newContent, forKey: Self.storageKey)
+        var candidate = selectedProfile ?? TunnelProfile(name: "Imported configuration", config: newContent)
+        candidate.config = newContent
+        candidate.pendingApply = true
+        _ = try prepare(candidate)
+        try publishSelected(candidate)
+
         transition(.modified)
     }
 
@@ -743,47 +1046,53 @@ final class ConfigStore: ObservableObject {
             added += 1
         }
         guard added > 0 else { throw TunnelProfile.InvalidProfile("Those domains are already in Config.") }
-        commitPolicy(next)
+        try commitPolicy(next)
         let suffix = added == 1 ? "" : "s"
         lastAction = "Added \(added) failed domain rule\(suffix) to Config. Apply changes to use it."
     }
 
     /// Commit a staged policy book. The caller has validated every rule
     /// through mobilecore; this only persists and marks the state.
-    func commitPolicy(_ book: PolicyBook) {
+    func commitPolicy(_ book: PolicyBook) throws {
         guard policy.rules.map({ [$0.match, $0.action] }) != book.rules.map({ [$0.match, $0.action] }) else { return }
+        let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
+        let policyData = try book.encoded()
+        var bundle = sourceBundle
+        bundle.files["policy.json"] = String(decoding: try encoder.encode(book.rules.map { SyncPolicy(match: $0.match, action: $0.action) }), as: UTF8.self)
+        try publishSources(bundle)
         policy = book
-        invalidateProfileSources(changedFiles: ["policy.json"])
-        if let data = try? book.encoded() {
-            persistence.set(data, forKey: Self.policyKey)
-        }
+        persistence.set(policyData, forKey: Self.policyKey)
         transition(.modified)
     }
 
     /// Commit validated nodes and subscription metadata. Generation fetches
     /// and decodes subscription bodies on this device.
-    func commitNodesSources(_ book: NodesSourcesBook) {
+    func commitNodesSources(_ book: NodesSourcesBook, profile: TunnelProfile? = nil, clearingOverride: String? = nil) throws {
         guard nodesSources.nodesText != book.nodesText ||
               nodesSources.subscriptions.map({ [$0.name, $0.url, $0.format] }) != book.subscriptions.map({ [$0.name, $0.url, $0.format] }) else { return }
-        var changed: Set<String> = []
-        if nodesSources.nodesText != book.nodesText { changed.insert("nodes.txt") }
-        if nodesSources.subscriptions.map({ [$0.name, $0.url, $0.format] }) != book.subscriptions.map({ [$0.name, $0.url, $0.format] }) { changed.insert("subscriptions.json") }
+        var candidate = profile ?? selectedProfile ?? TunnelProfile(name: "Imported sources", config: "")
+        if let clearingOverride { try clearNodeOverride(clearingOverride, in: &candidate) }
+        var bundle = try AutomaticGroupSources.updating(sourceBundle, edits: candidate.proxyGroups ?? [], content: candidate.config, overrides: candidate.nodeOverrides ?? [:])
+        let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
+        if nodesSources.nodesText != book.nodesText { bundle.files["nodes.txt"] = book.nodesText }
+        let subscriptions = book.subscriptions.map { SyncSubscription(name: $0.name, url: $0.url, format: $0.format) }
+        bundle.files["subscriptions.json"] = String(decoding: try encoder.encode(subscriptions), as: UTF8.self)
+        try publishSources(bundle, profile: candidate)
         nodesSources = book
-        invalidateProfileSources(changedFiles: changed)
-        if let data = try? book.encoded() {
-            persistence.set(data, forKey: Self.nodesSourcesKey)
-        }
-        transition(.modified)
+        saveDraft(try? book.encoded(), key: Self.nodesSourcesKey)
     }
 
     /// Replace the last-known-good import. Call ONLY after
     /// MobilecoreParseConfContent accepted the content.
-    func commitImport(_ source: ImportedSource) {
+    func commitImport(_ source: ImportedSource) throws {
         guard importedSource?.content != source.content || importedSource?.displaySource != source.displaySource else { return }
+        let name = ICloudSyncPaths.isValidSourceName(source.displaySource) && source.displaySource.lowercased().hasSuffix(".conf") ? source.displaySource : "conf/imported.conf"
+        var bundle = sourceBundle
+        bundle.mainConf = name; bundle.files[name] = source.content
+        try publishSources(bundle)
         importedSource = source
-        invalidateProfileSources(changedFiles: ["conf"])
         if let data = try? source.encoded() {
-            persistence.set(data, forKey: Self.importKey)
+            saveDraft(data, key: Self.importKey)
         }
         transition(.modified)
     }
@@ -799,9 +1108,7 @@ final class ConfigStore: ObservableObject {
             do { try await generateFromSources() }
             catch { transition(.regenerateFailed); lastAction = TunnelDiagnostics.sanitized(error.localizedDescription); return }
         }
-        let profileID = selectedProfileID
-        let configBefore = content
-        let experimentBefore = experimentSettings
+        let profileBefore = selectedProfile
         // In-process structural validation before the provider sees it.
         // Top-level gomobile functions import the trailing NSError** (they
         // are C functions, not methods, so no `throws`).
@@ -813,38 +1120,26 @@ final class ConfigStore: ObservableObject {
             return
         }
         do {
-            let content = try TailscaleConfigInjection.inject(
-                authKey: keyStore.readAuthKey() ?? "",
-                into: try connectionContent()
-            )
+            let options = try connectionOptions()
             let state = try await tunnel.ping()
-            let options = try connectionOptions(content: content)
-            if state.serviceState.running { try await tunnel.reload(options: options) }
-            else {
-                guard state.serviceState != .starting && state.serviceState != .stopping else {
-                    throw TunnelProfile.InvalidProfile("Wait for the current VPN operation to finish, then apply again.")
-                }
-                try await tunnel.connect(options: options)
-                // startVPNTunnel queues a request; only a provider-confirmed
-                // Running snapshot can make the configuration Clean.
-                var running = false
-                for _ in 0..<30 {
-                    try await Task.sleep(nanoseconds: 500_000_000)
-                    let snapshot = try await tunnel.ping()
-                    if snapshot.serviceState.running { running = true; break }
-                    if let detail = snapshot.detail { throw TunnelProfile.InvalidProfile(detail) }
-                }
-                guard running else { throw TunnelProfile.InvalidProfile("VPN startup was not confirmed. Check the startup diagnostic and retry.") }
-            }
-            guard selectedProfileID == profileID, self.content == configBefore, experimentSettings == experimentBefore, selectedProfile?.sourcesChanged == false else {
-                lastAction = "Selection or sources changed during Apply; the new selection still needs applying."
+            try Task.checkCancellation()
+            guard selectedProfile == profileBefore else {
+                lastAction = "Configuration changed while checking the tunnel. Apply the selected configuration again."
                 return
             }
-            transition(.regenerateSucceeded)
-            transition(.applied)
+            guard state.serviceState != .starting && state.serviceState != .stopping else {
+                throw TunnelProfile.InvalidProfile("Wait for the current VPN operation to finish, then apply again.")
+            }
+            let transaction = UUID()
+            try await tunnel.apply(options: options, starting: !state.serviceState.running, transaction: transaction) {
+                guard self.selectedProfile == profileBefore else { throw CancellationError() }
+                guard self.transition(.regenerateSucceeded), self.transition(.applied, transaction: transaction) else {
+                    throw TunnelProfile.InvalidProfile(self.lastAction ?? "Could not save the applied configuration.")
+                }
+            }
             lastAction = "applied to the running provider"
         } catch {
-            transition(.regenerateFailed)
+            if selectedProfile == profileBefore { transition(.regenerateFailed) }
             lastAction = "regenerate failed: \(error.localizedDescription)"
         }
     }
@@ -858,9 +1153,14 @@ final class ConfigStore: ObservableObject {
         guard canConnect else {
             throw TunnelProfile.InvalidProfile("Generate the selected configuration in Config before connecting.")
         }
-        let prepared = try connectionContent()
-        let injected = try TailscaleConfigInjection.inject(authKey: keyStore.readAuthKey() ?? "", into: prepared)
-        return try connectionOptions(content: injected)
+        if let profile = selectedProfile {
+            try TunnelProfile.validateRouteSource(profile.config, version: profile.routeSourceVersion)
+        }
+        if let id = selectedProfileID, let confirmed = try TunnelStartOptions.confirmed(for: id) {
+            try confirmed.validateRouteSource()
+            return confirmed
+        }
+        return try connectionOptions()
     }
 
     /// A background intent can finish before Connected. The provider's exact
@@ -868,29 +1168,34 @@ final class ConfigStore: ObservableObject {
     /// when the app later observes it; stale/different receipts never clear edits.
     func reconcileAppliedConnection(service: ServiceState,
                                     receipt: TunnelConfigurationReceipt? = TunnelConfigurationReceiptStore.read()) {
-        guard service == .running, selectedProfile?.pendingApply != false,
-              let receipt, let options = try? systemConnectionOptions(), receipt.matches(options) else { return }
+        guard !applying, service == .running, let id = selectedProfileID,
+              (try? TunnelStartOptions.hasInterruptedApply(for: id)) == false, selectedProfile?.sourcesChanged == false, selectedProfile?.pendingApply != false,
+              let receipt, let options = try? connectionOptions(), receipt.matches(options) else { return }
         transition(.regenerateSucceeded)
         transition(.applied)
     }
 
     func connectionConfirmed(content appliedContent: String) {
-        guard (try? connectionContent()) == appliedContent else { return }
+        guard !applying, let id = selectedProfileID, (try? TunnelStartOptions.hasInterruptedApply(for: id)) == false,
+              selectedProfile?.sourcesChanged == false, (try? connectionContent()) == appliedContent else { return }
         transition(.regenerateSucceeded); transition(.applied)
     }
 
-    private func transition(_ event: ConfigEvent) {
+    @discardableResult private func transition(_ event: ConfigEvent, transaction: UUID? = nil) -> Bool {
         var bridgeError: NSError?
         let next = MobilecoreConfigStateTransition(configState.rawValue, event.rawValue, &bridgeError)
         if let bridgeError {
             lastAction = "state machine error: \(bridgeError.localizedDescription)"
-            return
+            return false
+        }
+        if event == .applied, var candidate = selectedProfile {
+            candidate.pendingApply = false
+            if let transaction { candidate.appliedTransaction = transaction }
+            do { try publishSelected(candidate) }
+            catch { reportProfileError(error); lastAction = profileError; return false }
         }
         configState = ConfigState(rawValue: next) ?? configState
-        if event == .applied, let index = profiles.firstIndex(where: { $0.id == selectedProfileID }) {
-            profiles[index].pendingApply = false
-            persistProfiles()
-        }
+        return true
     }
 }
 

@@ -59,9 +59,10 @@ type Config struct {
 	TunStack     string `yaml:"tun_stack"`     // system/gvisor/mixed; default gvisor
 	LogLevel     string `yaml:"log_level"`     // info/debug; default info
 	MixedInbound struct {
-		Enabled  bool `yaml:"enabled"`   // local HTTP/SOCKS mixed inbound
-		Port     int  `yaml:"port"`      // default 2334
-		AllowLAN bool `yaml:"allow_lan"` // allow LAN clients
+		Enabled     bool   `yaml:"enabled"`   // local HTTP/SOCKS mixed inbound
+		Port        int    `yaml:"port"`      // default 2334
+		AllowLAN    bool   `yaml:"allow_lan"` // allow authenticated LAN clients
+		LANPassword string `yaml:"lan_password,omitempty"`
 	} `yaml:"mixed_inbound"`
 	SystemProxy struct {
 		Enabled bool   `yaml:"enabled"` // browser hostname proxy alongside the TUN; restored on disconnect
@@ -302,6 +303,25 @@ func (c *Config) ValidateDNSGuard() error {
 		}
 	}
 	return nil
+}
+
+// BootstrapName matches DNS names in both generated and previously saved cores.
+func BootstrapName(host string) string {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	return strings.TrimSuffix(strings.ToLower(host), ".")
+}
+
+func (c *Config) IsLocalDNSName(host string) bool {
+	name := BootstrapName(host)
+	for _, suffix := range c.DNSGuard.LocalDomains {
+		suffix = strings.Trim(strings.ToLower(suffix), ".")
+		if name == suffix || strings.HasSuffix(name, "."+suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // ValidatePolicy rejects malformed user routing overrides before generation.

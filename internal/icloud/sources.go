@@ -175,7 +175,7 @@ func sourcePairsWithRead(localDir string, cfg *config.Config, readSource func(st
 					continue
 				}
 				found = true
-				includes, err := localRuleIncludes(data)
+				includes, err := LocalRuleIncludes(data)
 				if err != nil {
 					return err
 				}
@@ -225,9 +225,9 @@ func sourcePairsWithRead(localDir string, cfg *config.Config, readSource func(st
 	return result, nil
 }
 
-// localRuleIncludes parses only local relative includes in [General]. Remote
+// LocalRuleIncludes parses only local relative includes in [General]. Remote
 // URLs are fetched by the importer, not treated as cloud file dependencies.
-func localRuleIncludes(data []byte) ([]string, error) {
+func LocalRuleIncludes(data []byte) ([]string, error) {
 	if len(data) > 16<<20 {
 		return nil, fmt.Errorf("conf source exceeds the 16 MiB sync limit")
 	}

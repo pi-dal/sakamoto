@@ -93,6 +93,8 @@ public struct ICloudSyncPayload: Equatable, Sendable {
 /// untouched; synced/upToDate → completed pass; conflict → the pass stopped
 /// BEFORE overwriting either copy; failed → I/O problem after some copies
 /// may have completed (each completed copy keeps its baseline).
+public enum ICloudConflictChoice: Sendable { case useDevice, useCloud }
+
 public enum ICloudSyncStatus: Equatable, Sendable {
     case disabled
     /// Enabled but no pass has run yet in this install.
@@ -260,7 +262,7 @@ public enum ICloudSyncConf {
         guard data.count <= ICloudSyncLimits.maxConfParseBytes else {
             throw ICloudSyncError.confTooLarge
         }
-        var text = String(decoding: data, as: UTF8.self)
+        var text = String(decoding: data, as: UTF8.self).replacingOccurrences(of: "\r\n", with: "\n")
         if text.hasPrefix("\u{FEFF}") {
             text.removeFirst()
         }

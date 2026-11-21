@@ -142,6 +142,19 @@ public enum SettingsOverrides {
         return try serialize(root)
     }
 
+    static func restoringFinal(_ tag: String, in content: String) throws -> String {
+        var root = try parseRoot(content)
+        let tags = ["outbounds", "endpoints"].flatMap { key in
+            (root[key] as? [[String: Any]] ?? []).compactMap { $0["tag"] as? String }
+        }
+        guard tags.firstIndex(of: tag) != nil, var route = root["route"] as? [String: Any] else {
+            throw SettingsOverrideError.invalidConfig("restore the missing FINAL outbound before changing Experiment mode")
+        }
+        route["final"] = tag
+        root["route"] = route
+        return try serialize(root)
+    }
+
     public static func setLogLevel(_ level: String, in configJSON: String) throws -> String {
         let normalized = level.lowercased()
         guard allowedLogLevels.contains(normalized) else {

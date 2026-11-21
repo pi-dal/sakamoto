@@ -7,8 +7,8 @@ import Foundation
 // memory (no iCloud account is ever touched by the unit tests).
 //
 // Model (mirrors the macOS daemon):
-//   local side  — `localDirectory/sources/<name>` files this store owns
-//                 (the app stages values in, adopts downloads out).
+//   local side  — source bytes supplied by the profile. Downloads stay in memory
+//                 until the app adopts them into the protected profile manifest.
 //   cloud side  — `<containerURL>/<directoryName>/<name>` inside the real
 //                 ubiquity container (NSFileCoordinator-coordinated writes).
 //   baseline    — `localDirectory/icloud-state.json`: name → sha256 hex of
@@ -53,10 +53,14 @@ public struct ICloudSyncOutcome: Equatable, Sendable {
 
 // MARK: - Store
 
+public struct ICloudAdoptionReceipt: Sendable {
+    public let scope: String
+    public let batch: UUID
+}
+
 public actor ICloudSyncStore {
 
     public static let stateFileName = "icloud-state.json"
-    public static let sourcesDirectoryName = "sources"
     private let localFilesystem: ICloudFilesystem
     private let cloudFilesystem: ICloudFilesystem
     private let container: ICloudContainer
@@ -65,6 +69,12 @@ public actor ICloudSyncStore {
 
     private var settings: ICloudSyncSettings
     private var lastStatus: ICloudSyncStatus?
+    private struct Conflict: Equatable {
+        let local: String
+        let remote: String
+    }
+    private var reviewedScope: String?
+    private var reviewedConflicts: [String: Conflict] = [:]
 
     public init(
         settings: ICloudSyncSettings = ICloudSyncSettings(),
@@ -84,13 +94,6 @@ public actor ICloudSyncStore {
     }
 
     // MARK: Settings & status
-
-    /// Test/inspection seam: read back a locally staged source file (the
-    /// download side lands here before the app adopts it).
-    public func stagedLocalContent(name: String) -> Data? {
-        let path = localDirectory + "/" + Self.sourcesDirectoryName + "/" + name
-        return try? localFilesystem.contents(atPath: path)
-    }
 
     public func currentSettings() -> ICloudSyncSettings { settings }
 
@@ -130,9 +133,11 @@ public actor ICloudSyncStore {
         sourceScope: String = "",
         mainConf: String = "",
         discoverConf: Bool = false,
+        conflictChoice: ICloudConflictChoice? = nil,
         validateDownload: @Sendable (String, Data) throws -> Void = { _, _ in },
         sourcesAreCurrent: @Sendable () async -> Bool = { true },
-        adoptDownloads: @Sendable ([ICloudSyncOutcome.Download], String?) async throws -> Void = { _, _ in }
+        adoptedBatches: [String: UUID] = [:],
+        adoptDownloads: @Sendable ([ICloudSyncOutcome.Download], String?, ICloudAdoptionReceipt) async throws -> Void = { _, _, _ in }
     ) async -> ICloudSyncOutcome {
         guard settings.enabled else {
             lastStatus = .disabled
@@ -149,6 +154,14 @@ public actor ICloudSyncStore {
             lastStatus = status
             return ICloudSyncOutcome(status: status, updates: [], downloads: [], skipped: [])
         }
+        if let directoryURL {
+            do { try cloudFilesystem.validateDestination(directoryURL) }
+            catch {
+                let status = ICloudSyncStatus.unavailable("Choose an accessible shared folder in iCloud Drive.")
+                lastStatus = status
+                return ICloudSyncOutcome(status: status, updates: [], downloads: [], skipped: [])
+            }
+        }
         let directoryName = settings.directoryName.isEmpty ? "sakamoto" : settings.directoryName
         let cloudRoot = directoryURL?.path ?? containerURL
             .appendingPathComponent("Documents", isDirectory: true)
@@ -160,12 +173,15 @@ public actor ICloudSyncStore {
         var discoveredMain: String?
         var deferredConf = false
         var downloading = Set<String>()
+        var skipped: [String] = []
         if discoverConf {
             do {
-                confNames = try cloudFilesystem.sourceNames(under: cloudRoot).filter { $0.lowercased().hasSuffix(".conf") }
-                guard confNames.count <= ICloudSyncLimits.maxIncludeFiles else { return fail(ICloudSyncError.filesystem("too many conf sources")) }
+                var queue = mainConf.isEmpty ? try cloudFilesystem.sourceNames(under: cloudRoot).filter { $0.lowercased().hasSuffix(".conf") } : [mainConf]
+                var visited = Set<String>()
                 var children = Set<String>()
-                for name in confNames {
+                while let name = queue.popLast() {
+                    guard visited.insert(name).inserted else { continue }
+                    guard visited.count <= ICloudSyncLimits.maxIncludeFiles, ICloudSyncPaths.isValidSourceName(name), name.lowercased().hasSuffix(".conf") else { throw ICloudSyncError.unsafeInclude(name) }
                     try Self.checkPath(root: cloudRoot, path: cloudRoot + "/" + name, filesystem: cloudFilesystem)
                     let data: Data?
                     do { data = try cloudFilesystem.contents(atPath: cloudRoot + "/" + name) }
@@ -173,9 +189,26 @@ public actor ICloudSyncStore {
                         if isICloudSourceDownloading(error) { downloading.insert(name); deferredConf = true; continue }
                         throw error
                     }
-                    guard let data else { continue }
                     let parent = (name as NSString).deletingLastPathComponent
-                    for child in try ICloudSyncConf.localIncludes(ofConfContent: data) { children.insert(parent.isEmpty ? child : parent + "/" + child) }
+                    let staged = staging.first(where: { $0.name == name })?.data
+                    var relatives = Set<String>()
+                    do {
+                        for body in [data, staged].compactMap({ $0 }) {
+                            relatives.formUnion(try ICloudSyncConf.localIncludes(ofConfContent: body))
+                        }
+                    } catch let error as ICloudSyncError {
+                        // A draft found by enumeration is not a rule source. Required
+                        // includes are still checked against the assembled graph.
+                        guard mainConf.isEmpty, staged == nil else { throw error }
+                        skipped.append(name)
+                        continue
+                    }
+                    confNames.append(name)
+                    for relative in relatives {
+                        let child = parent.isEmpty ? relative : parent + "/" + relative
+                        children.insert(child)
+                        if !mainConf.isEmpty { queue.append(child) }
+                    }
                 }
                 let roots = confNames.filter { !children.contains($0) }
                 if !deferredConf && mainConf.isEmpty && roots.count == 1 { discoveredMain = roots.first }
@@ -186,9 +219,9 @@ public actor ICloudSyncStore {
 
         // --- validate + resolve names ---------------------------------------
 
-        var skipped: [String] = []
         var pairs: [Pair] = []
         for entry in staging {
+            if discoverConf && !mainConf.isEmpty && entry.name.lowercased().hasSuffix(".conf") && !confNames.contains(entry.name) { continue }
             guard ICloudSyncPaths.isValidSourceName(entry.name) else {
                 return fail(ICloudSyncError.forbiddenSourceName(entry.name))
             }
@@ -220,7 +253,27 @@ public actor ICloudSyncStore {
         let statePath = localDirectory + "/directories/" + scope + "/" + Self.stateFileName
         let state: [String: String]
         do {
-            state = try Self.loadState(from: statePath, filesystem: localFilesystem)
+            var saved = try Self.loadState(from: statePath, filesystem: localFilesystem)
+            // Resolve the previous batch for every file, including sources currently
+            // excluded by settings, before recording another batch for this folder.
+            for (name, marker) in saved where marker.hasPrefix("pending:") {
+                let parts = marker.split(separator: ":", omittingEmptySubsequences: false)
+                if (parts.count == 4 || (parts.count == 5 && parts[1] == "creating")),
+                   let batch = UUID(uuidString: String(parts.last!)) {
+                    // Older writers could embed a creating:<digest> upload intent here.
+                    // Only an adopted batch establishes the incoming common ancestor.
+                    let previous = parts.count == 5 ? "unconfirmed" : String(parts[1])
+                    let baseline = adoptedBatches[scope] == batch ? String(parts[parts.count - 2]) : previous
+                    saved[name] = baseline.isEmpty ? nil : baseline
+                } else if parts.count == 3 {
+                    // Older manifests have no adoption receipt. Equal copies establish
+                    // a baseline naturally. Divergent copies require explicit review.
+                    saved[name] = "unconfirmed"
+                } else {
+                    throw ICloudSyncError.filesystem("invalid pending baseline")
+                }
+            }
+            state = saved
         } catch {
             return fail(ICloudSyncError.filesystem("baseline state unreadable: \(error)"))
         }
@@ -278,7 +331,8 @@ public actor ICloudSyncStore {
             let localDigest = Self.digest(localData)
 
             guard let remote else {
-                if state[pair.name] != nil {
+                // Retry an interrupted first upload only with its original payload.
+                if let baseline = state[pair.name], baseline != "creating:\(localDigest)" {
                     // Known baseline + vanished cloud copy: a deletion we do
                     // NOT silently restore (docs/icloud.md) — stop and let
                     // the user resolve.
@@ -324,7 +378,23 @@ public actor ICloudSyncStore {
             discoveredMain = nil
         }
         skipped = Array(Set(skipped).union(downloading)).sorted()
-        if !conflictNames.isEmpty {
+        let conflicts = Dictionary(uniqueKeysWithValues: pairs.compactMap { pair -> (String, Conflict)? in
+            guard conflictNames.contains(pair.name), let local = pair.data, let remote = remoteCopies[pair.name] else { return nil }
+            return (pair.name, Conflict(local: Self.digest(local), remote: Self.digest(remote)))
+        })
+        if let conflictChoice, !conflicts.isEmpty, reviewedScope == scope, reviewedConflicts == conflicts {
+            for pair in pairs where conflicts[pair.name] != nil {
+                guard let data = conflictChoice == .useCloud ? remoteCopies[pair.name] : pair.data else { continue }
+                if conflictChoice == .useCloud {
+                    plan.downloads.append(Action(name: pair.name, data: data, message: "used iCloud copy: " + pair.name))
+                } else {
+                    plan.uploads.append(Action(name: pair.name, data: data, message: "used device copy: " + pair.name))
+                }
+                plan.baselines[pair.name] = Self.digest(data)
+            }
+        } else if !conflictNames.isEmpty {
+            reviewedScope = scope
+            reviewedConflicts = conflicts
             let status = ICloudSyncStatus.conflict(clock.now(), conflictNames)
             lastStatus = status
             return ICloudSyncOutcome(
@@ -333,7 +403,11 @@ public actor ICloudSyncStore {
                 downloads: [],
                 skipped: skipped,
             )
+        } else if conflictChoice != nil {
+            return fail(ICloudSyncError.filesystem("The files changed. Sync again to review their current versions."))
         }
+        reviewedConflicts = [:]
+        reviewedScope = nil
 
         for action in plan.downloads { sourceFiles[action.name] = action.data }
         if !deferredConf {
@@ -348,46 +422,28 @@ public actor ICloudSyncStore {
         // --- execute: local staging, cloud copies, baseline per action -------
 
         var updates: [String] = []
-        var downloads: [ICloudSyncOutcome.Download] = []
+        let incoming = plan.downloads.map { ICloudSyncOutcome.Download(name: $0.name, data: $0.data) }
         var currentState = state
         guard settings.enabled else { return fail(ICloudSyncError.filesystem("sync was disabled during preflight")) }
-
-        let sourcesDirectory = localDirectory + "/" + Self.sourcesDirectoryName
-
-        if !plan.downloads.isEmpty || discoveredMain != nil {
-            let incoming = plan.downloads.map { ICloudSyncOutcome.Download(name: $0.name, data: $0.data) }
-            do {
-                for item in incoming {
-                    try Self.writeLocal(item.data, to: sourcesDirectory + "/" + item.name, filesystem: localFilesystem, root: localDirectory)
-                }
-                // Advance the baseline only after the profile adopts the complete graph.
-                try await adoptDownloads(incoming, discoveredMain)
-            } catch {
-                return fail(ICloudSyncError.filesystem("could not adopt downloaded sources: \(error)"), completed: [], downloads: [], skipped: skipped)
-            }
-            downloads = incoming
-            updates = plan.downloads.map(\.message)
-            for item in incoming { currentState[item.name] = Self.digest(item.data) }
-            do {
-                try Self.saveState(currentState, to: statePath, filesystem: localFilesystem)
-            } catch {
-                return fail(ICloudSyncError.filesystem("cannot persist baseline: \(error)"), completed: updates, downloads: downloads, skipped: skipped)
-            }
-        }
 
         for action in plan.uploads {
             do {
                 try Self.checkPath(root: cloudRoot, path: cloudRoot + "/" + action.name, filesystem: cloudFilesystem)
                 try cloudFilesystem.ensureDirectory(atPath: cloudRoot)
-                try cloudFilesystem.writeAtomic(action.data, toPath: cloudRoot + "/" + action.name)
+                // Invalidate the old common ancestor before changing the other filesystem.
+                // A failed or interrupted replacement can leave either version in the cloud.
+                let digest = Self.digest(action.data)
+                currentState[action.name] = remoteCopies[action.name] == nil ? "creating:\(digest)" : "unconfirmed"
+                try Self.saveState(currentState, to: statePath, filesystem: localFilesystem)
+                try cloudFilesystem.replace(action.data, atPath: cloudRoot + "/" + action.name, matching: remoteCopies[action.name])
             } catch {
-                return fail(error, completed: updates, downloads: downloads, skipped: skipped)
+                return fail(error, completed: updates, downloads: [], skipped: skipped)
             }
             currentState[action.name] = Self.digest(action.data)
             do {
                 try Self.saveState(currentState, to: statePath, filesystem: localFilesystem)
             } catch {
-                return fail(ICloudSyncError.filesystem("cannot persist baseline: \(error)"), completed: updates, downloads: downloads, skipped: skipped)
+                return fail(ICloudSyncError.filesystem("cannot persist baseline: \(error)"), completed: updates, downloads: [], skipped: skipped)
             }
             updates.append(action.message)
         }
@@ -396,10 +452,18 @@ public actor ICloudSyncStore {
         for (name, digestValue) in plan.baselines where currentState[name] == nil || currentState[name] != digestValue {
             currentState[name] = digestValue
         }
+        // Adoption commits the receipt and the downloaded sources in one manifest write.
+        let receipt = ICloudAdoptionReceipt(scope: scope, batch: UUID())
+        for item in incoming {
+            let previous = state[item.name] ?? ""
+            // An unfinished first upload provides no common ancestor for a download.
+            let ancestor = previous.hasPrefix("creating:") ? "unconfirmed" : previous
+            currentState[item.name] = "pending:\(ancestor):\(Self.digest(item.data)):\(receipt.batch.uuidString)"
+        }
         do {
             try Self.saveState(currentState, to: statePath, filesystem: localFilesystem)
         } catch {
-            return fail(ICloudSyncError.filesystem("cannot persist baseline: \(error)"), completed: updates, downloads: downloads, skipped: skipped)
+            return fail(ICloudSyncError.filesystem("cannot persist baseline: \(error)"), completed: updates, downloads: [], skipped: skipped)
         }
 
         let now = clock.now()
@@ -421,13 +485,22 @@ public actor ICloudSyncStore {
             } else if plan.baselines.isEmpty {
                 status = .failed(now, "No syncable sources found in this profile or folder.")
             } else {
-                status = updates.isEmpty ? .upToDate(now) : .synced(now, updates)
+                let completed = updates + plan.downloads.map(\.message)
+                status = completed.isEmpty ? .upToDate(now) : .synced(now, completed)
             }
         } catch {
-            return fail(ICloudSyncError.filesystem("Could not confirm iCloud upload. \(error.localizedDescription)"), completed: updates, downloads: downloads, skipped: skipped)
+            return fail(ICloudSyncError.filesystem("Could not confirm iCloud upload. \(error.localizedDescription)"), completed: updates, downloads: [], skipped: skipped)
+        }
+        if !incoming.isEmpty || discoveredMain != nil {
+            do {
+                try await adoptDownloads(incoming, discoveredMain, receipt)
+                updates += plan.downloads.map(\.message)
+            } catch {
+                return fail(error, completed: updates, downloads: [], skipped: skipped)
+            }
         }
         lastStatus = status
-        return ICloudSyncOutcome(status: status, updates: updates, downloads: downloads, skipped: skipped, discoveredMainConf: discoveredMain)
+        return ICloudSyncOutcome(status: status, updates: updates, downloads: incoming, skipped: skipped, discoveredMainConf: discoveredMain)
     }
 
     // MARK: internals
@@ -513,14 +586,4 @@ public actor ICloudSyncStore {
         }
     }
 
-    private static func writeLocal(
-        _ data: Data,
-        to path: String,
-        filesystem: ICloudFilesystem,
-        root: String,
-    ) throws {
-        try checkPath(root: root, path: path, filesystem: filesystem)
-        try filesystem.ensureDirectory(atPath: (path as NSString).deletingLastPathComponent)
-        try filesystem.writeAtomic(data, toPath: path)
-    }
 }

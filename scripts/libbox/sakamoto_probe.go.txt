@@ -81,14 +81,20 @@ func (s *StartedService) ProbeAutomaticOrigin(domain string, port int32, outboun
         return 0, fmt.Errorf("origin is ineligible for automatic probing")
     }
     if timeoutMillis < 1 || timeoutMillis > 8000 { return 0, fmt.Errorf("invalid origin deadline") }
-    ctx, cancel := context.WithTimeout(instance.ctx, time.Duration(timeoutMillis)*time.Millisecond)
+    if instance.clashMode == nil { return 0, fmt.Errorf("learning requires Rule mode") }
+    modeCtx, allowed := instance.clashMode.RuleProbeContext()
+    if !allowed { return 0, fmt.Errorf("learning requires Rule mode") }
+    ctx, cancel := context.WithTimeout(modeCtx, time.Duration(timeoutMillis)*time.Millisecond)
     defer cancel()
     destination := M.ParseSocksaddrHostPort(domain, uint16(port))
     transport := &http.Transport{
         DisableKeepAlives: true,
         MaxResponseHeaderBytes: 32 << 10,
         TLSClientConfig: &tls.Config{RootCAs: adapter.RootPoolFromContext(ctx), Time: ntp.TimeFuncFromContext(ctx)},
-        DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+        // net/http can detach its dial context from the request. Use the
+        // mode-scoped context through DNS resolution and the outbound dial.
+        DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+            if err := ctx.Err(); err != nil { return nil, err }
             if outboundTag != "" {
                 outbound, found := instance.Box().Outbound().Outbound(outboundTag)
                 if !found { return nil, fmt.Errorf("configured outbound unavailable") }

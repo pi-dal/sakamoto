@@ -119,14 +119,8 @@ final class HomeModel: ObservableObject {
         serviceState = .starting
         refoldPhase()
         do {
-            let keyStore = TailscaleKeychainStore()
-            let prepared = try store.connectionContent()
-            requestedConfig = prepared
-            let content = try TailscaleConfigInjection.inject(
-                authKey: keyStore.readAuthKey() ?? "",
-                into: prepared
-            )
-            let options = try store.connectionOptions(content: content)
+            let options = try store.systemConnectionOptions()
+            requestedConfig = options.configContent
             requestedProfileID = options.profileID
             requestedExperiment = options.experimentJSON
             try await tunnel.connect(options: options)
@@ -177,6 +171,11 @@ final class HomeModel: ObservableObject {
         controlGeneration &+= 1
         let request = controlGeneration
         repairing = true; busy = true; repairIdentity = nil
+        let profile = store.selectedProfile
+        func checkProfile() throws {
+            try Task.checkCancellation()
+            guard store.selectedProfile == profile else { throw TunnelProfile.InvalidProfile("Configuration changed. Reconnect the selected configuration.") }
+        }
         repairResult = CoreRepairResult(state: "starting", detail: "Checking the VPN and core…")
         defer { if request == controlGeneration { repairing = false; busy = false } }
         do {
@@ -188,7 +187,8 @@ final class HomeModel: ObservableObject {
             if let native, let version = native.nativeVersion, let instance = native.nativeInstanceID {
                 repairIdentity = "Core \(version) · instance \(instance) · recovery \(native.recoveryProtocol ?? 0)"
             }
-            let options: TunnelStartOptions? = (checkOnly || (alive && !restart)) ? nil : (try? repairOptions())
+            try checkProfile()
+            let options: TunnelStartOptions? = (checkOnly || (alive && !restart)) ? nil : (try? store.systemConnectionOptions())
             let decision = try JSONDecoder().decode(CoreRepairResult.self, from: Data(MobilecoreRepairRuntimeJSON(try AppPaths.sharedDirectory().path, observed.rawValue, alive, checkOnly, restart, options != nil).utf8))
             repairResult = decision
             guard decision.action == "start" || decision.action == "restart", let options else { return }
@@ -204,6 +204,7 @@ final class HomeModel: ObservableObject {
                 }
             }
             guard request == controlGeneration else { return }
+            try checkProfile()
             serviceState = .starting; refoldPhase()
             try await tunnel.connect(options: options)
             let deadline = ProcessInfo.processInfo.systemUptime + 20
@@ -212,6 +213,7 @@ final class HomeModel: ObservableObject {
                 if let snapshot = try? await tunnel.ping(), snapshot.serviceState == .running,
                    let instance = snapshot.nativeInstanceID, instance > 0 {
                     guard request == controlGeneration else { return }
+                    try checkProfile()
                     repairResult = CoreRepairResult(state: "repaired", action: decision.action == "restart" ? "restarted" : "started", verified: true, detail: snapshot.detail ?? "Core verified. Use Check connection to test DNS and HTTPS.")
                     await refreshProviderState(); syncCommandChannel(); return
                 }
@@ -224,21 +226,6 @@ final class HomeModel: ObservableObject {
             let context = checkOnly ? "Core check unavailable." : "Repair incomplete."
             repairResult = CoreRepairResult(state: "failed", detail: "\(context) \(detail). Review VPN access in Settings, then retry.")
         }
-    }
-
-    private func repairOptions() throws -> TunnelStartOptions {
-        if store.configState != .clean || !store.canConnect {
-            let root = try AppPaths.sharedDirectory()
-            var error: NSError?
-            if let session = MobilecoreNewRecoverySession(root.path, &error),
-               let content = try? checkedNativeValue({ session.retainedConfig($0) }), let metadata = try? checkedNativeValue({ session.retainedMetadata($0) }),
-               var retained = try? JSONDecoder().decode(TunnelStartOptions.self, from: Data(metadata.utf8)) {
-                try store.checkRecoveryDNS(content)
-                retained.configContent = content; retained.experimentJSON = nil
-                return retained
-            }
-        }
-        return try store.systemConnectionOptions()
     }
 
     func refreshProviderState() async {
@@ -322,8 +309,7 @@ final class HomeModel: ObservableObject {
     private func confirmRequestedConfiguration() {
         if serviceState.running, let config = requestedConfig {
             if store.selectedProfileID == requestedProfileID,
-               (try? store.connectionOptions().experimentJSON) == requestedExperiment,
-               let options = try? store.systemConnectionOptions(),
+               let options = try? store.connectionOptions(), options.experimentJSON == requestedExperiment,
                TunnelConfigurationReceiptStore.read()?.matches(options) == true {
                 store.connectionConfirmed(content: config)
             }

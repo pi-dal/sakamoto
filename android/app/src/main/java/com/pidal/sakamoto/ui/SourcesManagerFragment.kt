@@ -15,7 +15,7 @@ import io.nekohasekai.mobilecore.Mobilecore
  * delete action removes with guarded Undo — no nested popup menus. The
  * generation boundary stays explicit: edits stage locally, the host regenerates.
  */
-class SourcesManagerFragment : androidx.fragment.app.Fragment() {
+class SourcesManagerFragment(private val persist: (android.content.Context, ConfigRepository.StagedConfig, ConfigRepository.StagedConfig) -> Unit = ConfigRepository::save) : androidx.fragment.app.Fragment() {
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, state: Bundle?): View = android.widget.FrameLayout(requireContext()).apply { addView(build().root) }
     override fun onViewCreated(view: View, state: Bundle?) {
         super.onViewCreated(view, state)
@@ -33,17 +33,23 @@ class SourcesManagerFragment : androidx.fragment.app.Fragment() {
         val saved = ConfigRepository.load(requireContext())
         val nodes = page.section(getString(R.string.profile_source_nodes))
         page.button(nodes, getString(R.string.add_node_action)) { AddNodeSheet().show(parentFragmentManager, "add-node") }
-        for (raw in saved.nodes) {
+        for ((index, raw) in saved.nodes.withIndex()) {
             val info = runCatching { Mobilecore.parseShareLink(raw) }.getOrNull()
             val tag = info?.tag?.let { saved.nodeAliases[it] ?: it }
             fun editNode() {
                 if (tag != null && runCatching { tag in com.pidal.sakamoto.runtime.ConfigEdits.outboundTags(saved.generatedContent) }.getOrDefault(false)) {
                     (requireActivity() as com.pidal.sakamoto.MainActivity).openChild(EditorFragment().apply { arguments = Bundle().apply { putString("kind", "outbound"); putString("tag", tag) } }, getString(R.string.profile_edit_node, tag))
-                } else AddNodeSheet().apply { arguments = Bundle().apply { putString("original", raw) } }.show(parentFragmentManager, "edit-node")
+                } else {
+                    val origin = ConfigRepository.manifestReceipt(requireContext())
+                    if (ConfigRepository.loadAt(requireContext(), origin) != saved) { refresh(); return }
+                    AddNodeSheet().apply {
+                        arguments = Bundle().apply { putString("original", raw); putInt("index", index); putString("origin", origin) }
+                    }.show(parentFragmentManager, "edit-node")
+                }
             }
             val row = page.row(nodes, tag ?: getString(R.string.profile_invalid_source), info?.type.orEmpty(), R.drawable.ic_node, navigates = false) { editNode() }
             row.actionIcon(R.drawable.ic_edit, getString(R.string.profile_edit_node, tag ?: getString(R.string.profile_invalid_source))) { editNode() }
-            val remove = { removeWithUndo(saved) { current -> current.copy(nodes = current.nodes.filterNot { it == raw }, sourceNeedsGenerate = true) } }
+            val remove = { removeWithUndo(saved) { current -> ConfigRepository.editNodeRow(requireContext(), current, index, null) } }
             row.actionIcon(R.drawable.ux_profiles_delete, getString(R.string.remove)) { remove() }.apply {
                 // actionIcon is declared View; the button it builds is always an AppCompatImageButton.
                 val image = this as androidx.appcompat.widget.AppCompatImageButton
@@ -54,11 +60,11 @@ class SourcesManagerFragment : androidx.fragment.app.Fragment() {
         }
         val subscriptions = page.section(getString(R.string.profile_subscriptions))
         page.button(subscriptions, getString(R.string.add_subscription_action)) { AddSubscriptionSheet().show(parentFragmentManager, "add-subscription") }
-        saved.subscriptions.forEach { source ->
+        saved.subscriptions.forEachIndexed { index, source ->
             fun editSource() { AddSubscriptionSheet().apply { arguments = Bundle().apply { putString("name", source.first); putString("url", source.second); putString("format", source.third) } }.show(parentFragmentManager, "edit-subscription") }
             val row = page.row(subscriptions, source.first, source.third, R.drawable.ic_sync, navigates = false) { editSource() }
             row.actionIcon(R.drawable.ic_edit, getString(R.string.profile_edit_node, source.first)) { editSource() }
-            val remove = { removeWithUndo(saved) { current -> current.copy(subscriptions = current.subscriptions.filterNot { it == source }, sourceNeedsGenerate = true) } }
+            val remove = { removeWithUndo(saved) { current -> current.copy(subscriptions = current.subscriptions.toMutableList().apply { removeAt(index) }, sourceNeedsGenerate = true) } }
             row.actionIcon(R.drawable.ux_profiles_delete, getString(R.string.remove)) { remove() }.apply {
                 // actionIcon is declared View; the button it builds is always an AppCompatImageButton.
                 val image = this as androidx.appcompat.widget.AppCompatImageButton
@@ -71,17 +77,21 @@ class SourcesManagerFragment : androidx.fragment.app.Fragment() {
         return page
     }
     private fun removeWithUndo(before: ConfigRepository.StagedConfig, edit: (ConfigRepository.StagedConfig) -> ConfigRepository.StagedConfig) {
-        val current = ConfigRepository.load(requireContext())
-        if (current != before) {
+        fun commit(expected: ConfigRepository.StagedConfig, candidate: ConfigRepository.StagedConfig): Boolean {
+            val result = runCatching { persist(requireContext(), candidate, expected) }
             refresh()
-            view?.let { Snackbar.make(it, R.string.editor_conflict, Snackbar.LENGTH_LONG).show() }
+            if (result.isFailure) view?.let { Snackbar.make(it, result.exceptionOrNull()?.message ?: getString(R.string.editor_conflict), Snackbar.LENGTH_LONG).show() }
+            return result.isSuccess
+        }
+        val after = runCatching { edit(before) }.getOrElse { error ->
+            refresh()
+            view?.let { Snackbar.make(it, error.message ?: getString(R.string.editor_conflict), Snackbar.LENGTH_LONG).show() }
             return
         }
-        val after = edit(current)
-        ConfigRepository.save(requireContext(), after); MobilecoreRuntime.configEvent("modified"); refresh()
+        if (!commit(before, after)) return
+        MobilecoreRuntime.configEvent("modified")
         view?.let { anchor -> Snackbar.make(anchor, R.string.source_removed, Snackbar.LENGTH_LONG).setAction(R.string.undo) {
-            if (ConfigRepository.load(requireContext()) == after) { ConfigRepository.save(requireContext(), before); refresh() }
-            else Snackbar.make(anchor, R.string.editor_conflict, Snackbar.LENGTH_LONG).show()
+            if (commit(after, before)) MobilecoreRuntime.configEvent("modified")
         }.show() }
     }
 }

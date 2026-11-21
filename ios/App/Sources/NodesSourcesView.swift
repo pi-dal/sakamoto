@@ -93,7 +93,8 @@ struct NodesSourcesView: View {
                 Menu {
                     Button { showAddMenu = true } label: { Label("Add node", systemImage: "server.rack") }
                     Button { model.importNodesFile = true; model.showFileImporter = true } label: { Label("Import nodes.txt", systemImage: "doc.badge.plus") }
-                    Button { model.showAddSubscription = true } label: { Label("Add subscription", systemImage: "link.badge.plus") }
+                    Button { model.beginSubscription() } label: { Label("Add subscription", systemImage: "link.badge.plus") }
+                        .accessibilityIdentifier("AddSubscriptionFromMenu")
                 } label: {
                     Image(systemName: "plus")
                 }

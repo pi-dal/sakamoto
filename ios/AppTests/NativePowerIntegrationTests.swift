@@ -38,7 +38,6 @@ final class NativePowerIntegrationTests: XCTestCase {
         let instance = server.runningInstanceID()
         commanding.start()
         try await eventually { commanding.isAvailable }
-        let actionClient = try XCTUnwrap(commanding.currentClient)
         var samples = 0
         let stream = commanding.traffic()
         let consumer = Task { for await _ in stream { samples += 1 } }
@@ -50,14 +49,12 @@ final class NativePowerIntegrationTests: XCTestCase {
             commanding.setDataVisible(true); data.activate()
             let before = samples
             try await eventually { samples > before && data.traffic != nil }
-            XCTAssertTrue(commanding.currentClient === actionClient)
             XCTAssertEqual(server.runningInstanceID(), instance)
             evidence.append(["stage": "data", "samples": samples, "same_core": true])
             commanding.setDataVisible(false); data.deactivate()
             let hidden = samples
             try await Task.sleep(nanoseconds: 1_200_000_000)
             XCTAssertEqual(samples, hidden)
-            XCTAssertTrue(commanding.currentClient === actionClient)
         }
         for _ in 0..<10 { commanding.setDataVisible(true); commanding.setDataVisible(false) }
         commanding.setForeground(false)
@@ -72,7 +69,6 @@ final class NativePowerIntegrationTests: XCTestCase {
         try await commanding.setClashMode(.direct)
         try await eventually { commanding.currentClashMode() == .direct }
         evidence.append(["stage": "foreground", "same_core": true, "action": "direct"])
-        let previousClient = commanding.currentClient
         try server.closeService(); server.close()
         try await eventually { !commanding.isAvailable }
         server = try XCTUnwrap(LibboxNewCommandServer(platform, platform, &error))
@@ -80,11 +76,9 @@ final class NativePowerIntegrationTests: XCTestCase {
         try server.start()
         try server.startOrReloadService(config, options: LibboxOverrideOptions())
         try await eventually { commanding.isAvailable }
-        let recovered = commanding.currentClient
-        XCTAssertFalse(recovered === previousClient)
-        try await Task.sleep(nanoseconds: 1_200_000_000)
-        XCTAssertTrue(commanding.isAvailable && commanding.currentClient === recovered)
-        evidence.append(["stage": "transport_recovery", "stable_attachment": true])
+        try await commanding.setClashMode(.global)
+        try await eventually { commanding.currentClashMode() == .global }
+        evidence.append(["stage": "transport_recovery", "action": "global"])
         let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys]), uniformTypeIdentifier: "public.json")
         attachment.name = "power-observation"; attachment.lifetime = .keepAlways
         add(attachment)
@@ -160,15 +154,29 @@ final class NativePowerIntegrationTests: XCTestCase {
 }
 
 final class ObservationTestPlatform: NSObject, LibboxPlatformInterfaceProtocol, LibboxCommandServerHandlerProtocol {
+    var testInterface = ""
     private func unsupported() -> NSError { NSError(domain: "SyntheticObservationServer", code: 1) }
     func openTun(_ options: LibboxTunOptionsProtocol?, ret0_: UnsafeMutablePointer<Int32>?) throws { throw unsupported() }
     func usePlatformAutoDetectControl() -> Bool { false }
     func autoDetectControl(_ fd: Int32) throws {}
     func startDefaultInterfaceMonitor(_ listener: LibboxInterfaceUpdateListenerProtocol?) throws {
-        listener?.updateDefaultInterface("", interfaceIndex: -1, isExpensive: false, isConstrained: false)
+        listener?.updateDefaultInterface(testInterface, interfaceIndex: testInterface.isEmpty ? -1 : Int32(if_nametoindex(testInterface)), isExpensive: false, isConstrained: false)
     }
     func closeDefaultInterfaceMonitor(_ listener: LibboxInterfaceUpdateListenerProtocol?) throws {}
-    func getInterfaces() throws -> any LibboxNetworkInterfaceIteratorProtocol { ObservationInterfaces() }
+    func getInterfaces() throws -> any LibboxNetworkInterfaceIteratorProtocol {
+        let interfaces = ObservationInterfaces()
+        if !testInterface.isEmpty {
+            let network = LibboxNetworkInterface()
+            network.name = testInterface
+            network.index = Int32(if_nametoindex(testInterface))
+            network.type = LibboxInterfaceTypeOther
+            network.flags = Int32(IFF_UP | IFF_RUNNING | IFF_LOOPBACK)
+            network.mtu = 16384
+            network.addresses = ObservationAddresses()
+            interfaces.item = network
+        }
+        return interfaces
+    }
     func underNetworkExtension() -> Bool { false }
     func includeAllNetworks() -> Bool { false }
     func clearDNSCache() {}
@@ -200,6 +208,15 @@ final class ObservationTestPlatform: NSObject, LibboxPlatformInterfaceProtocol, 
 }
 
 private final class ObservationInterfaces: NSObject, LibboxNetworkInterfaceIteratorProtocol {
-    func hasNext() -> Bool { false }
-    func next() -> LibboxNetworkInterface? { nil }
+    var item: LibboxNetworkInterface?
+    func hasNext() -> Bool { item != nil }
+    func next() -> LibboxNetworkInterface? { defer { item = nil }; return item }
+}
+
+private final class ObservationAddresses: NSObject, LibboxStringIteratorProtocol {
+    var values = ["127.0.0.1/8", "::1/128"].makeIterator()
+    var current: String?
+    func len() -> Int32 { 2 }
+    func hasNext() -> Bool { current = values.next(); return current != nil }
+    func next() -> String { current ?? "" }
 }

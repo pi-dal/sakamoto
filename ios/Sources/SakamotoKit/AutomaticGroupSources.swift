@@ -42,7 +42,10 @@ public enum AutomaticGroupSources {
         let current = ProxyGroupEditing.groups(content)
         let namesToUpdate = Set(groups.keys).union(edits.filter(ProxyGroupEditing.followsGeneratedNodes).map(\.tag)).union(current.filter(ProxyGroupEditing.followsGeneratedNodes).map(\.tag))
         return edits.filter { !namesToUpdate.contains($0.tag) } + namesToUpdate.sorted().map { tag in
-            var edit = edits.first { $0.tag == tag } ?? current.first { $0.tag == tag } ?? ProxyGroupEdit(tag: tag, type: "urltest")
+            let installed = current.first { $0.tag == tag }
+            var edit = edits.first { $0.tag == tag } ?? installed ?? ProxyGroupEdit(tag: tag, type: "urltest")
+            // Older persisted edits have no tolerance. Recover it before replacing the runtime.
+            edit.tolerance = edit.tolerance ?? installed?.tolerance
             edit.type = "urltest"
             edit.excludedMembers = (groups[tag] ?? []).map { names[$0] ?? $0 }.sorted()
             return ProxyGroupEditing.resolving(edit, in: content)

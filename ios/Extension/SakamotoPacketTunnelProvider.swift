@@ -40,12 +40,16 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
     var locationProxyPort: Int? { locationRuntime.snapshot().enabled ? locationRuntime.port : nil }
     func setLocationFallback(_ address: String) { locationRuntime.setFallback(address) }
     private var tunnelStartOptions: TunnelStartOptions?
+    @MainActor private var appliedReceipt: TunnelConfigurationReceipt?
     @MainActor private var experimentRunner: ProviderExperimentRunner?
     private let operationGate = TunnelOperationGate()
     @MainActor private var appliedFingerprint: String?
     private var recoverySession: MobilecoreRecoverySession?
     private var recoveryTicket: String?
     @MainActor private var recoveryReady = false
+    @MainActor private var reloadCompletions = TunnelReloadCompletions()
+    @MainActor private var provisionalOwner: UUID?
+    @MainActor private var provisionalWatch: Task<Void, Never>?
     @MainActor private var stableVerification: Task<Void, Never>?
 
     /// Preferences carried through start options (upstream Override-
@@ -150,8 +154,10 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
 
         // Per-start options win; providerConfiguration is the cold-launch
         // fallback persisted by SakamotoNE.NETunnelController.
+        let saved = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration ?? [:]
+        if startOptions?["configContent"] == nil && saved["configContent"] != nil { throw TunnelStartOptions.ResolutionError.needsApply }
         let options = try TunnelStartOptions.resolveForProvider(startOptions: startOptions,
-            providerConfiguration: (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration ?? [:],
+            providerConfiguration: saved,
             requiresApply: UserDefaults(suiteName: SystemSurfaceStore.groupIdentifier)?.bool(forKey: "sakamoto.profile.requiresApply") == true)
         overridePreferences = OverridePreferences(
             includeAllNetworks: (startOptions?["includeAllNetworks"] as? NSNumber)?.boolValue ?? false,
@@ -188,9 +194,12 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
         locationRuntime.restore(server: commandServer!)
 
         do {
-            try await applyProfile(options)
+            try await options.startResolvedProfile(startOptions: startOptions, saved: saved) { transaction in
+                if let transaction { try await self.applyWithOwner(options, transaction: transaction) }
+                else { try await self.applyProfile(options) }
+            }
         } catch {
-            guard operationGate.state != .stopping, let failedTicket = recoveryTicket else { throw error }
+            guard startOptions?["applyTransaction"] == nil, operationGate.state != .stopping, let failedTicket = recoveryTicket else { throw error }
             try recoverySession.failed(failedTicket)
             // Retained assets and metadata are checksum verified in Go. Current
             // signed libbox validates them again; recovery pauses learning.
@@ -198,7 +207,9 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
             let retainedMetadata = try checkedNativeValue { recoverySession.retainedMetadata($0) }
             var retained = try JSONDecoder().decode(TunnelStartOptions.self, from: Data(retainedMetadata.utf8))
             retained.configContent = retainedContent; retained.experimentJSON = nil
-            try checkRecoveryDNS(current: options.configContent, retained: retainedContent)
+            try checkRecoveryProfile(options, retained)
+            let (requested, _) = try await ProviderExperimentRunner.prepared(options, root: URL(fileURLWithPath: sharedDirectory))
+            try checkRecoveryDNS(current: requested, retained: retainedContent)
             recoveryTicket = try checkedNativeValue { recoverySession.beginFallback($0) }
             try await applyProfile(retained)
             TunnelDiagnostics.record(stage: "Configuration recovered", error: ProviderStartupError("Using the verified saved configuration; learning paused. Review Config before applying changes."))
@@ -210,6 +221,13 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
         }) else { throw CancellationError() }
         writeTunnelMessage("(packet-tunnel): Here I stand")
         TunnelRuntimeEvidence.record(stage: "VPN running", message: "Core instance \(commandServer?.runningInstanceID() ?? 0); \(LibboxVersion())")
+    }
+
+    private func checkRecoveryProfile(_ current: TunnelStartOptions, _ retained: TunnelStartOptions) throws {
+        guard let id = current.profileID, id == retained.profileID,
+              (current.forceTailscaleDERP == true) == (retained.forceTailscaleDERP == true) else {
+            throw ProviderStartupError("Saved VPN profile differs from the requested profile. Review and apply Config.")
+        }
     }
 
     private func checkRecoveryDNS(current: String, retained: String) throws {
@@ -289,12 +307,7 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
             } catch { return try? TunnelResponse.failure(TunnelDiagnostics.sanitized(error.localizedDescription)).encode() }
         case .ping:
             captureNativeMemoryReset()
-            let snapshot = TunnelStateSnapshot(
-                serviceState: operationGate.state ?? (commandServer?.isServiceRunning() == true ? .running : .unavailable),
-                detail: TunnelDiagnostics.latest().map { "\($0.stage): \($0.message)" },
-                nativeInstanceID: commandServer?.isServiceRunning() == true ? commandServer?.runningInstanceID() : nil,
-                nativeVersion: LibboxVersion(), recoveryProtocol: MobilecoreRecoveryProtocol()
-            )
+            let snapshot = await runningSnapshot()
             return try? TunnelResponse(ok: true, state: snapshot).encode()
         case .recoverExperiment:
             do { try await recoverExperiment(); return try? TunnelResponse(ok: true).encode() }
@@ -302,11 +315,11 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
         case .removeLearnedDomain(let domain):
             do { try await removeLearned(domain); return try? TunnelResponse(ok: true).encode() }
             catch { return try? TunnelResponse.failure(TunnelDiagnostics.sanitized(error.localizedDescription)).encode() }
-        case .reloadProfile(let options):
+        case .reloadProfile(let options, let transaction, let replacing, let requestID):
             do {
-                try await applyProfile(options)
+                try await applyWithOwner(options, transaction: transaction, replacing: replacing, requestID: requestID ?? transaction)
                 TunnelDiagnostics.clear()
-                return try? TunnelResponse(ok: true).encode()
+                return try? TunnelResponse(ok: true, state: await runningSnapshot()).encode()
             } catch {
                 TunnelDiagnostics.record(stage: "VPN reload", error: error)
                 return try? TunnelResponse.failure(TunnelDiagnostics.sanitized(error.localizedDescription)).encode()
@@ -323,6 +336,21 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
                 return try? TunnelResponse.failure(TunnelDiagnostics.sanitized(error.localizedDescription)).encode()
             }
         }
+    }
+
+    @MainActor private func runningSnapshot() -> TunnelStateSnapshot {
+        let running = commandServer?.isServiceRunning() == true
+        var snapshot = TunnelStateSnapshot(
+            serviceState: operationGate.state ?? (running ? .running : .unavailable),
+            detail: TunnelDiagnostics.latest().map { "\($0.stage): \($0.message)" },
+            nativeInstanceID: running ? commandServer?.runningInstanceID() : nil,
+            nativeVersion: LibboxVersion(), recoveryProtocol: MobilecoreRecoveryProtocol(),
+            appliedReceipt: running ? appliedReceipt : nil
+        )
+        let completed = reloadCompletions.recentIDs
+        snapshot.completedReloadID = completed.last
+        snapshot.recentCompletedReloadIDs = completed
+        return snapshot
     }
 
     override open func sleep() async {
@@ -383,11 +411,67 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
         return locationRuntime.snapshot()
     }
 
-    @MainActor private func applyProfile(_ options: TunnelStartOptions) async throws {
+    @MainActor private func applyWithOwner(_ options: TunnelStartOptions, transaction: UUID?, replacing: TunnelConfigurationReceipt? = nil, requestID: UUID? = nil) async throws {
+        defer { reloadCompletions.record(requestID) }
+        let root = URL(fileURLWithPath: try Paths.sharedDirectory())
+        guard let id = options.profileID, UUID(uuidString: id) != nil else { throw ProviderStartupError("Missing profile ID") }
+        let lease = try transaction.map { try ApplyLease(root: root, transaction: $0, owner: false) }
+        let previous: TunnelStartOptions?
+        if let rollback = lease?.rollback {
+            previous = try rollback.reference.map { reference in
+                guard let options = TunnelStartOptions(providerConfiguration: reference) else { throw TunnelStartOptions.ResolutionError.unverifiedInstalledProfile }
+                try options.validateRouteSource()
+                return options
+            }
+        } else {
+            guard lease == nil || provisionalOwner == nil else { throw TunnelStartOptions.ResolutionError.unverifiedInstalledProfile }
+            previous = tunnelStartOptions
+        }
+        try await applyProfile(options, replacing: replacing) {
+            self.observeOwner(lease, manifest: root.appendingPathComponent("Profiles/\(id)/profile.json"), previous: previous)
+        }
+    }
+
+    @MainActor private func observeOwner(_ lease: ApplyLease?, manifest: URL, previous: TunnelStartOptions?) {
+        provisionalWatch?.cancel()
+        provisionalOwner = lease?.transaction
+        guard let lease else { return }
+        provisionalWatch = Task { @MainActor [weak self] in
+            await lease.observe(manifest: manifest, finalized: {
+                (try? TunnelStartOptions.finalized(lease.transaction, for: manifest.deletingLastPathComponent().lastPathComponent)) == true
+            }) {
+                guard let self, let ticket = await lease.claimRollback(whileOwned: {
+                    self.provisionalOwner == lease.transaction && self.operationGate.state != .stopping
+                }, acquire: { self.operationGate.beginApply() }) else { return }
+                defer { self.operationGate.finishApply(ticket) }
+                do {
+                    guard self.operationGate.isCurrent(ticket) else { return }
+                    guard let previous else { throw ProviderStartupError("Initial Apply interrupted") }
+                    try await self.applyProfileUnderGate(previous, replacing: nil, ticket: ticket)
+                    self.provisionalOwner = nil
+                } catch {
+                    guard self.operationGate.isCurrent(ticket) else { return }
+                    try? self.commandServer?.closeService()
+                    self.cancelTunnelWithError(error)
+                }
+            }
+        }
+    }
+
+    @MainActor private func applyProfile(_ input: TunnelStartOptions, replacing: TunnelConfigurationReceipt? = nil, didApply: () -> Void = {}) async throws {
         guard let ticket = operationGate.beginApply() else {
             throw ProviderStartupError("Configuration application is already running or the VPN is stopping")
         }
         defer { operationGate.finishApply(ticket) }
+        try await applyProfileUnderGate(input, replacing: replacing, ticket: ticket)
+        didApply()
+    }
+
+    @MainActor private func applyProfileUnderGate(_ input: TunnelStartOptions, replacing: TunnelConfigurationReceipt?, ticket: UInt64) async throws {
+        try input.validateRouteSource()
+        var options = input
+        options.configContent = try TailscaleConfigInjection.withoutAuthKey(input.configContent)
+        if let replacing, appliedReceipt != replacing { throw ProviderStartupError("VPN configuration changed before rollback") }
         let root = URL(fileURLWithPath: try Paths.sharedDirectory())
         let fingerprint = try? TunnelRuntimeFingerprint.make(options: options, baseDirectory: root)
         if let fingerprint, fingerprint == appliedFingerprint, commandServer?.isServiceRunning() == true {
@@ -399,7 +483,8 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
         var error: NSError?
         _ = LibboxCheckConfig(content, &error)
         if let error { throw error }
-        let previous = tunnelStartOptions
+        let rollback = TunnelLiveReplacement(previous: tunnelStartOptions, receipt: appliedReceipt)
+        let previousFingerprint = appliedFingerprint
         var capturedContent = content
         if let recoverySession, let recoveryTicket {
             let metadata = String(decoding: try JSONEncoder().encode(options), as: UTF8.self)
@@ -411,7 +496,12 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
         cancelStableVerification()
         await stopExperiments()
         guard operationGate.isCurrent(ticket) else { throw CancellationError() }
-        do {
+        // Once the native service is touched, only a completed start or rollback
+        // can attest to the running rules again.
+        appliedReceipt = nil
+        appliedFingerprint = nil
+        TunnelConfigurationReceiptStore.clear()
+        try await rollback.perform(isCurrent: { operationGate.isCurrent(ticket) }) {
             try await startService(content: capturedContent, forceDERP: options.forceTailscaleDERP == true, ticket: ticket)
             guard operationGate.isCurrent(ticket) else { throw CancellationError() }
             try startExperiments(options: options, settings: settings, content: content, root: root)
@@ -420,18 +510,17 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
             if recoveryReady { try recoverySession.replaced(recoveryTicket, instance: String(instance), version: LibboxVersion()) }
             else { try recoverySession.ready(recoveryTicket, instance: String(instance), version: LibboxVersion()); recoveryReady = true }
             scheduleStableVerification(ticket: recoveryTicket, instance: instance)
+            appliedReceipt = try TunnelConfigurationReceipt(options: options)
             tunnelStartOptions = options
             appliedFingerprint = fingerprint
             TunnelConfigurationReceiptStore.record(options)
-        } catch {
-            // startOrReloadService can close the old service before rejecting
-            // its replacement. Restore both runtime and monitor, not just NE
-            // preferences in the app process.
-            if let previous, operationGate.isCurrent(ticket) {
+        } restore: { previous in
                 do {
                     await stopExperiments()
                     let (oldContent, oldSettings) = try ProviderExperimentRunner.prepared(previous, root: root)
-                    try checkRecoveryDNS(current: content, retained: oldContent)
+                    if let previousFingerprint, try TunnelRuntimeFingerprint.make(options: previous, baseDirectory: root) != previousFingerprint {
+                        throw ProviderStartupError("The previous VPN rules changed during Apply")
+                    }
                     var capturedPrevious = oldContent
                     if let recoverySession, let recoveryTicket {
                         let metadata = String(decoding: try JSONEncoder().encode(previous), as: UTF8.self)
@@ -447,12 +536,13 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
                         try recoverySession.replaced(recoveryTicket, instance: String(instance), version: LibboxVersion())
                         scheduleStableVerification(ticket: recoveryTicket, instance: instance)
                     }
+                    appliedReceipt = try TunnelConfigurationReceipt(options: previous)
+                    appliedFingerprint = previousFingerprint
+                    TunnelConfigurationReceiptStore.record(previous)
                 } catch {
                     TunnelDiagnostics.record(stage: "VPN reload rollback", error: error)
                     throw ProviderStartupError("VPN reload rollback failed; disconnect and reconnect")
                 }
-            }
-            throw error
         }
     }
 
@@ -493,7 +583,8 @@ open class SakamotoPacketTunnelProvider: NEPacketTunnelProvider {
                 MobilegenSetTailscaleForceDERP(forceDERP)
             }
             guard gate.isCurrent(ticket) else { throw CancellationError() }
-            try commandServer.startOrReloadService(content, options: LibboxOverrideOptions())
+            let runtime = try TailscaleConfigInjection.forTunnel(content) { try SharedTailscaleKey.load() }
+            try commandServer.startOrReloadService(runtime, options: LibboxOverrideOptions())
             guard gate.isCurrent(ticket), commandServer.isServiceRunning() else {
                 // Stop may win between the check above and the native call.
                 // Close this captured server's late result, never publish it.

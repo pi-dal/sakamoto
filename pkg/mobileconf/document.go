@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"path"
 	"regexp"
 	"strings"
 )
@@ -27,9 +26,13 @@ type RuleSetRef struct {
 	Target string
 }
 
+// OrderedRule preserves first-match order for the routing compiler.
+type OrderedRule struct{ Target, Kind, Value string }
+
 // Document is one parsed Shadowrocket conf document.
 type Document struct {
 	Buckets  Buckets
+	Ordered  []OrderedRule
 	General  map[string]string
 	Hosts    map[string]string
 	GeoIP    [][2]string // (country code, target)
@@ -79,6 +82,7 @@ func (d *Document) TotalRules() int {
 
 // AddRule records one value into a bucket, deduplicated.
 func (d *Document) AddRule(target, kind, value string) {
+	d.Ordered = append(d.Ordered, OrderedRule{target, kind, value})
 	if d.Buckets[target] == nil {
 		d.Buckets[target] = map[string]map[string]bool{}
 	}
@@ -110,12 +114,17 @@ func ParseDocument(body string, hooks Hooks) (*Document, error) {
 	doc := &Document{Buckets: Buckets{}, General: map[string]string{}, Hosts: map[string]string{}}
 	var errs []error
 	var includes []string
+	lineNo := 0
 
 	var add func(line, defaultTarget string)
 	add = func(line, defaultTarget string) {
 		line = commentRe.Split(line, 2)[0]
 		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") || strings.HasPrefix(line, ";") {
+			return
+		}
+		if doc.Final != "" {
+			errs = append(errs, fmt.Errorf("line %d: rule after FINAL", lineNo))
 			return
 		}
 		parts := strings.Split(line, ",")
@@ -125,13 +134,15 @@ func ParseDocument(body string, hooks Hooks) (*Document, error) {
 		rt := strings.ToUpper(parts[0])
 		if key, ok := ruleTypes[rt]; ok && len(parts) >= 2 {
 			if key == "" {
+				errs = append(errs, fmt.Errorf("line %d: unsupported rule type", lineNo))
 				return
 			}
 			tgt := defaultTarget
-			if len(parts) >= 3 {
+			if len(parts) >= 3 && (defaultTarget == "" || !strings.EqualFold(parts[2], "no-resolve")) {
 				tgt = parts[2]
 			}
-			if tgt == "" {
+			if tgt == "" || parts[1] == "" {
+				errs = append(errs, fmt.Errorf("line %d: missing rule value or target", lineNo))
 				return
 			}
 			doc.AddRule(normTarget(tgt), key, parts[1])
@@ -151,12 +162,20 @@ func ParseDocument(body string, hooks Hooks) (*Document, error) {
 			}); err != nil {
 				errs = append(errs, err)
 			} else if hooks.Report != nil {
-				hooks.Report("  + RULE-SET %s: %d entries\n", path.Base(parts[1]), doc.TotalRules()-before)
+				hooks.Report("  + RULE-SET %s: %d entries\n", DisplaySource(parts[1]), doc.TotalRules()-before)
 			}
 		} else if rt == "GEOIP" && len(parts) >= 3 {
-			doc.GeoIP = append(doc.GeoIP, [2]string{strings.ToUpper(parts[1]), normTarget(parts[2])})
+			cc, target := strings.ToUpper(parts[1]), normTarget(parts[2])
+			doc.GeoIP = append(doc.GeoIP, [2]string{cc, target})
+			doc.Ordered = append(doc.Ordered, OrderedRule{target, "rule_set", "geoip-" + strings.ToLower(cc)})
 		} else if rt == "FINAL" && len(parts) >= 2 {
+			if parts[1] == "" || defaultTarget != "" {
+				errs = append(errs, fmt.Errorf("line %d: invalid FINAL action or FINAL inside a rule set", lineNo))
+				return
+			}
 			doc.Final = parts[1]
+		} else {
+			errs = append(errs, fmt.Errorf("line %d: unsupported or malformed rule", lineNo))
 		}
 	}
 
@@ -164,6 +183,7 @@ func ParseDocument(body string, hooks Hooks) (*Document, error) {
 	sc := bufio.NewScanner(strings.NewReader(text))
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
 	for sc.Scan() {
+		lineNo++
 		line := strings.TrimSpace(sc.Text())
 		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
 			section = strings.ToLower(line[1 : len(line)-1])

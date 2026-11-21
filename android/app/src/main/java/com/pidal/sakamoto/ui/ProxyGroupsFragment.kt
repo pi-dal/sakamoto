@@ -57,8 +57,9 @@ class ProxyGroupEditorFragment : androidx.fragment.app.Fragment(), UnsavedConfig
     private var baselineDigest = ""
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, state: Bundle?): View {
         val page = GroupedPage(requireContext()); this.page = page
-        baseline = ConfigRepository.load(requireContext()).generatedContent
-        baselineDigest = state?.getString("digest") ?: digest(baseline)
+        val opened = ConfigRepository.load(requireContext())
+        baseline = opened.generatedContent
+        baselineDigest = state?.getString("digest") ?: digest(opened.modeCacheID + baseline)
         originalTag = arguments?.getString("tag").orEmpty()
         edit = runCatching { ProxyGroupEditing.groups(baseline).firstOrNull { it.tag == originalTag } }.getOrNull() ?: ProxyGroupEdit("")
         if (originalTag.isNotEmpty() && edit.tag.isEmpty()) { page.note(getString(R.string.editor_conflict)); return page.root }
@@ -173,10 +174,10 @@ class ProxyGroupEditorFragment : androidx.fragment.app.Fragment(), UnsavedConfig
     private fun save() {
         try {
             val current = ConfigRepository.load(requireContext())
-            check(digest(current.generatedContent) == baselineDigest) { getString(R.string.editor_conflict) }
+            check(digest(current.modeCacheID + current.generatedContent) == baselineDigest) { getString(R.string.editor_conflict) }
             edit = edit.copy(tag = edit.tag.trim())
             check(originalTag.isNotEmpty() || candidates.none { it.first == edit.tag }) { getString(R.string.group_duplicate_name) }
-            ConfigRepository.saveProxyGroup(requireContext(), edit)
+            ConfigRepository.saveProxyGroup(requireContext(), edit, current)
             finished = true
             parentFragmentManager.setFragmentResult("config-updated", Bundle())
             Snackbar.make(requireActivity().findViewById(R.id.fragment_container), R.string.saved_pending_apply, Snackbar.LENGTH_LONG).show()

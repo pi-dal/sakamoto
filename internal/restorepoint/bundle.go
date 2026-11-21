@@ -36,6 +36,7 @@ type Candidate struct {
 	closed                bool
 }
 type Manifest struct {
+	Inputs   string            `json:"input_digest,omitempty"`
 	Schema   int               `json:"schema"`
 	Runtime  string            `json:"runtime"`
 	PID      int               `json:"pid"`
@@ -135,6 +136,18 @@ func (c *Candidate) Fingerprint() string {
 	hash.Write([]byte{0})
 	return hex.EncodeToString(hash.Sum(nil))
 }
+
+// InputDigest binds automatic restart and rollback to the captured bytes, including
+// the contents of rule files whose paths stay the same across policy changes.
+func (c *Candidate) InputDigest() string {
+	assets := map[string]string{}
+	for _, item := range c.inputs {
+		assets[item.Path] = digest(item.Data)
+	}
+	raw, _ := json.Marshal(assets)
+	return digest([]byte(c.Fingerprint() + digest(raw) + digest(c.learned)))
+}
+
 func (c *Candidate) Close() {
 	if !c.closed {
 		c.closed = true
@@ -202,7 +215,7 @@ func (c *Candidate) Promote(pid int, epoch time.Time) (*Point, error) {
 			_ = os.RemoveAll(folder)
 		}
 	}()
-	manifest := Manifest{Schema: 1, Runtime: c.dir, PID: pid, Epoch: epoch, Verified: time.Now().UTC(), Files: map[string]string{}}
+	manifest := Manifest{Inputs: c.InputDigest(), Schema: 1, Runtime: c.dir, PID: pid, Epoch: epoch, Verified: time.Now().UTC(), Files: map[string]string{}}
 	put := func(name string, raw []byte) error {
 		manifest.Files[name] = digest(raw)
 		return recovery.Atomic(filepath.Join(folder, name), raw, 0600)

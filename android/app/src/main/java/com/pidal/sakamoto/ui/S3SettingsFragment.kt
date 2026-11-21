@@ -9,7 +9,9 @@ import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.pidal.sakamoto.R
 import com.pidal.sakamoto.runtime.S3SyncRepository
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -21,7 +23,10 @@ class S3SettingsFragment : androidx.fragment.app.Fragment() {
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, state: Bundle?): View {
         val page = GroupedPage(requireContext())
         val repo = S3SyncRepository(requireContext())
-        val settings = repo.settings()
+        val settings = try { repo.settings() } catch (error: Exception) {
+            page.note(getString(R.string.s3_status_error, error.localizedMessage))
+            return page.root
+        }
         val group = page.section(getString(R.string.s3_section_sync))
         val enabled = page.toggle(group, getString(R.string.s3_enabled), settings.optBoolean("enabled"))
         var confirmingEnable = false
@@ -53,7 +58,10 @@ class S3SettingsFragment : androidx.fragment.app.Fragment() {
             val modal = BottomSheetDialog(requireContext())
             val form = GroupedPage(requireContext())
             val fields = form.section(getString(R.string.s3_section_credentials))
-            val credentials = repo.credentials()
+            val credentials = try { repo.credentials() } catch (error: Exception) {
+                status.detail(getString(R.string.s3_status_error, error.localizedMessage))
+                return@row
+            }
             val access = form.field(fields, getString(R.string.s3_access_key), credentials.optString("access_key"), secret = true)
             val secret = form.field(fields, getString(R.string.s3_secret_key), credentials.optString("secret_key"), secret = true)
             val token = form.field(fields, getString(R.string.s3_session_token), credentials.optString("session_token"), secret = true)
@@ -74,7 +82,8 @@ class S3SettingsFragment : androidx.fragment.app.Fragment() {
                 status.detail(getString(R.string.s3_status_syncing))
                 save.isEnabled = false; authRow.isEnabled = false
                 viewLifecycleOwner.lifecycleScope.launch {
-                    try { status.detail(withContext(Dispatchers.IO) { repo.syncNow() }) }
+                    try { status.detail(withContext(Dispatchers.IO) { repo.syncNow { ensureActive() } }) }
+                    catch (e: CancellationException) { throw e }
                     catch (e: Exception) { status.detail(getString(R.string.s3_status_error, e.message)) }
                     finally { busy = false; save.isEnabled = true; authRow.isEnabled = true }
                 }

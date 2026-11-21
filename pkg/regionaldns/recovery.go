@@ -6,12 +6,16 @@ import (
 	"reflect"
 )
 
-var errRecoveryPolicy = errors.New("saved recovery configuration has a different regional DNS policy")
+var errRecoveryPolicy = errors.New("saved recovery configuration has a different routing, DNS, or connection policy")
 
 type recoveryCore struct {
-	DNS      map[string]any   `json:"dns"`
-	Route    map[string]any   `json:"route"`
-	Inbounds []map[string]any `json:"inbounds"`
+	Outbounds    []map[string]any `json:"outbounds"`
+	Endpoints    []map[string]any `json:"endpoints"`
+	Experimental map[string]any   `json:"experimental"`
+	Services     []map[string]any `json:"services"`
+	DNS          map[string]any   `json:"dns"`
+	Route        map[string]any   `json:"route"`
+	Inbounds     []map[string]any `json:"inbounds"`
 }
 
 func referencesRelay(v any) bool {
@@ -78,7 +82,7 @@ func (c recoveryCore) relayTag() string {
 }
 
 // CheckRecovery compares effective DNS, routing and the selected relay across
-// an automatic recovery boundary. Unrelated node edits can still be recovered.
+// an automatic recovery boundary, including changes behind stable outbound tags.
 func CheckRecovery(current, retained []byte) error {
 	var want, got *recoveryCore
 	if json.Unmarshal(current, &want) != nil || want == nil || json.Unmarshal(retained, &got) != nil || got == nil {
@@ -88,16 +92,11 @@ func CheckRecovery(current, retained []byte) error {
 	if enabled != previous {
 		return errRecoveryPolicy
 	}
-	if !enabled {
-		return nil
-	}
-	if !reflect.DeepEqual(want.DNS, got.DNS) || !reflect.DeepEqual(want.Inbounds, got.Inbounds) {
+	if want.Route == nil || !reflect.DeepEqual(want, got) {
 		return errRecoveryPolicy
 	}
-	for _, key := range []string{"rules", "final", "default_domain_resolver"} {
-		if !reflect.DeepEqual(want.Route[key], got.Route[key]) {
-			return errRecoveryPolicy
-		}
+	if !enabled {
+		return nil
 	}
 	relay := want.relayTag()
 	if relay == "" {

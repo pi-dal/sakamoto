@@ -77,6 +77,7 @@ abstract class ConfigSheet : BottomSheetDialogFragment() {
 
 class AddPolicySheet : ConfigSheet() {
     override fun onCreateView(i: LayoutInflater, c: ViewGroup?, s: Bundle?): View {
+        val current = ConfigRepository.load(requireContext())
         val original = arguments?.getString("match")?.let { ConfigRepository.PolicyRule(it, arguments?.getString("action") ?: "proxy") }
         val root = content()
         sheetTitle(root, if (original == null) R.string.add_policy_action else R.string.edit_rule)
@@ -109,7 +110,7 @@ class AddPolicySheet : ConfigSheet() {
                 val input = matchType.inputForValidation(match.text.toString())
                 val parsed = Mobilecore.normalizePolicyRule(input, action.text.toString())
                 val info = Mobilecore.normalizePolicyRule(matchType.match(input, parsed.kind, parsed.value), action.text.toString())
-                ConfigRepository.savePolicy(requireContext(), original, ConfigRepository.PolicyRule(info.match, info.action))
+                ConfigRepository.savePolicy(requireContext(), original, ConfigRepository.PolicyRule(info.match, info.action), current)
                 parentFragmentManager.setFragmentResult("config-updated", Bundle())
                 dismiss()
             } catch (e: Exception) { match.error = e.message ?: getString(R.string.invalid_value) }
@@ -120,6 +121,7 @@ class AddPolicySheet : ConfigSheet() {
 
 class AddNodeSheet : ConfigSheet() {
     override fun onCreateView(i: LayoutInflater, c: ViewGroup?, s: Bundle?): View {
+        val current = ConfigRepository.load(requireContext())
         val original = arguments?.getString("original")
         val root = content()
         sheetTitle(root, R.string.ux_editing_sheet_node_title)
@@ -133,6 +135,7 @@ class AddNodeSheet : ConfigSheet() {
         } else null
         finishButton(root, if (original == null) R.string.add else R.string.save) {
             try {
+                arguments?.getString("origin")?.let { check(ConfigRepository.loadAt(requireContext(), it) == current) { getString(R.string.editor_conflict) } }
                 val raw = if (original == null) link!!.text.toString().trim() else {
                     check(port == null || port.text.toString().toIntOrNull() != null) { getString(R.string.ux_editing_error_port) }
                     com.pidal.sakamoto.runtime.NodeLinkEditing.update(original, remark!!.text.toString(), server!!.text.toString(), port?.text.toString().toIntOrNull())
@@ -140,10 +143,14 @@ class AddNodeSheet : ConfigSheet() {
                 check(raw.isNotEmpty()) { getString(R.string.required_value) }
                 check(!Mobilecore.isSubLink(raw)) { getString(R.string.subscription_link_hint) }
                 Mobilecore.parseShareLink(raw)
-                val current = ConfigRepository.load(requireContext())
                 check(original == null || original in current.nodes) { getString(R.string.editor_conflict) }
                 check(current.nodes.none { it == raw && it != original }) { getString(R.string.duplicate_node) }
-                ConfigRepository.save(requireContext(), current.copy(sourceNeedsGenerate = true, nodes = if (original == null) current.nodes + raw else current.nodes.map { if (it == original) raw else it })); com.pidal.sakamoto.runtime.MobilecoreRuntime.configEvent("modified"); parentFragmentManager.setFragmentResult("config-updated", Bundle()); dismiss()
+                val candidate = if (original == null) current.copy(sourceNeedsGenerate = true, nodes = current.nodes + raw) else {
+                    val index = arguments?.getInt("index", -1) ?: -1
+                    check(current.nodes.getOrNull(index) == original) { getString(R.string.editor_conflict) }
+                    ConfigRepository.editNodeRow(requireContext(), current, index, raw)
+                }
+                ConfigRepository.save(requireContext(), candidate, current); com.pidal.sakamoto.runtime.MobilecoreRuntime.configEvent("modified"); parentFragmentManager.setFragmentResult("config-updated", Bundle()); dismiss()
             } catch (e: Exception) { (link ?: server)?.error = e.message ?: getString(R.string.invalid_value) }
         }
         return scrollWrap(root)
@@ -152,6 +159,7 @@ class AddNodeSheet : ConfigSheet() {
 
 class AddSubscriptionSheet : ConfigSheet() {
     override fun onCreateView(i: LayoutInflater, c: ViewGroup?, s: Bundle?): View {
+        val current = ConfigRepository.load(requireContext())
         val originalName = arguments?.getString("name")
         val originalUrl = arguments?.getString("url")
         val root = content()
@@ -164,12 +172,12 @@ class AddSubscriptionSheet : ConfigSheet() {
         root.addView(TextInputLayout(requireContext()).apply { hint = getString(R.string.subscription_format_hint); addView(format) }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 12 })
         finishButton(root, if (originalUrl == null) R.string.add else R.string.save) {
             try {
+                arguments?.getString("origin")?.let { check(ConfigRepository.loadAt(requireContext(), it) == current) { getString(R.string.editor_conflict) } }
                 val n = name.text.toString().trim(); val u = url.text.toString().trim(); check(n.isNotEmpty() && u.isNotEmpty()) { getString(R.string.required_value) }; check(u.startsWith("https://") || u.startsWith("http://")) { getString(R.string.import_error_scheme) }; Mobilecore.validateSourceURL(u)
-                val current = ConfigRepository.load(requireContext())
                 val originalSource = originalUrl?.let { Triple(originalName.orEmpty(), it, arguments?.getString("format") ?: "auto") }
                 check(originalSource == null || originalSource in current.subscriptions) { getString(R.string.editor_conflict) }
                 check(current.subscriptions.none { it.first == n && it != originalSource }) { getString(R.string.duplicate_node) }
-                ConfigRepository.save(requireContext(), current.copy(sourceNeedsGenerate = true, subscriptions = if (originalUrl == null) current.subscriptions + Triple(n, u, format.text.toString()) else current.subscriptions.map { if (it == originalSource) Triple(n, u, format.text.toString()) else it })); com.pidal.sakamoto.runtime.MobilecoreRuntime.configEvent("modified"); parentFragmentManager.setFragmentResult("config-updated", Bundle()); dismiss()
+                ConfigRepository.save(requireContext(), current.copy(sourceNeedsGenerate = true, subscriptions = if (originalUrl == null) current.subscriptions + Triple(n, u, format.text.toString()) else current.subscriptions.map { if (it == originalSource) Triple(n, u, format.text.toString()) else it }), current); com.pidal.sakamoto.runtime.MobilecoreRuntime.configEvent("modified"); parentFragmentManager.setFragmentResult("config-updated", Bundle()); dismiss()
             } catch (e: Exception) { url.error = e.message ?: getString(R.string.invalid_value) }
         }
         return scrollWrap(root)

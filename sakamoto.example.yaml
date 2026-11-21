@@ -40,6 +40,8 @@ mixed_inbound:
   enabled: true
   port: 2334
   allow_lan: false
+  # LAN sharing requires system_proxy.enabled: false and a separate random
+  # lan_password of at least 32 characters. The proxy username is sakamoto.
 urltest:
   url: https://www.gstatic.com/generate_204
   interval: 10m

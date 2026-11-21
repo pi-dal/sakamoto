@@ -3,6 +3,15 @@ import SakamotoKit
 
 struct ProxyChainView: View {
     @ObservedObject var store: ConfigStore
+    var body: some View {
+        ProxyChainEditor(store: store, profileID: store.selectedProfileID)
+            .id(store.selectedProfileID)
+    }
+}
+
+private struct ProxyChainEditor: View {
+    @ObservedObject var store: ConfigStore
+    let profileID: String?
     @State private var settings = ProxyChainSettings()
     @State private var exitLink = ""
     @State private var notice: String?
@@ -33,6 +42,7 @@ struct ProxyChainView: View {
                 Text("Device → \(settings.upstream.isEmpty ? "upstream" : settings.upstream) → \(settings.exit.isEmpty ? "exit node" : settings.exit) → website")
                     .font(.footnote).foregroundStyle(.secondary)
                 Button("Save chain") {
+                    guard store.selectedProfileID == profileID else { return }
                     do { try store.saveProxyChain(settings); notice = "Saved. Apply changes in Config." }
                     catch { notice = error.localizedDescription }
                 }.accessibilityIdentifier("ChainSave").disabled(store.generating || store.applying || store.content.isEmpty || (settings.enabled && settings.exit.isEmpty))
@@ -41,7 +51,8 @@ struct ProxyChainView: View {
                 TextField("Node share link", text: $exitLink)
                     .textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive()
                 Button(store.generating ? "Generating…" : "Add exit & generate") {
-                    Task {
+                    Task { @MainActor in
+                        guard store.selectedProfileID == profileID else { return }
                         do {
                             var link = exitLink
                             if var components = URLComponents(string: exitLink), ["socks", "socks5"].contains(components.scheme?.lowercased() ?? ""), components.user == nil {
@@ -49,8 +60,7 @@ struct ProxyChainView: View {
                                 link = components.string ?? exitLink
                             }
                             let node = try ConfigModel.validateNode(link)
-                            store.commitNodesSources(store.nodesSources.adding(node: node))
-                            try await store.generateFromSources()
+                            try await store.generateFromSources(adding: node)
                             exitLink = ""; notice = "Exit added. Choose it above and save the chain."
                         } catch { notice = TunnelDiagnostics.sanitized(error.localizedDescription) }
                     }

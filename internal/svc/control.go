@@ -132,6 +132,9 @@ func (s *Server) reload(ctx context.Context) string {
 	if !running {
 		return "error: core is not running"
 	}
+	if s.protectedRuntimeParent != "" {
+		return "error: reconnect to apply a new protected configuration snapshot"
+	}
 	if err := validateAPIService(s.cfgPath); err != nil {
 		return "error: " + err.Error()
 	}

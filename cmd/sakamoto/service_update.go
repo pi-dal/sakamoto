@@ -153,7 +153,9 @@ func runServiceUpdate(ctx context.Context, path string, args []string) error {
 	}
 	stageArgs := []string{"-n", binary, "--config", absolute, "service-update", "--stage-rescue"}
 	if live {
-		stageArgs = append(stageArgs, "--validate-config")
+		if err := svc.ValidateConfigurationForUpdate(ctx, absolute); err != nil {
+			return fmt.Errorf("current configuration cannot be safely reconnected; live core retained: %w", err)
+		}
 	}
 	stageCommand := exec.CommandContext(ctx, "/usr/bin/sudo", stageArgs...)
 	stageCommand.Stdin, stageCommand.Stdout, stageCommand.Stderr = os.Stdin, os.Stdout, os.Stderr

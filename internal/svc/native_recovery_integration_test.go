@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/pi-dal/sakamoto/internal/recovery"
+	"github.com/pi-dal/sakamoto/internal/sbclient"
 )
 
 // An actual native core runs with loopback inbounds only: no TUN, system DNS,
@@ -39,10 +40,12 @@ func TestRecoveryNativeCoreRollbackAndAPIOutage(t *testing.T) {
 		return listener.Addr().(*net.TCPAddr).Port
 	}
 	api, mixed := port(), port()
-	raw := []byte(fmt.Sprintf(`{"log":{"disabled":true},"services":[{"type":"api","listen":"127.0.0.1","listen_port":%d,"secret":"offline-recovery-integration-key-0123456789abcdef"}],"inbounds":[{"type":"mixed","listen":"127.0.0.1","listen_port":%d}],"outbounds":[{"type":"direct","tag":"direct"}],"route":{"final":"direct"}}`, api, mixed))
+	raw := []byte(fmt.Sprintf(`{"log":{"disabled":true},"experimental":{"cache_file":{"enabled":true}},"services":[{"type":"api","listen":"127.0.0.1","listen_port":%d,"secret":"offline-recovery-integration-key-0123456789abcdef"}],"inbounds":[{"type":"mixed","listen":"127.0.0.1","listen_port":%d}],"outbounds":[{"type":"direct","tag":"direct"}],"route":{"rules":[{"clash_mode":"Global","action":"route","outbound":"direct"},{"clash_mode":"Rule","action":"route","outbound":"direct"}],"final":"direct"}}`, api, mixed))
 	recoveryOK(t, os.WriteFile(filepath.Join(dir, "config.json"), raw, 0600))
 	recoveryOK(t, os.WriteFile(filepath.Join(dir, "sakamoto.yaml"), []byte("dns_guard:\n  enabled: false\n"), 0600))
 	s := NewServer(filepath.Join(dir, "config.json"), dir)
+	s.protectedRuntimeParent = t.TempDir()
+	s.protectedStateParent = t.TempDir()
 	s.vpnConnected = func() bool { return false }
 	s.retryDelay = 20 * time.Millisecond
 	s.stablePeriod = 200 * time.Millisecond
@@ -55,6 +58,18 @@ func TestRecoveryNativeCoreRollbackAndAPIOutage(t *testing.T) {
 	firstPID := s.child.Process.Pid
 	s.stablePeriod = time.Hour
 	s.mu.Unlock()
+	modeClient := func() *sbclient.Client {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		var spec struct{ Services []struct{ Secret string } }
+		recoveryOK(t, json.Unmarshal(raw, &spec))
+		client, err := sbclient.Dial(ctx, fmt.Sprintf("http://127.0.0.1:%d", api), spec.Services[0].Secret)
+		recoveryOK(t, err)
+		return client
+	}
+	first := modeClient()
+	recoveryOK(t, first.SetClashMode(context.Background(), "Global"))
+	first.Close()
 	echo, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -115,6 +130,26 @@ func TestRecoveryNativeCoreRollbackAndAPIOutage(t *testing.T) {
 	if !samePID {
 		t.Fatal("API failure restarted the data plane")
 	}
+	// The native child reloads the verified private generation even when the
+	// staging path already carries a different API identity.
+	s.mu.Lock()
+	appliedArgs := append([]string(nil), s.child.Args...)
+	s.mu.Unlock()
+	foundSnapshot := false
+	for i, arg := range appliedArgs {
+		if arg == "-c" && i+1 < len(appliedArgs) {
+			path := appliedArgs[i+1]
+			if !strings.HasPrefix(path, s.protectedRuntimeParent+string(os.PathSeparator)) {
+				t.Fatal("native process did not use captured configuration")
+			}
+			bytes, readErr := os.ReadFile(path)
+			recoveryOK(t, readErr)
+			foundSnapshot = !strings.Contains(string(bytes), config["services"].([]any)[0].(map[string]any)["secret"].(string))
+		}
+	}
+	if !foundSnapshot {
+		t.Fatal("staged edit affected captured configuration")
+	}
 	// A broken staged config must not be auto-activated after a real core crash.
 	recoveryOK(t, os.WriteFile(s.cfgPath, []byte("bad candidate"), 0600))
 	s.mu.Lock()
@@ -124,8 +159,14 @@ func TestRecoveryNativeCoreRollbackAndAPIOutage(t *testing.T) {
 	waitRecovery(t, func() bool {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		return s.circuit.Pinned && s.circuit.RollbackUsed && s.runningLocked()
+		return s.circuit.Blocked && !s.runningLocked()
 	})
+	if reply := s.rollback(); !strings.HasPrefix(reply, "restored") {
+		t.Fatal(reply)
+	}
+	if reply := s.start(); !strings.HasPrefix(reply, "connected") {
+		t.Fatal(reply)
+	}
 	s.mu.Lock()
 	fallbackPID := s.child.Process.Pid
 	pinnedPath := s.child.Path
@@ -139,6 +180,13 @@ func TestRecoveryNativeCoreRollbackAndAPIOutage(t *testing.T) {
 		_, err := s.coreEpoch(ctx)
 		return err == nil
 	})
+	restarted := modeClient()
+	status, err := restarted.ClashModeStatus(context.Background())
+	restarted.Close()
+	recoveryOK(t, err)
+	if status.CurrentMode != "Global" {
+		t.Fatalf("new generation started in %s", status.CurrentMode)
+	}
 	s.mu.Lock()
 	killErr = s.child.Process.Kill()
 	s.mu.Unlock()
@@ -148,5 +196,5 @@ func TestRecoveryNativeCoreRollbackAndAPIOutage(t *testing.T) {
 	if err != nil || !state.Blocked || !state.RollbackUsed {
 		t.Fatal("failed rollback did not trip persistent breaker", state, err)
 	}
-	writeRecoveryArtifact(t, map[string]any{"scenario": "real-native-core", "same_stream_during_api_failure": true, "first_pid": firstPID, "fallback_pid": fallbackPID, "pinned_engine_executed": true, "bad_candidate_not_activated": true, "failed_rollback_blocked": true})
+	writeRecoveryArtifact(t, map[string]any{"scenario": "real-native-core", "recovered_mode": status.CurrentMode, "same_stream_during_api_failure": true, "first_pid": firstPID, "fallback_pid": fallbackPID, "pinned_engine_executed": true, "bad_candidate_not_activated": true, "failed_rollback_blocked": true})
 }

@@ -2,6 +2,7 @@ package mobileconf
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 )
@@ -17,7 +18,10 @@ func ValidSource(source string) error {
 	}
 	u, err := url.Parse(source)
 	if err != nil {
-		return err
+		return fmt.Errorf("invalid source address")
+	}
+	if u.Scheme == "http" && !net.ParseIP(u.Hostname()).IsLoopback() {
+		return fmt.Errorf("remote sources require HTTPS")
 	}
 	if strings.Contains(source, "://") && u.Scheme != "http" && u.Scheme != "https" {
 		return fmt.Errorf("only HTTP(S) URLs or local paths are supported")

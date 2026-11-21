@@ -20,7 +20,7 @@ class RoutingPolicyFragment : androidx.fragment.app.Fragment() {
         parentFragmentManager.setFragmentResultListener("config-updated", viewLifecycleOwner) { _, _ -> refresh() }
     }
     private fun refresh() { (view as? android.widget.FrameLayout)?.let { it.removeAllViews(); it.addView(build().root) } }
-    private fun save(content: String) { ConfigRepository.saveGeneratedEdit(requireContext(), content); refresh() }
+    private fun save(content: String, expected: ConfigRepository.StagedConfig) { ConfigRepository.saveGeneratedEdit(requireContext(), content, expected = expected); refresh() }
     private fun editor(index: Int) {
         (requireActivity() as MainActivity).openChild(EditorFragment().apply {
             arguments = Bundle().apply { putString("kind", "rule"); putInt("index", index) }
@@ -28,7 +28,8 @@ class RoutingPolicyFragment : androidx.fragment.app.Fragment() {
     }
     private fun build(): GroupedPage {
         val page = GroupedPage(requireContext())
-        val content = ConfigRepository.load(requireContext()).generatedContent
+        val expected = ConfigRepository.load(requireContext())
+        val content = expected.generatedContent
         val snapshot = runCatching { RoutingSnapshot.parse(content) }.getOrNull()
         val group = page.section(getString(R.string.policy_effective_rules))
         page.button(group, getString(R.string.add_policy_action), primary = true) { editor(-1) }
@@ -49,14 +50,15 @@ class RoutingPolicyFragment : androidx.fragment.app.Fragment() {
                             val latest = ConfigRepository.load(requireContext()).generatedContent
                             check(latest == content) { getString(R.string.editor_conflict) }
                             when (item.itemId) {
-                                1 -> save(ConfigEdits.moveRule(latest, rule.order - 1, rule.order - 2))
-                                2 -> save(ConfigEdits.moveRule(latest, rule.order - 1, rule.order))
+                                1 -> save(ConfigEdits.moveRule(latest, rule.order - 1, rule.order - 2), expected)
+                                2 -> save(ConfigEdits.moveRule(latest, rule.order - 1, rule.order), expected)
                                 3 -> {
                                     val after = ConfigEdits.routeRule(latest, rule.order - 1, null)
-                                    save(after)
+                                    save(after, expected)
                                     view?.let { anchor -> Snackbar.make(anchor, R.string.rule_removed, Snackbar.LENGTH_LONG)
                                         .setAction(R.string.undo) {
-                                            if (ConfigRepository.load(requireContext()).generatedContent == after) runCatching { save(latest) }
+                                            val deleted = expected.copy(generatedContent = after)
+                                            if (ConfigRepository.load(requireContext()) == deleted) runCatching { save(latest, deleted) }
                                                 .onFailure { Snackbar.make(anchor, R.string.edit_failed, Snackbar.LENGTH_LONG).show() }
                                             else Snackbar.make(anchor, R.string.editor_conflict, Snackbar.LENGTH_LONG).show()
                                         }.show() }
@@ -74,7 +76,10 @@ class RoutingPolicyFragment : androidx.fragment.app.Fragment() {
             EditDialogs.choice(requireContext(), getString(R.string.policy_final), ConfigEdits.outboundTags(content), snapshot.final) {
                 val latest = ConfigRepository.load(requireContext()).generatedContent
                 check(latest == content) { getString(R.string.editor_conflict) }
-                save(ConfigEdits.finalOutbound(latest, it))
+                check(com.pidal.sakamoto.runtime.ExperimentRuntime.settings(requireContext(), expected).mode != "on") {
+                    "Turn off Experiment mode to change the unmatched traffic route."
+                }
+                save(ConfigEdits.finalOutbound(latest, it), expected)
             }
         }
         page.note(getString(R.string.device_edits_note))

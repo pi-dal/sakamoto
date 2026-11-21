@@ -50,8 +50,9 @@ class EditorFragment : androidx.fragment.app.Fragment(), UnsavedConfigEditor {
         entryAvailable = false
         val kind = requireArguments().getString("kind")!!
         val tag = requireArguments().getString("tag").orEmpty()
-        savedContent = ConfigRepository.load(requireContext()).generatedContent
-        baselineDigest = state?.getString("baselineDigest") ?: digest(savedContent)
+        val opened = ConfigRepository.load(requireContext())
+        savedContent = opened.generatedContent
+        baselineDigest = state?.getString("baselineDigest") ?: digest(opened.modeCacheID + savedContent)
         dirty = state?.getBoolean("dirty") == true
 
         val root = runCatching { JSONObject(savedContent) }.getOrNull()
@@ -346,7 +347,7 @@ class EditorFragment : androidx.fragment.app.Fragment(), UnsavedConfigEditor {
         if (!entryAvailable) return
         try {
             val current = ConfigRepository.load(requireContext())
-            check(digest(current.generatedContent) == baselineDigest) { getString(R.string.editor_conflict) }
+            check(digest(current.modeCacheID + current.generatedContent) == baselineDigest) { getString(R.string.editor_conflict) }
             val root = JSONObject(current.generatedContent)
             clearErrors()
             if (kind == "outbound") {
@@ -361,7 +362,7 @@ class EditorFragment : androidx.fragment.app.Fragment(), UnsavedConfigEditor {
                 }
                 val name = value("tag").trim()
                 val content = ConfigEdits.renamedOutbound(root.toString(), tag, name)
-                ConfigRepository.saveNodeEdit(requireContext(), content, tag, name)
+                ConfigRepository.saveNodeEdit(requireContext(), content, tag, name, current)
                 finishSave()
             } else {
                 val index = requireArguments().getInt("index", -1)
@@ -376,7 +377,7 @@ class EditorFragment : androidx.fragment.app.Fragment(), UnsavedConfigEditor {
                 } catch (error: IllegalArgumentException) {
                     showFieldError("match", error.message); return
                 }
-                persist(ConfigEdits.routeRule(root.toString(), if (index < 0) rules.length() else index, built))
+                persist(ConfigEdits.routeRule(root.toString(), if (index < 0) rules.length() else index, built), current)
             }
         } catch (error: Exception) {
             fail(error.message)
@@ -384,8 +385,8 @@ class EditorFragment : androidx.fragment.app.Fragment(), UnsavedConfigEditor {
         }
     }
 
-    private fun persist(content: String) {
-        ConfigRepository.saveGeneratedEdit(requireContext(), content)
+    private fun persist(content: String, current: ConfigRepository.StagedConfig) {
+        ConfigRepository.saveGeneratedEdit(requireContext(), content, expected = current)
         finishSave()
     }
 

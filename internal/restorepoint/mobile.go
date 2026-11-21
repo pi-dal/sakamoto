@@ -51,6 +51,43 @@ func hashFile(path string) (string, error) {
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
+// MobilePolicyContent compares captured inputs by content, since capture
+// replaces each input path with a private generation-specific asset path.
+func MobilePolicyContent(content string) ([]byte, error) {
+	var root map[string]any
+	if err := json.Unmarshal([]byte(content), &root); err != nil {
+		return nil, err
+	}
+	sums := make(map[string]string)
+	var total int64
+	err := walkPaths(root, func(path string) (string, error) {
+		if sum, ok := sums[path]; ok {
+			return sum, nil
+		}
+		if !filepath.IsAbs(path) {
+			return "", errors.New("cannot verify a relative recovery input")
+		}
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() {
+			return "", errors.New("cannot verify recovery input")
+		}
+		total += info.Size()
+		if total > 128<<20 || len(sums) >= 4096 {
+			return "", errors.New("recovery inputs exceed size limit")
+		}
+		sum, err := hashFile(path)
+		if err != nil {
+			return "", errors.New("cannot verify recovery input")
+		}
+		sums[path] = sum
+		return sum, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(root)
+}
+
 // CaptureMobile retains config/assets on disk before startup, without copying
 // or loading executable code. Relative paths use the native working directory.
 func CaptureMobile(root, content, metadata string, working ...string) (*MobileCandidate, error) {
@@ -60,6 +97,9 @@ func CaptureMobile(root, content, metadata string, working ...string) (*MobileCa
 	}
 	if !json.Valid([]byte(metadata)) || len(content)+len(metadata) > maxInput {
 		return nil, errors.New("invalid retained profile metadata")
+	}
+	if err := checkKeylessMobileCapture(content, metadata); err != nil {
+		return nil, err
 	}
 	base := mobileBase(root)
 	if err := os.MkdirAll(filepath.Dir(base), 0700); err != nil {

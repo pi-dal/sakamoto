@@ -1,14 +1,23 @@
 import Foundation
 import Libbox
 
-private final class RegionalSourceRedirectPolicy: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+final class RegionalSourceRedirectPolicy: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     let protected: Set<String>
     init(domains: String) {
         protected = Set(domains.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() })
     }
+    func permits(_ url: URL) -> Bool {
+        let host = url.host?.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased() ?? ""
+        return url.scheme?.lowercased() == "https" && !host.isEmpty && protected.firstIndex(of: host) == nil
+    }
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
-        let host = request.url?.host?.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased() ?? ""
-        completionHandler(protected.firstIndex(of: host) == nil ? request : nil)
+        guard let source = response.url, let next = request.url, permits(next),
+              source.scheme?.lowercased() == next.scheme?.lowercased(),
+              source.host?.lowercased() == next.host?.lowercased(),
+              (source.port ?? 443) == (next.port ?? 443) else { completionHandler(nil); return }
+        var clean = request
+        clean.setValue(nil, forHTTPHeaderField: "Referer")
+        completionHandler(clean)
     }
 }
 

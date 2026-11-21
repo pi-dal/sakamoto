@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -112,7 +113,7 @@ func (s *Server) retryCore(cmd *exec.Cmd, gen int) {
 			}
 			canRollback := !state.RollbackUsed
 			if canRollback {
-				if reply := s.rollbackLocked(); strings.HasPrefix(reply, "restored") {
+				if reply := s.rollbackChecked(true); strings.HasPrefix(reply, "restored") {
 					s.lifecycle.Unlock()
 					s.appendLog("crash budget exhausted; starting known-working runtime once")
 					s.startGeneration(cmd, gen)
@@ -206,9 +207,9 @@ func (s *Server) rollback() string {
 	if running {
 		return "error: core started; disconnect before rollback"
 	}
-	return s.rollbackLocked()
+	return s.rollbackChecked(false)
 }
-func (s *Server) rollbackLocked() string {
+func (s *Server) rollbackChecked(automatic bool) string {
 	s.mu.Lock()
 	state := s.circuit
 	s.mu.Unlock()
@@ -219,7 +220,23 @@ func (s *Server) rollbackLocked() string {
 	if err != nil {
 		return "error: known-working runtime unavailable: " + err.Error()
 	}
-	if err := checkRetainedRegionalDNS(s.workDir, point.Dir); err != nil {
+	if _, err := retainedEngine(point); err != nil {
+		return "error: " + err.Error()
+	}
+	check := func() error {
+		if automatic {
+			current, err := restorepoint.Capture(s.workDir, singBoxExecutable())
+			if err != nil {
+				return fmt.Errorf("cannot verify current recovery inputs")
+			}
+			defer current.Close()
+			if point.Manifest.Inputs != current.InputDigest() {
+				return fmt.Errorf("recovery inputs changed; explicit rollback required")
+			}
+		}
+		return checkRetainedRegionalDNS(s.workDir, point.Dir)
+	}
+	if err := check(); err != nil {
 		return "error: " + err.Error()
 	}
 	if _, err := os.Lstat(s.dnsStatePath()); err == nil {
@@ -238,11 +255,12 @@ func (s *Server) rollbackLocked() string {
 	if err := s.saveCircuitLocked(state); err != nil {
 		return "error: rollback journal: " + err.Error()
 	}
-	if err := point.ApplyChecked(s.workDir, func() error { return checkRetainedRegionalDNS(s.workDir, point.Dir) }); err != nil {
+	if err := point.ApplyChecked(s.workDir, check); err != nil {
 		return "error: rollback incomplete; maintenance required: " + err.Error()
 	}
 	s.mu.Lock()
 	s.activeConfigHash = s.runtimeHash()
+	s.activeInputDigest = "" // Applied paths refer to the retained bundle now.
 	s.mu.Unlock()
 	state.Blocked = false
 	state.Reason = "known-working runtime restored"
@@ -276,7 +294,32 @@ func (s *Server) selectedBinary() (string, error) {
 	if string(current) != string(known) {
 		return "", fmt.Errorf("known-working core is pinned; ctl resume-installed is required before applying a new generation")
 	}
-	return filepath.Join(point.Dir, "engine"), nil
+	return retainedEngine(point)
+}
+
+// The runtime owner can write restore points. For privileged operations the
+// manifest can identify an installed engine, but cannot authorize new code.
+func retainedEngine(point *restorepoint.Point) (string, error) {
+	if os.Geteuid() != 0 {
+		return filepath.Join(point.Dir, "engine"), nil
+	}
+	path := singBoxExecutable()
+	if !protectedExecutable(path) {
+		return "", fmt.Errorf("protected core installation required for recovery")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+	digest := sha256.New()
+	if _, err = io.Copy(digest, f); err != nil {
+		return "", err
+	}
+	if hex.EncodeToString(digest.Sum(nil)) != point.Manifest.Files["engine"] {
+		return "", fmt.Errorf("restore point needs a different core version; install the matching trusted core before recovery")
+	}
+	return path, nil
 }
 func (s *Server) observeRuntime(cmd *exec.Cmd, gen int, done <-chan struct{}, candidate *restorepoint.Candidate) {
 	defer candidate.Close()

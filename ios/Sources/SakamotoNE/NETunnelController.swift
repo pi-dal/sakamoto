@@ -41,6 +41,9 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
     private var manager: NEVPNManager
     private var preferencesLoaded = false
     private let requestFence = TunnelRequestFence()
+    private let isCurrent: @MainActor (TunnelStartOptions) -> Bool
+    @MainActor private var changingProfile = false
+    @MainActor private var preferenceWaiters: [CheckedContinuation<Void, Never>] = []
 
     /// Hook for VPN-conflict detection (core: another VPN TUN active while
     /// ours runs). The app target wires this to real system VPN inspection.
@@ -50,42 +53,33 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
 
     public init(
         providerBundleIdentifier: String,
-        manager: NEVPNManager = NETunnelProviderManager(),
+        manager: NEVPNManager? = nil,
+        isCurrent: @escaping @MainActor (TunnelStartOptions) -> Bool = { _ in true },
         conflictCheck: @escaping @Sendable () async -> Bool = { false }
     ) {
         self.providerBundleIdentifier = providerBundleIdentifier
-        self.manager = manager
+        self.manager = manager ?? NETunnelProviderManager()
+        self.preferencesLoaded = manager != nil
+        self.isCurrent = isCurrent
         self.conflictCheck = conflictCheck
     }
 
     // MARK: TunnelControlling
 
     @MainActor public func connect(options: TunnelStartOptions) async throws {
-        let request = requestFence.begin()
-        try await loadProviderPreferences(refresh: true)
-        try requestFence.check(request)
-        manager.protocolConfiguration = Self.makeProviderProtocol(
-            bundleIdentifier: providerBundleIdentifier,
-            options: options
-        )
-        manager.localizedDescription = "sakamoto"
-        manager.isEnabled = true
-        try await savePreferences()
-        try requestFence.check(request)
-        try await reloadPreferences()
-        try requestFence.perform(request) { try manager.connection.startVPNTunnel(options: options.startTunnelOptions) }
+        try await apply(options: options, starting: true, transaction: nil, commit: {})
     }
 
     @MainActor public func disconnect() async throws {
         let request = requestFence.begin()
+        await acquirePreferences()
+        defer { releasePreferences() }
+        try requestFence.check(request)
         try await loadProviderPreferences(refresh: true)
         try requestFence.check(request)
-        if manager.isOnDemandEnabled {
-            manager.isOnDemandEnabled = false
-            try await savePreferences()
-            try await reloadPreferences()
+        try await AutomaticConnectionPolicy.pause(manager) {
+            try self.requestFence.perform(request) { self.manager.connection.stopVPNTunnel() }
         }
-        try requestFence.perform(request) { manager.connection.stopVPNTunnel() }
     }
 
     public func status() async throws -> ServiceState {
@@ -120,26 +114,212 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
     }
 
     public func reload(options: TunnelStartOptions) async throws {
+        try await apply(options: options, starting: false, transaction: nil, commit: {})
+    }
+
+    // Keep a superseded request's rollback and the next preference write in order.
+    @MainActor private func acquirePreferences() async {
+        if changingProfile { await withCheckedContinuation { preferenceWaiters.append($0) } }
+        else { changingProfile = true }
+    }
+
+    @MainActor private func releasePreferences() {
+        if preferenceWaiters.isEmpty { changingProfile = false }
+        else { preferenceWaiters.removeFirst().resume() }
+    }
+
+    @MainActor public func apply(options: TunnelStartOptions, starting: Bool, transaction: UUID?, commit: @MainActor () throws -> Void) async throws {
+        let ticket = requestFence.begin()
+        await acquirePreferences()
+        defer { releasePreferences() }
+        try requestFence.check(ticket)
+        func validate() throws {
+            try Task.checkCancellation()
+            try requestFence.check(ticket)
+            guard isCurrent(options) else { throw CancellationError() }
+        }
         try await loadProviderPreferences(refresh: true)
-        let previous = manager.protocolConfiguration
-        // Persist the same configuration for subsequent cold starts, but
-        // restore the old preferences if the live provider rejects it.
-        manager.protocolConfiguration = Self.makeProviderProtocol(bundleIdentifier: providerBundleIdentifier, options: options)
-        try await savePreferences()
-        try await reloadPreferences()
-        let response: TunnelResponse
+        try validate()
+        let previous = try Self.rollbackProtocol(for: manager.protocolConfiguration)
+        let previousName = manager.localizedDescription
+        let previouslyEnabled = manager.isEnabled
+        let candidate = try Self.makeProviderProtocol(bundleIdentifier: providerBundleIdentifier, options: options)
+        let operationID = transaction ?? UUID()
+        guard let reference = candidate.providerConfiguration else { throw TunnelStartOptions.ResolutionError.missingConfiguration }
+        var staged = try TunnelStartOptions.provisionalReference(reference, transaction: operationID, previous: (previous as? NETunnelProviderProtocol)?.providerConfiguration)
+        if transaction == nil { staged["controllerTransaction"] = true }
+        candidate.providerConfiguration = staged
+        let lease: ApplyLease = try {
+            guard let root = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: SystemSurfaceStore.groupIdentifier) else { throw TunnelStartOptions.ResolutionError.missingConfiguration }
+            let predecessor = candidate.providerConfiguration?["previousProfile"] as? [String: String]
+            return try ApplyLease(root: root, transaction: operationID, owner: true, rollback: .init(reference: predecessor))
+        }()
+        defer { withExtendedLifetime(lease) {} }
+        manager.protocolConfiguration = candidate
+        if starting { manager.localizedDescription = "sakamoto"; manager.isEnabled = true }
+        var saved = false
+        var submitted = false
+        let requestID = operationID
         do {
-            response = try await send(.reloadProfile(options: options))
-            if !response.ok { throw TunnelControllerError.providerReported(response.error ?? "reloadConfig failed") }
-        } catch {
-            manager.protocolConfiguration = previous
             try await savePreferences()
+            saved = true
             try await reloadPreferences()
+            guard let reloaded = manager.protocolConfiguration as? NETunnelProviderProtocol,
+                  let reference = reloaded.providerConfiguration,
+                  NSDictionary(dictionary: reference).isEqual(to: candidate.providerConfiguration ?? [:]) else {
+                // Another owner replaced these preferences. Keep its newer value.
+                saved = false
+                throw CancellationError()
+            }
+            try validate()
+            if starting {
+                var start = options.startTunnelOptions
+                start["applyTransaction"] = operationID.uuidString as NSString
+                start[TunnelStartOptions.controllerConfirmsKey] = NSNumber(value: true)
+                try manager.connection.startVPNTunnel(options: start)
+                submitted = true
+                try await confirmStart(options, validate: validate)
+            } else {
+                try await reloadConfirmed(options, transaction: operationID, requestID: requestID) {
+                    submitted = true
+                }
+                try validate()
+            }
+            guard try await preferencesStillMatch(candidate) else { throw CancellationError() }
+            try validate()
+            guard try options.confirmStoredReference(reference, previous: (previous as? NETunnelProviderProtocol)?.providerConfiguration, transaction: operationID, afterWrite: commit) else {
+                throw TunnelControllerError.responseMissingState
+            }
+        } catch {
+            if saved {
+                guard try await preferencesStillMatch(candidate) else { throw CancellationError() }
+            }
+            let previousReference = (previous as? NETunnelProviderProtocol)?.providerConfiguration
+            let previousOptions = previousReference.flatMap { TunnelStartOptions(providerConfiguration: $0) }
+            let restored = (error as? RunningOtherProfile)?.receipt
+            var previousIsRunning = previousOptions.map { restored?.matches($0) == true } ?? false
+            if submitted, !starting, let previousOptions {
+                // Rollback must finish even when cancellation initiated it.
+                previousIsRunning = await Task { @MainActor in
+                    await self.recoverReload(previousOptions, candidate: options, failure: error, requestID: requestID)
+                }.value
+                guard try await preferencesStillMatch(candidate) else { throw CancellationError() }
+            }
+            let mustStop = submitted && !previousIsRunning
+            if mustStop { manager.connection.stopVPNTunnel() }
+            if !saved && error is CancellationError { throw error }
+            manager.protocolConfiguration = previous
+            manager.localizedDescription = previousName
+            manager.isEnabled = previouslyEnabled
+            if saved {
+                if previous == nil { try await manager.removeFromPreferences(); preferencesLoaded = false }
+                else { try await savePreferences(); try await reloadPreferences() }
+            }
+            if mustStop {
+                // Finish observing teardown even if the task initiating Apply was cancelled.
+                try await Task { @MainActor in
+                    let deadline = ProcessInfo.processInfo.systemUptime + 10
+                    while ![NEVPNStatus.invalid, .disconnected].contains(manager.connection.status) {
+                        guard ProcessInfo.processInfo.systemUptime < deadline else { throw TunnelControllerError.providerTimedOut }
+                        try await Task.sleep(nanoseconds: 100_000_000)
+                    }
+                }.value
+            }
             throw error
         }
-        guard response.ok else {
-            throw TunnelControllerError.providerReported(response.error ?? "reloadConfig failed")
+    }
+
+    @MainActor private func preferencesStillMatch(_ candidate: NETunnelProviderProtocol) async throws -> Bool {
+        try await reloadPreferences()
+        guard let installed = manager.protocolConfiguration as? NETunnelProviderProtocol,
+              let reference = installed.providerConfiguration else { return false }
+        return NSDictionary(dictionary: reference).isEqual(to: candidate.providerConfiguration ?? [:])
+    }
+
+    private static func rollbackProtocol(for saved: NEVPNProtocol?) throws -> NEVPNProtocol? {
+        guard let provider = saved as? NETunnelProviderProtocol, let raw = provider.providerConfiguration else { return saved }
+        guard let reference = try TunnelStartOptions.rollbackReference(for: raw) else {
+            throw TunnelStartOptions.ResolutionError.unverifiedInstalledProfile
         }
+        guard let snapshot = provider.copy() as? NETunnelProviderProtocol else { throw TunnelControllerError.responseMissingState }
+        snapshot.providerConfiguration = reference
+        return snapshot
+    }
+
+    private func reloadConfirmed(_ options: TunnelStartOptions, transaction: UUID? = nil, replacing: TunnelConfigurationReceipt? = nil, requestID: UUID, onSubmission: () -> Void = {}) async throws {
+        let response = try await send(.reloadProfile(options: options, transaction: transaction, replacing: replacing, requestID: requestID), onSubmission: onSubmission)
+        guard response.ok else { throw TunnelControllerError.providerReported(response.error ?? "reloadConfig failed") }
+        guard response.state?.serviceState == .running, response.state?.appliedReceipt?.matches(options) == true else {
+            throw TunnelControllerError.responseMissingState
+        }
+    }
+
+    private func recoverReload(_ previous: TunnelStartOptions, candidate: TunnelStartOptions, failure: Error, requestID: UUID) async -> Bool {
+        var deadline = ProcessInfo.processInfo.systemUptime + 5
+        var pendingRestore: UUID?
+        var restoreAttempts = 0
+        repeat {
+            if let state = try? await ping() {
+                if let restoreID = pendingRestore {
+                    if state.serviceState == .running, state.hasCompletedReload(restoreID) {
+                        if state.appliedReceipt?.matches(previous) == true { return true }
+                        guard state.appliedReceipt?.matches(candidate) == true else { return false }
+                        // The provider finished this request with B still running. A fresh
+                        // observation can authorize another conditional restore.
+                        pendingRestore = nil
+                    }
+                    // While restoring, a ping can still report the candidate or a starting service.
+                    if state.serviceState != .running && state.serviceState != .starting { return false }
+                } else if state.serviceState == .running, let receipt = state.appliedReceipt {
+                    if receipt.matches(previous) {
+                        if state.hasCompletedReload(requestID) { return true }
+                        if case TunnelControllerError.providerReported = failure { return true }
+                    } else if receipt.matches(candidate) {
+                        guard restoreAttempts < 3 else { return false }
+                        restoreAttempts += 1
+                        let restoreID = UUID()
+                        do {
+                            try await reloadConfirmed(previous, replacing: receipt, requestID: restoreID) {
+                                pendingRestore = restoreID
+                            }
+                            return true
+                        } catch {
+                            if pendingRestore != nil {
+                                deadline = ProcessInfo.processInfo.systemUptime + 5
+                                continue
+                            }
+                            // Synchronous rejection: recheck the live receipt before retrying
+                            // within the original deadline.
+                        }
+                    } else { return false }
+                } else if state.serviceState != .starting { return false }
+            }
+            do { try await Task.sleep(nanoseconds: 100_000_000) } catch { return false }
+        } while ProcessInfo.processInfo.systemUptime < deadline
+        return false
+    }
+
+    private struct RunningOtherProfile: LocalizedError {
+        let receipt: TunnelConfigurationReceipt?
+        var errorDescription: String? { "The VPN is running a different configuration. The selected changes still need applying." }
+    }
+
+    @MainActor private func confirmStart(_ options: TunnelStartOptions, validate: () throws -> Void) async throws {
+        let deadline = ProcessInfo.processInfo.systemUptime + 20
+        while ProcessInfo.processInfo.systemUptime < deadline {
+            try await Task.sleep(nanoseconds: 250_000_000)
+            try validate()
+            let snapshot = try await ping()
+            try validate()
+            if snapshot.serviceState.running {
+                guard snapshot.appliedReceipt?.matches(options) == true else {
+                    throw RunningOtherProfile(receipt: snapshot.appliedReceipt)
+                }
+                return
+            }
+            if let detail = snapshot.detail { throw TunnelControllerError.providerReported(detail) }
+        }
+        throw TunnelControllerError.providerTimedOut
     }
 
     public func location(settings: VirtualLocationSettings?) async throws -> VirtualLocationSnapshot {
@@ -206,10 +386,10 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
     public static func makeProviderProtocol(
         bundleIdentifier: String,
         options: TunnelStartOptions
-    ) -> NETunnelProviderProtocol {
+    ) throws -> NETunnelProviderProtocol {
         let protocolConfiguration = NETunnelProviderProtocol()
         protocolConfiguration.providerBundleIdentifier = bundleIdentifier
-        protocolConfiguration.providerConfiguration = options.providerConfiguration
+        protocolConfiguration.providerConfiguration = try options.storedReference()
         // NEVPNProtocol requires a non-empty serverAddress to save; the
         // value is cosmetic for a local packet-tunnel provider.
         protocolConfiguration.serverAddress = "sakamoto"
@@ -269,9 +449,7 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
             // Refresh mutations after Settings/Control Center changed preferences.
             // Status polling reads the existing session without a disk reload.
             if refresh { try await reloadPreferences() }
-            return
-        }
-        if manager is NETunnelProviderManager {
+        } else if manager is NETunnelProviderManager {
             let managers: [NETunnelProviderManager] = try await withCheckedThrowingContinuation { continuation in
                 NETunnelProviderManager.loadAllFromPreferences { managers, error in
                     if let error { continuation.resume(throwing: error) }
@@ -281,6 +459,18 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
             if let saved = managers.first(where: {
                 ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == providerBundleIdentifier
             }) { manager = saved }
+        }
+        if let proto = manager.protocolConfiguration as? NETunnelProviderProtocol,
+           let legacy = proto.providerConfiguration, legacy["configContent"] != nil {
+            if let options = TunnelStartOptions(providerConfiguration: legacy), options.profileID != nil {
+                proto.providerConfiguration = try options.storedReference()
+            } else {
+                proto.providerConfiguration = [:]
+                manager.isOnDemandEnabled = false
+            }
+            manager.protocolConfiguration = proto
+            try await savePreferences()
+            try await reloadPreferences()
         }
         preferencesLoaded = true
     }
@@ -306,7 +496,7 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
         }
     }
 
-    private func send(_ request: TunnelRequest) async throws -> TunnelResponse {
+    private func send(_ request: TunnelRequest, onSubmission: () -> Void = {}) async throws -> TunnelResponse {
         guard let session = manager.connection as? NETunnelProviderSession else {
             throw TunnelControllerError.notTunnelSession
         }
@@ -325,6 +515,7 @@ public final class NETunnelController: TunnelControlling, @unchecked Sendable {
                     do { reply.finish(.success(try TunnelResponse.decode(responseData))) }
                     catch { reply.finish(.failure(error)) }
                 }
+                onSubmission()
             } catch { reply.finish(.failure(error)) }
         }
     }

@@ -22,6 +22,25 @@ func TestMobileRecoveryRetainedProfileOwnsAssets(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer candidate.Close()
+	captured, err := candidate.Content()
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := MobilePolicyContent(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retainedPolicy, err := MobilePolicyContent(captured)
+	if err != nil || string(policy) != string(retainedPolicy) {
+		t.Fatal("equal captured assets rejected", err)
+	}
+	if err = os.WriteFile(source, []byte(`{"version":3,"rules":[{"domain":["changed.example"]}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := MobilePolicyContent(content)
+	if err != nil || string(changed) == string(retainedPolicy) {
+		t.Fatal("changed rule source accepted", err)
+	}
 	if err = os.Remove(source); err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +77,40 @@ func TestMobileRecoveryRetainedProfileOwnsAssets(t *testing.T) {
 	if _, _, err = LoadMobile(root); err == nil {
 		t.Fatal("corrupt retained asset accepted")
 	}
-	evidence := map[string]any{"scenario": "mobile-configuration-snapshot", "retained_assets": true, "changed_inputs_rejected": true, "tampering_rejected": true, "engine_rollback": false}
+	// Simulate an earlier installation whose private snapshot and iOS metadata
+	// both contain an injected key. Its captured rule asset must survive migration.
+	legacy := filepath.Join(mobileBase(root), "profile-legacy")
+	if err := os.Mkdir(legacy, 0700); err != nil {
+		t.Fatal(err)
+	}
+	secretConfig := `{"endpoints":[{"type":"tailscale","auth_key":"synthetic-marker"}]}`
+	secretMeta, err := json.Marshal(map[string]string{"configContent": secretConfig})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, raw := range map[string]string{"config.json": secretConfig, "metadata.json": string(secretMeta), "asset-0": "fixture"} {
+		if err := os.WriteFile(filepath.Join(legacy, name), []byte(raw), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := DiscardLegacyMobileSecrets(root); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"config.json", "metadata.json"} {
+		if _, err := os.Stat(filepath.Join(legacy, name)); !os.IsNotExist(err) {
+			t.Fatal("legacy secret payload survived migration")
+		}
+	}
+	if _, err := os.Stat(filepath.Join(legacy, "asset-0")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CaptureMobile(root, secretConfig, "{}"); err == nil {
+		t.Fatal("captured an injected key")
+	}
+	if _, err := CaptureMobile(root, "{}", string(secretMeta)); err == nil {
+		t.Fatal("captured a metadata key")
+	}
+	evidence := map[string]any{"legacy_secret_payloads_removed": true, "scenario": "mobile-configuration-snapshot", "retained_assets": true, "changed_inputs_rejected": true, "relocated_assets_match": true, "changed_rule_policy_detected": true, "tampering_rejected": true, "engine_rollback": false}
 	base := os.Getenv("SAKAMOTO_RECOVERY_ARTIFACT_DIR")
 	if base == "" {
 		base = t.TempDir()

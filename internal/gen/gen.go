@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -18,7 +17,6 @@ import (
 
 	"github.com/pi-dal/sakamoto/internal/config"
 	"github.com/pi-dal/sakamoto/internal/experiment"
-	"github.com/pi-dal/sakamoto/pkg/mobileconf"
 	"github.com/pi-dal/sakamoto/pkg/regionaldns"
 )
 
@@ -27,9 +25,13 @@ import (
 type Options struct {
 	// Preflight profile used by mobile before it applies device-specific DNS to the generated base.
 	RegionalPreflight *regionaldns.Profile
+	SourceFinal       *string // optional output: effective source directive before Experiment overrides
+	MobileProvider    bool    // device applies regional DNS at connection time and owns its listeners
 	Context           context.Context
 	RequireNodes      bool // recovery must not replace proxy routing with an empty placeholder
 	ConfPath          string
+	CapturedSRNodes   *[]SRNode // export only fields consumed for allowlisted nodes
+	ProfileSRNodes    []SRNode  // private mobile profile inputs
 	SRJSONPath        string
 	NodesFile         string // optional share-link file
 	AllowHosts        string // comma-separated manual-node host allowlist
@@ -90,6 +92,7 @@ func Run(o Options) error {
 		hc = &http.Client{Timeout: 30 * time.Second}
 	}
 	client := *hc
+	client.CheckRedirect = sourceRedirectPolicy(hc.CheckRedirect)
 	transport := client.Transport
 	if transport == nil {
 		transport = http.DefaultTransport
@@ -131,21 +134,38 @@ func Run(o Options) error {
 	if err != nil {
 		return err
 	}
-	if o.RequireNodes && len(nodes) == 0 {
+	if len(nodes) == 0 {
 		return fmt.Errorf("no supported proxy nodes; restore source files before regenerating")
 	}
 
 	// 6) Map [General] dns-server entries to UDP, HTTPS, or TLS resolvers.
-	var directSets []string
+	var directSets, geoProxy []string
+	rejectSets := []string{"rs-reject"}
 	if _, ok := p.bk["direct"]; ok {
 		directSets = append(directSets, "rs-direct")
 	}
 	for _, gp := range p.geoip {
-		if gp[1] == "direct" {
-			directSets = append(directSets, "geoip-"+strings.ToLower(gp[0]))
+		tag := "geoip-" + strings.ToLower(gp[0])
+		switch gp[1] {
+		case "reject":
+			rejectSets = append(rejectSets, tag)
+		case "proxy":
+			geoProxy = append(geoProxy, tag)
+		case "direct":
+			directSets = append(directSets, tag)
 		}
 	}
-	dns := buildDNS(p, cfg, nodes, exitTag, ts)
+	dns, err := buildDNS(p, cfg, nodes, exitTag, ts)
+	if err != nil {
+		return err
+	}
+	if cfg.DNSGuard.Enabled {
+		for _, server := range dns.servers {
+			if server["type"] == "udp" && server["detour"] != nil {
+				return fmt.Errorf("protected DNS requires HTTPS or TLS for proxied resolvers")
+			}
+		}
+	}
 	if regional.Domains != "" {
 		if err := regional.ValidateResolverServers(dns.servers); err != nil {
 			return err
@@ -163,15 +183,21 @@ func Run(o Options) error {
 	routeRules := []map[string]any{
 		{"action": "sniff"},
 		{"protocol": "dns", "action": "hijack-dns"}, // Globally hijack DNS traffic routed through sing-box.
+		{"rule_set": rejectSets, "action": "reject"},
 		{"ip_is_private": true, "action": "route", "outbound": "direct"},
-		{"rule_set": []string{"rs-reject"}, "action": "reject"},
 		// Global and Direct take precedence over the ordinary split-routing
 		// buckets; private routes and reject/security rules above remain active.
 		{"clash_mode": "Global", "action": "route", "outbound": exitTag},
 		{"clash_mode": "Direct", "action": "route", "outbound": "direct"},
-		{"rule_set": directSets, "action": "route", "outbound": "direct"},
-		{"rule_set": []string{"rs-proxy"}, "action": "route", "outbound": exitTag},
 	}
+	routeRules = append(routeRules, orderedRoutes(p.prefix, exitTag)...)
+	if len(geoProxy) > 0 {
+		routeRules = append(routeRules, map[string]any{"rule_set": geoProxy, "action": "route", "outbound": exitTag})
+	}
+	if len(directSets) > 0 {
+		routeRules = append(routeRules, map[string]any{"rule_set": directSets, "action": "route", "outbound": "direct"})
+	}
+	routeRules = append(routeRules, map[string]any{"rule_set": []string{"rs-proxy"}, "action": "route", "outbound": exitTag})
 	var udpProtections []map[string]any
 	if cfg.BlockSTUN {
 		// Reject identified STUN packets that could expose a public mapped address.
@@ -186,19 +212,8 @@ func Run(o Options) error {
 	}
 	bypass := splitCSV(p.general["bypass-tun"])
 	bypass = append(bypass, splitCSV(p.general["tun-excluded-routes"])...)
-	lookup := o.LookupProxyIPs
-	if lookup == nil {
-		lookup = func(ctx context.Context, host string) ([]netip.Addr, error) {
-			return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
-		}
-	}
-	resolveContext, cancelResolve := context.WithTimeout(ctx, 3*time.Second)
-	serverRoutes, unresolved := mobileconf.ResolveProxyServerRoutes(resolveContext, outbounds, lookup)
-	cancelResolve()
-	bypass = append(bypass, serverRoutes...)
-	if len(unresolved) > 0 {
-		reportf("  warning: %d proxy hostnames could not be resolved for TUN exclusions; regenerate when DNS is available (outbound interface binding remains active)\n", len(unresolved))
-	}
+	// Outbound interface binding keeps the core's sockets off the TUN.
+	// Destination-wide exceptions would also bypass the tunnel for unrelated apps.
 	if ts.Present {
 		for _, c := range []string{"100.64.0.0/10", "fd7a:115c:a1e0::/48"} {
 			if !containsStr(bypass, c) {
@@ -218,7 +233,7 @@ func Run(o Options) error {
 		bypass = dd
 	}
 	tun := map[string]any{
-		"type": "tun", "tag": "tun-in", "address": []string{"172.18.0.1/30"},
+		"type": "tun", "tag": "tun-in", "address": []string{"172.18.0.1/30", "fdfe:dcba:9876::1/126"},
 		// strict_route corresponds to Shadowrocket TunnelEnforceRoutesKey.
 		"auto_route": true, "strict_route": cfg.StrictRoute, "stack": cfg.TunStack,
 		"udp_timeout": "5m",
@@ -230,23 +245,40 @@ func Run(o Options) error {
 		tun["route_address"] = inc // Only route listed prefixes through the TUN.
 	}
 	inbounds := []map[string]any{tun}
-	if cfg.MixedInbound.Enabled { // SR ProxyServerType/Port + ProxyShareEnabled
-		listen := "127.0.0.1"
+	if cfg.MixedInbound.Enabled && !o.MobileProvider { // SR ProxyServerType/Port + ProxyShareEnabled
+		mixed := map[string]any{"type": "mixed", "tag": "in-mixed", "listen": "127.0.0.1", "listen_port": cfg.MixedInbound.Port}
 		if cfg.MixedInbound.AllowLAN {
-			listen = "0.0.0.0"
+			if config.ValidateAPISecret(cfg.MixedInbound.LANPassword) != nil || cfg.MixedInbound.LANPassword == cfg.API.Secret {
+				return fmt.Errorf("LAN proxy requires a separate random mixed_inbound.lan_password of at least 32 characters")
+			}
+			if cfg.SystemProxy.Enabled {
+				return fmt.Errorf("disable automatic system proxy before enabling authenticated LAN sharing")
+			}
+			mixed["listen"] = "0.0.0.0"
+			mixed["users"] = []map[string]string{{"username": "sakamoto", "password": cfg.MixedInbound.LANPassword}}
 		}
-		inbounds = append(inbounds, map[string]any{
-			"type": "mixed", "tag": "in-mixed",
-			"listen": listen, "listen_port": cfg.MixedInbound.Port,
-		})
+		inbounds = append(inbounds, mixed)
 	}
 
-	if cfg.DNSGuard.Enabled {
+	if cfg.DNSGuard.Enabled && !o.MobileProvider {
 		inbounds = append(inbounds, map[string]any{"type": "direct", "tag": "protected-dns", "listen": "127.0.0.1", "listen_port": 53})
 		routeRules = append([]map[string]any{{"inbound": []string{"protected-dns"}, "action": "hijack-dns"}}, routeRules...)
 	}
 
 	finalTag := "direct"
+	switch strings.ToUpper(strings.TrimSpace(p.final)) {
+	case "", "DIRECT":
+	case "PROXY":
+		finalTag = exitTag
+	default:
+		return fmt.Errorf("unsupported FINAL action; choose DIRECT or PROXY before importing")
+	}
+	if o.SourceFinal != nil {
+		*o.SourceFinal = "DIRECT"
+		if strings.EqualFold(strings.TrimSpace(p.final), "PROXY") {
+			*o.SourceFinal = "PROXY"
+		}
+	}
 	if cfg.Experiment.Mode == "on" {
 		finalTag = exitTag
 	}
@@ -272,7 +304,8 @@ func Run(o Options) error {
 		return fmt.Errorf("api.url must use a valid TCP port")
 	}
 	config := map[string]any{
-		"log": map[string]any{"level": cfg.LogLevel, "timestamp": true},
+		"log":          map[string]any{"level": cfg.LogLevel, "timestamp": true},
+		"experimental": map[string]any{"cache_file": map[string]any{"enabled": true, "path": "sakamoto-mode.db"}},
 		"dns": map[string]any{
 			"servers": dns.servers,
 			"rules":   dns.rules,
@@ -311,9 +344,11 @@ func Run(o Options) error {
 			return err
 		}
 	}
-	b, err = regionaldns.Apply(b, cfg.RegionalDNS, cfg.DNSGuard.LocalDomains)
-	if err != nil {
-		return err
+	if !o.MobileProvider {
+		b, err = regionaldns.Apply(b, cfg.RegionalDNS, cfg.DNSGuard.LocalDomains)
+		if err != nil {
+			return err
+		}
 	}
 	cfgPath := filepath.Join(out, "config.json")
 	if err := os.WriteFile(cfgPath, b, 0o600); err != nil {

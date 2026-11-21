@@ -20,6 +20,16 @@ struct TailscaleView: View {
     let tunnel: TunnelControlling
     let commanding: LibboxCoreCommanding?
 
+    var body: some View {
+        TailscaleProfileView(store: store, tunnel: tunnel, commanding: commanding)
+            .id(store.selectedProfileID)
+    }
+}
+
+private struct TailscaleProfileView: View {
+    @ObservedObject var store: ConfigStore
+    let tunnel: TunnelControlling
+
     @StateObject private var controller: TailscaleController
     @State private var authKeyDraft = ""
     @State private var keyStoredTick = 0
@@ -29,7 +39,6 @@ struct TailscaleView: View {
     @State private var acceptRoutesDraft = false
     @State private var allowLANDraft = false
     @State private var provisionNotice: Notice?
-    @State private var draftsLoaded = false
     @State private var pendingLogout: TailscaleEndpointSummary?
     @State private var pendingClearExit: TailscaleEndpointSummary?
     @State private var confirmDisable = false
@@ -46,7 +55,6 @@ struct TailscaleView: View {
     init(store: ConfigStore, tunnel: TunnelControlling, commanding: LibboxCoreCommanding?) {
         self.store = store
         self.tunnel = tunnel
-        self.commanding = commanding
         _controller = StateObject(wrappedValue: TailscaleController(commanding: commanding))
     }
 
@@ -65,7 +73,6 @@ struct TailscaleView: View {
             loadDrafts()
         }
         .onDisappear { controller.cancel() }
-        .onChange(of: store.selectedProfileID) { _ in draftsLoaded = false; provisionNotice = nil; loadDrafts() }
         .confirmationDialog("Log out of tailnet?", isPresented: Binding(
             get: { pendingLogout != nil }, set: { if !$0 { pendingLogout = nil } }
         ), titleVisibility: .visible) {
@@ -90,7 +97,11 @@ struct TailscaleView: View {
         } message: { Text("The saved config will no longer include Tailscale. Apply & Reconnect is required; the stored key is not deleted.") }
         .confirmationDialog("Delete stored auth key?", isPresented: $confirmDeleteKey, titleVisibility: .visible) {
             Button("Delete key", role: .destructive) {
-                do { try TailscaleKeychainStore().deleteAuthKey(); keyStoredTick = 0 }
+                do {
+                    try store.keyStore.deleteAuthKey()
+                    keyStoredTick = 0
+                    provisionNotice = Notice(kind: .info, text: "Stored auth key deleted")
+                }
                 catch { provisionNotice = Notice(kind: .error, text: "Keychain deletion failed") }
             }
             Button("Cancel", role: .cancel) {}
@@ -111,8 +122,10 @@ struct TailscaleView: View {
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Store") {
                             do {
-                                try TailscaleKeychainStore().storeAuthKey(authKeyDraft)
-                                keyStoredTick += 1; showAuthKey = false
+                                try store.keyStore.storeAuthKey(authKeyDraft)
+                                provisionNotice = nil
+                                keyStoredTick += 1
+                                showAuthKey = false
                             } catch { provisionNotice = Notice(kind: .error, text: "Keychain save failed") }
                         }.disabled(authKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
@@ -176,19 +189,18 @@ struct TailscaleView: View {
     }
 
     private func loadDrafts() {
-        guard !draftsLoaded else { return }
-        draftsLoaded = true
-        if let options = TailscaleEndpointProvisioning.describe(in: store.content) {
-            hostnameDraft = options.hostname ?? ""
-            exitNodeDraft = options.exitNode ?? ""
-            acceptRoutesDraft = options.acceptRoutes
-            allowLANDraft = options.exitNodeAllowLANAccess
-        }
+        let options = TailscaleEndpointProvisioning.describe(in: store.content) ?? TailscaleEndpointOptions()
+        hostnameDraft = options.hostname ?? ""
+        exitNodeDraft = options.exitNode ?? ""
+        acceptRoutesDraft = options.acceptRoutes
+        allowLANDraft = options.exitNodeAllowLANAccess
     }
 
     private func setEnabled(_ enabled: Bool) {
         do {
-            try store.setTailscaleEnabled(enabled, options: currentOptions())
+            let options = TailscaleEndpointProvisioning.describe(in: store.content) ?? TailscaleEndpointOptions()
+            try store.setTailscaleEnabled(enabled, options: options)
+            loadDrafts()
             provisionNotice = Notice(
                 kind: .info,
                 text: enabled
@@ -398,7 +410,7 @@ struct TailscaleView: View {
         } header: {
             Text("Auth key (optional)")
         } footer: {
-            Text("Without a key the endpoint uses the auth-URL login flow above. A stored key without an enabled endpoint is a blocking error at connect — enable the endpoint first.")
+            Text("Without a key the endpoint uses the auth-URL login flow above. The tunnel reads the saved key when the selected configuration includes a Tailscale endpoint.")
         }
     }
 }

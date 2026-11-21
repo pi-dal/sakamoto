@@ -34,21 +34,31 @@ struct SakamotoApp: App {
     init() {
         try? AppServiceSetup.apply()
         SakamotoShortcuts.updateAppShortcutParameters()
-        let tunnel = NETunnelController(
-            providerBundleIdentifier: Bundle.main.object(
-                forInfoDictionaryKey: "SakamotoProviderBundleIdentifier"
-            ) as? String ?? "com.pidal.sakamoto.PacketTunnel"
-        )
         let commanding = LibboxCoreCommanding()
         let store: ConfigStore
+        var fixtureS3: S3SyncModel?
+        var settingsTunnel: TunnelControlling?
         #if DEBUG && targetEnvironment(simulator)
-        if ProcessInfo.processInfo.arguments.contains("--editor-ui-test") {
+        if let raw = ProcessInfo.processInfo.environment["SAKAMOTO_TAILNET_PROFILE_SUITE"], let id = UUID(uuidString: raw) {
+            store = try! EditorUITestFixture.tailnetProfiles(id: id, cold: ProcessInfo.processInfo.arguments.contains("--tailnet-profile-cold"))
+            settingsTunnel = EditorUITestFixture.TailnetApplyReceiver()
+            _selectedTab = State(initialValue: 3)
+        } else if let raw = ProcessInfo.processInfo.environment["SAKAMOTO_CREDENTIAL_UI_SUITE"], let id = UUID(uuidString: raw) {
+            let fixture = try! EditorUITestFixture.credentialStores(id: id, cold: ProcessInfo.processInfo.arguments.contains("--credential-ui-cold"))
+            store = fixture.0
+            fixtureS3 = fixture.1
+            _selectedTab = State(initialValue: 3)
+        } else if ProcessInfo.processInfo.arguments.contains("--editor-ui-test") {
             store = EditorUITestFixture.makeStore()
             _selectedTab = State(initialValue: 1)
         } else { store = ConfigStore(keyStore: TailscaleKeychainStore()) }
         #else
         store = ConfigStore(keyStore: TailscaleKeychainStore())
         #endif
+        let tunnel = NETunnelController(
+            providerBundleIdentifier: Bundle.main.object(forInfoDictionaryKey: "SakamotoProviderBundleIdentifier") as? String ?? "com.pidal.sakamoto.PacketTunnel",
+            isCurrent: { [weak store] options in store?.matchesConnectionOptions(options) == true }
+        )
         SystemSurfaceConfiguration.store = store
         self.tunnel = tunnel
         self.commanding = commanding
@@ -64,11 +74,11 @@ struct SakamotoApp: App {
         ))
         _settingsModel = StateObject(wrappedValue: SettingsModel(
             store: store,
-            tunnel: tunnel,
+            tunnel: settingsTunnel ?? tunnel,
             commanding: commanding
         ))
         _iCloudSyncModel = StateObject(wrappedValue: ICloudSyncModel(store: store))
-        _s3SyncModel = StateObject(wrappedValue: S3SyncModel(store: store))
+        _s3SyncModel = StateObject(wrappedValue: fixtureS3 ?? S3SyncModel(store: store))
     }
 
     var body: some Scene {

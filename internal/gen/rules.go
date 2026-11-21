@@ -30,9 +30,14 @@ func applyPolicyRules(p *parsedConf, cfg *config.Config) error {
 		if err != nil {
 			return fmt.Errorf("policy[%d]: %w", i, err)
 		}
-		bkAdd(p.bk, action, kind, match)
+		p.addOverride(action, kind, match)
 	}
 	return nil
+}
+
+func (p *parsedConf) addOverride(action, kind, value string) {
+	bkAdd(p.bk, action, kind, value)
+	p.overrides = append(p.overrides, mobileconf.OrderedRule{Target: action, Kind: kind, Value: value})
 }
 
 // normalizePolicyMatch delegates to the shared implementation in
@@ -48,35 +53,38 @@ func buildRules(p *parsedConf, rulesDir string, hc *http.Client, ts tailscaleInf
 	for _, it := range splitCSV(p.general["skip-proxy"]) {
 		switch {
 		case strings.HasPrefix(it, "*."):
-			bkAdd(p.bk, "direct", "domain_suffix", it[2:])
+			p.addOverride("direct", "domain_suffix", it[2:])
 		case strings.Contains(it, "/"):
-			bkAdd(p.bk, "direct", "ip_cidr", it)
+			p.addOverride("direct", "ip_cidr", it)
 		case net.ParseIP(it) != nil:
-			bkAdd(p.bk, "direct", "ip_cidr", it+"/32")
+			bits := 128
+			if net.ParseIP(it).To4() != nil {
+				bits = 32
+			}
+			p.addOverride("direct", "ip_cidr", fmt.Sprintf("%s/%d", it, bits))
 		default:
-			bkAdd(p.bk, "direct", "domain", it) // Includes localhost and captive.apple.com.
+			p.addOverride("direct", "domain", it) // Includes localhost and captive.apple.com.
 		}
 	}
 
-	for _, item := range splitCSV(p.general["always-real-ip"]) {
-		if strings.HasPrefix(item, "*.") {
-			bkAdd(p.bk, "direct", "domain_suffix", item[2:])
-		} else {
-			bkAdd(p.bk, "direct", "domain", item)
-		}
-	}
+	// always-real-ip controls real versus synthetic DNS answers. We already
+	// return real addresses; it confers no permission to connect directly.
 	if ts.Present {
 		reportf("  + Tailscale detected: MagicDNS=%s\n", ts.MagicDNSSuffix)
 		for _, cidr := range []string{"100.64.0.0/10", "fd7a:115c:a1e0::/48"} {
-			bkAdd(p.bk, "direct", "ip_cidr", cidr)
+			p.addOverride("direct", "ip_cidr", cidr)
 		}
 	}
 
+	p.prefix = orderedPrefix(p)
 	// 1) Compile reject/proxy/direct buckets to SRS without spawning sing-box.
 	var srsEntries []map[string]any
 	for _, b := range []string{"reject", "proxy", "direct"} {
 		m := p.bk[b]
 		if len(m) == 0 {
+			if b != "direct" {
+				srsEntries = append(srsEntries, map[string]any{"type": "inline", "tag": "rs-" + b, "rules": []any{map[string]any{"domain_regex": []string{"a^"}}}})
+			}
 			continue
 		}
 		hr := option.DefaultHeadlessRule{}
@@ -119,17 +127,41 @@ func buildRules(p *parsedConf, rulesDir string, hc *http.Client, ts tailscaleInf
 			"type": "local", "tag": "rs-" + b, "format": "binary", "path": portableRulePath(rulesDir, srsPath)})
 		reportf("  rs-%s: %d entries\n", b, len(m["domain"])+len(m["domain_suffix"])+len(m["domain_keyword"])+len(m["ip_cidr"]))
 
-		// Also compile a domain-only set for DNS request-time matching.
-		if len(m["ip_cidr"]) > 0 {
+		// DNS request matching must not send an earlier proxy domain to the
+		// local resolver just because it also appears in the direct tail.
+		excluded := option.DefaultHeadlessRule{Invert: true}
+		if b == "direct" {
+			for _, r := range p.prefix {
+				if r.Target != "proxy" {
+					continue
+				}
+				switch r.Kind {
+				case "domain":
+					excluded.Domain = append(excluded.Domain, r.Value)
+				case "domain_suffix":
+					excluded.DomainSuffix = append(excluded.DomainSuffix, r.Value)
+				case "domain_keyword":
+					excluded.DomainKeyword = append(excluded.DomainKeyword, r.Value)
+				}
+			}
+		}
+		if len(m["ip_cidr"]) > 0 || excluded.IsValid() {
 			hrDom := option.DefaultHeadlessRule{
 				Domain: hr.Domain, DomainSuffix: hr.DomainSuffix, DomainKeyword: hr.DomainKeyword}
+			domainRule := option.HeadlessRule{Type: "default", DefaultOptions: hrDom}
+			if excluded.IsValid() && hrDom.IsValid() {
+				domainRule = option.HeadlessRule{Type: "logical", LogicalOptions: option.LogicalHeadlessRule{Mode: "and", Rules: []option.HeadlessRule{domainRule, {Type: "default", DefaultOptions: excluded}}}}
+			}
 			p2 := filepath.Join(rulesDir, b+"-domains.srs")
 			f2, err := os.Create(p2)
 			if err != nil {
 				return nil, err
 			}
+			if b == "direct" {
+				p.directDomainSet = "rs-direct-domains"
+			}
 			writeErr := srs.Write(f2, option.PlainRuleSet{
-				Rules: []option.HeadlessRule{{Type: "default", DefaultOptions: hrDom}},
+				Rules: []option.HeadlessRule{domainRule},
 			}, C.RuleSetVersion3)
 			closeErr := f2.Close()
 			if writeErr != nil {
@@ -144,8 +176,19 @@ func buildRules(p *parsedConf, rulesDir string, hc *http.Client, ts tailscaleInf
 	}
 
 	// 2) Cache GeoIP data as local .srs files.
+	seenCountry := map[string]string{}
 	for _, gp := range p.geoip {
 		cc, tgt := gp[0], gp[1]
+		if len(cc) != 2 || strings.Trim(cc, "ABCDEFGHIJKLMNOPQRSTUVWXYZ") != "" {
+			return nil, fmt.Errorf("invalid GEOIP country code")
+		}
+		if previous, seen := seenCountry[cc]; seen {
+			if previous != tgt {
+				return nil, fmt.Errorf("conflicting GEOIP policies for %s", cc)
+			}
+			continue
+		}
+		seenCountry[cc] = tgt
 		srsPath := filepath.Join(rulesDir, "geoip-"+strings.ToLower(cc)+".srs")
 		if _, err := os.Stat(srsPath); os.IsNotExist(err) {
 			address := fmt.Sprintf("https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geoip/%s.srs", strings.ToLower(cc))
@@ -178,7 +221,6 @@ func buildRules(p *parsedConf, rulesDir string, hc *http.Client, ts tailscaleInf
 		srsEntries = append(srsEntries, map[string]any{
 			"type": "local", "tag": "geoip-" + strings.ToLower(cc),
 			"format": "binary", "path": portableRulePath(rulesDir, srsPath)})
-		_ = tgt
 	}
 
 	return srsEntries, nil

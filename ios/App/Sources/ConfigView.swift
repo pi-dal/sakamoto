@@ -33,12 +33,26 @@ final class ConfigModel: ObservableObject {
 
     // Import config
     @Published var importURLText: String = ""
-    @Published var importing = false
-    @Published var importError: String?
-    @Published var importReport: ImportSummary?
+    private var urlFormProfileID: String?
+    @Published private(set) var importing = false
+    private var importSession: URLSession?
+    private var downloadTask: URLSessionDataTask?
+    private let importConfiguration: URLSessionConfiguration
+    @Published private var importFailure: (profileID: String?, message: String)?
+    var importError: String? {
+        get {
+            guard let importFailure, importFailure.profileID == store.selectedProfileID else { return nil }
+            return importFailure.message
+        }
+        set { importFailure = newValue.map { (store.selectedProfileID, $0) } }
+    }
     @Published var showFileImporter = false
     @Published var importNodesFile = false
-    @Published var nodeImportNotice: String?
+    @Published private var nodeImportResult: (profileID: String?, message: String)?
+    var nodeImportNotice: String? {
+        guard let result = nodeImportResult, result.profileID == store.selectedProfileID else { return nil }
+        return result.message
+    }
     /// Structural-check failure from the advanced editor (never contains
     /// config content — bridge messages are generic).
     @Published var editorError: String?
@@ -58,6 +72,7 @@ final class ConfigModel: ObservableObject {
     @Published var newNodeLink = ""
     @Published var nodeFormError: String?
     @Published var showAddSubscription = false
+    private var subscriptionProfileID: String?
     @Published var newSubscriptionName = ""
     @Published var newSubscriptionURL = ""
     @Published var newSubscriptionFormat = "auto"
@@ -89,7 +104,8 @@ final class ConfigModel: ObservableObject {
     private let tunnel: TunnelControlling
     private var storeUpdates: AnyCancellable?
 
-    init(tunnel: TunnelControlling, store: ConfigStore) {
+    init(tunnel: TunnelControlling, store: ConfigStore, importConfiguration: URLSessionConfiguration = .ephemeral) {
+        self.importConfiguration = importConfiguration
         self.tunnel = tunnel
         self.store = store
         self.draft = store.content
@@ -98,16 +114,9 @@ final class ConfigModel: ObservableObject {
 
     /// Any saved change marks the config `modified` (NeedsRegenerate).
     func saveDraft() {
-        // Structural check before saving an advanced edit. Apply additionally
-        // performs Libbox semantic validation before reloading the provider.
-        var bridgeError: NSError?
-        _ = MobilecoreValidateConfigJSON(draft, &bridgeError)
-        if let bridgeError {
-            editorError = "not saved: \(bridgeError.localizedDescription)"
-            return
-        }
         editorError = nil
-        store.save(draft)
+        do { try store.save(draft) }
+        catch { editorError = TunnelDiagnostics.sanitized(error.localizedDescription); return }
         // Keep the editor text and the saved config identical after save.
         draft = store.content
     }
@@ -119,46 +128,82 @@ final class ConfigModel: ObservableObject {
 
     // MARK: Import config
 
-    func importFromURL() async {
+    func beginURLImport(_ text: String = "") {
+        cancelURLImport()
+        urlFormProfileID = store.selectedProfileID
+        importURLText = text
+        importError = nil
+    }
+
+    func cancelURLImport() {
+        urlFormProfileID = nil
+        importURLText = ""
+        downloadTask?.cancel()
+        downloadTask = nil
+        importSession = nil
+        importing = false
+    }
+
+    func importFromURL() async -> Bool {
         let source = importURLText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !importing else { return }
+        guard !importing, !source.isEmpty, urlFormProfileID == store.selectedProfileID else { return false }
         var bridgeError: NSError?
         _ = MobilecoreValidateSourceURL(source, &bridgeError)
         if let bridgeError {
             importError = bridgeError.localizedDescription
-            return
+            return false
         }
+        let profile = store.selectedProfile
+        let policy = RegionalSourceRedirectPolicy(domains: profile?.regionalDNS?["domains"] ?? "")
+        let session = URLSession(configuration: importConfiguration, delegate: policy, delegateQueue: nil)
+        importSession = session
         importing = true
-        defer { importing = false }
+        defer {
+            session.finishTasksAndInvalidate()
+            if importSession === session { importSession = nil; downloadTask = nil; importing = false }
+        }
         do {
-            guard let url = URL(string: source) else {
+            guard let url = URL(string: source), url.scheme?.lowercased() == "https" else {
                 importError = "the source is not a valid URL"
-                return
+                return false
             }
             var request = URLRequest(url: url)
             request.timeoutInterval = 30
-            let (data, response) = try await URLSession.shared.data(for: request)
+            guard policy.permits(url) else { throw ImportError(reason: "Source overlaps a protected DNS name") }
+            let (data, response): (Data, URLResponse) = try await withCheckedThrowingContinuation { continuation in
+                let task = session.dataTask(with: request) { data, response, error in
+                    if let data, let response, error == nil { continuation.resume(returning: (data, response)) }
+                    else { continuation.resume(throwing: error ?? URLError(.badServerResponse)) }
+                }
+                downloadTask = task
+                task.resume()
+            }
+            guard !Task.isCancelled, importSession === session else { return false }
+            guard store.selectedProfile == profile else { throw ImportError(reason: "Configuration changed during download. Reopen the import form.") }
             if let http = response as? HTTPURLResponse, http.statusCode != 200 {
                 importError = Self.failureMessage("HTTP \(http.statusCode)", source: source)
-                return
+                return false
             }
             guard data.count <= Self.maxImportBytes else {
                 importError = Self.failureMessage("content exceeds the 16 MiB limit", source: source)
-                return
+                return false
             }
-            let summary = try importContent(
+            try importContent(
                 String(decoding: data, as: UTF8.self),
                 displaySource: source
             )
             importError = nil
-            importReport = summary
             importURLText = ""
+            return true
         } catch {
+            guard !Task.isCancelled, importSession === session, store.selectedProfile == profile else { return false }
             importError = Self.failureMessage(Self.reason(of: error), source: source)
+            return false
         }
     }
 
     func importFromFile(at url: URL) {
+        let isNodeFile = importNodesFile || url.lastPathComponent.lowercased() == "nodes.txt"
         do {
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
@@ -170,16 +215,21 @@ final class ConfigModel: ObservableObject {
             if let coordinationError { throw coordinationError }
             guard let readResult else { throw ImportError(reason: "the content could not be read") }
             let data = try readResult.get()
-            if url.pathExtension.lowercased() == "sakamoto" {
-                try store.installProfile(TunnelProfile.decodePackage(data))
-                draft = store.content
+            if isNodeFile {
+                let nodes = try NodeFileImport.parse(data, validate: Self.validateNode)
+                let previous = store.nodesSources
+                let merged = NodeFileImport.merging(nodes, into: previous)
+                let added = merged.nodes.count - previous.nodes.count
+                try store.commitNodesSources(merged)
+                let message = added == 0 ? "All node links are already present. Added 0 nodes."
+                    : "Imported \(added) node \(added == 1 ? "link" : "links"). Existing nodes and sources were kept."
+                nodeImportResult = (store.selectedProfileID, message)
                 importError = nil
                 return
             }
-            if importNodesFile || url.lastPathComponent.lowercased() == "nodes.txt" {
-                let nodes = try NodeFileImport.parse(data, validate: Self.validateNode)
-                store.commitNodesSources(NodeFileImport.merging(nodes, into: store.nodesSources))
-                nodeImportNotice = "Imported \(nodes.count) node links. Existing nodes and sources were kept."
+            if url.pathExtension.lowercased() == "sakamoto" {
+                try store.installProfile(TunnelProfile.decodePackage(data), fromDesktopPackage: true)
+                draft = store.content
                 importError = nil
                 return
             }
@@ -197,11 +247,16 @@ final class ConfigModel: ObservableObject {
                 importError = nil
                 return
             }
-            let summary = try importContent(content, displaySource: url.lastPathComponent)
+            try importContent(content, displaySource: url.lastPathComponent)
             importError = nil
-            importReport = summary
         } catch {
-            importError = Self.failureMessage(Self.reason(of: error), source: url.lastPathComponent)
+            if isNodeFile {
+                let message = (error as? NodeFileImport.Failure)?.message ?? "Node file import failed. No nodes were imported."
+                nodeImportResult = (store.selectedProfileID, message)
+                importError = message
+            } else {
+                importError = Self.failureMessage(Self.reason(of: error), source: url.lastPathComponent)
+            }
         }
     }
 
@@ -216,23 +271,25 @@ final class ConfigModel: ObservableObject {
     /// Parse → report → commit. Throwing keeps the last-known-good import
     /// untouched on any parse failure (docs/import.md: invalid imports do
     /// not replace the last working config).
-    func importContent(_ content: String, displaySource: String) throws -> ImportSummary {
+    func importContent(_ content: String, displaySource: String) throws {
+        _ = try Self.parseImportSummary(content)
+        try store.commitImport(ImportedSource(
+            displaySource: SecretMasking.maskSource(displaySource),
+            content: content
+        ))
+    }
+
+    static func parseImportSummary(_ content: String) throws -> ImportSummary {
         var bridgeError: NSError?
         let reportJSON = MobilecoreParseConfContentJSON(content, &bridgeError)
         if let bridgeError {
             throw ImportError(reason: bridgeError.localizedDescription)
         }
-        let summary: ImportSummary
         do {
-            summary = try JSONDecoder().decode(ImportSummary.self, from: Data(reportJSON.utf8))
+            return try JSONDecoder().decode(ImportSummary.self, from: Data(reportJSON.utf8))
         } catch {
             throw ImportError(reason: "the bridge report could not be decoded")
         }
-        store.commitImport(ImportedSource(
-            displaySource: SecretMasking.maskSource(displaySource),
-            content: content
-        ))
-        return summary
     }
 
     /// Error text that can never leak the full source URL (query strings may
@@ -309,8 +366,8 @@ final class ConfigModel: ObservableObject {
             }
             let rule = StagedPolicyRule(id: editingPolicyRule?.id ?? UUID().uuidString, match: checked.match, action: checked.action)
             if let original = editingPolicyRule {
-                store.commitPolicy(store.policy.updating(id: original.id, to: rule))
-            } else { store.commitPolicy(store.policy.adding(rule)) }
+                try store.commitPolicy(store.policy.updating(id: original.id, to: rule))
+            } else { try store.commitPolicy(store.policy.adding(rule)) }
             newPolicyMatch = ""; newPolicyAction = "proxy"; newPolicyType = .automatic
             editingPolicyRule = nil; policyFormBook = nil
             showAddPolicy = false
@@ -318,7 +375,8 @@ final class ConfigModel: ObservableObject {
     }
 
     func removePolicyRule(_ rule: StagedPolicyRule) {
-        store.commitPolicy(store.policy.removing(id: rule.id))
+        do { try store.commitPolicy(store.policy.removing(id: rule.id)) }
+        catch { store.reportProfileError(error) }
     }
 
     // MARK: Nodes & sources
@@ -339,9 +397,9 @@ final class ConfigModel: ObservableObject {
             nodeFormError = "this share link is already staged"
             return
         }
-        store.commitNodesSources(store.nodesSources.adding(node: StagedNode(
+        do { try store.commitNodesSources(store.nodesSources.adding(node: StagedNode(
             rawLink: raw, tag: info.tag, type: info.type, server: info.server
-        )))
+        ))) } catch { nodeFormError = error.localizedDescription; return }
         newNodeLink = ""
         showAddNode = false
     }
@@ -358,9 +416,8 @@ final class ConfigModel: ObservableObject {
                 throw ImportError(reason: "Saved groups use this node name. Choose another member in Proxy groups before renaming it.")
             }
             node.id = original.id; node.addedAt = original.addedAt
-            if node.rawLink != original.rawLink { store.clearNodeOverride(original.tag) }
-            store.commitNodesSources(store.nodesSources.updating(node: node))
-        } else { store.commitNodesSources(store.nodesSources.adding(node: node)) }
+            try store.commitNodesSources(store.nodesSources.updating(node: node), clearingOverride: node.rawLink != original.rawLink ? original.tag : nil)
+        } else { try store.commitNodesSources(store.nodesSources.adding(node: node)) }
     }
 
     func saveSourceSubscription(name: String, url: String, format: String, original: StagedSubscription?, profileID: String?) throws {
@@ -373,7 +430,7 @@ final class ConfigModel: ObservableObject {
         if let error { throw error }
         guard !store.nodesSources.subscriptions.contains(where: { $0.name == name && $0.id != original?.id }) else { throw ImportError(reason: "A source with this name already exists.") }
         let source = StagedSubscription(id: original?.id ?? UUID().uuidString, name: name, url: url, format: format)
-        store.commitNodesSources(original == nil ? store.nodesSources.adding(subscription: source) : store.nodesSources.updating(subscription: source))
+        try store.commitNodesSources(original == nil ? store.nodesSources.adding(subscription: source) : store.nodesSources.updating(subscription: source))
     }
 
     func removeNode(_ node: StagedNode) throws {
@@ -381,7 +438,23 @@ final class ConfigModel: ObservableObject {
         revealedNodeIDs.remove(node.id)
     }
 
+    func beginSubscription(_ url: String = "") {
+        clearSubscriptionDraft()
+        subscriptionProfileID = store.selectedProfileID
+        newSubscriptionURL = url
+        showAddSubscription = true
+    }
+
+    func clearSubscriptionDraft() {
+        subscriptionProfileID = nil
+        newSubscriptionName = ""
+        newSubscriptionURL = ""
+        newSubscriptionFormat = "auto"
+        subscriptionFormError = nil
+    }
+
     func addSubscription() {
+        guard subscriptionProfileID == store.selectedProfileID, !store.applying, !store.generating else { return }
         subscriptionFormError = nil
         let name = newSubscriptionName.trimmingCharacters(in: .whitespacesAndNewlines)
         let url = newSubscriptionURL.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -404,18 +477,17 @@ final class ConfigModel: ObservableObject {
             subscriptionFormError = "unknown format"
             return
         }
-        store.commitNodesSources(store.nodesSources.adding(
+        do { try store.commitNodesSources(store.nodesSources.adding(
             subscription: StagedSubscription(name: name, url: url, format: newSubscriptionFormat)
-        ))
-        newSubscriptionName = ""
-        newSubscriptionURL = ""
-        newSubscriptionFormat = "auto"
+        )) } catch { subscriptionFormError = error.localizedDescription; return }
+        clearSubscriptionDraft()
         showAddSubscription = false
     }
 
     func removeSubscription(_ subscription: StagedSubscription) {
         guard store.nodesSources.subscriptions.contains(subscription), !store.applying, !store.generating else { return }
-        store.commitNodesSources(store.nodesSources.removingSubscription(id: subscription.id))
+        do { try store.commitNodesSources(store.nodesSources.removingSubscription(id: subscription.id)) }
+        catch { store.reportProfileError(error); return }
         revealedSubscriptionIDs.remove(subscription.id)
     }
 }
@@ -477,7 +549,23 @@ struct ConfigView: View {
     var body: some View {
         List {
             Section {
-                if model.store.profiles.count > 1 {
+                if model.store.indexNeedsRecovery && !model.store.needsRecoveryChoice {
+                    Text(model.store.recoveryNotice ?? "The saved configuration list could not be read.")
+                    if model.store.offersRecoveryImport {
+                        Button("Import desktop package…") {
+                            model.importNodesFile = false
+                            model.showFileImporter = true
+                        }
+                    }
+                    Button("Recover configuration list") {
+                        do {
+                            try model.store.recoverProfileIndex()
+                            model.draft = model.store.content
+                            model.importError = nil
+                        } catch { model.importError = error.localizedDescription }
+                    }
+                } else if model.store.needsRecoveryChoice || model.store.profiles.count > 1 {
+                    if let notice = model.store.recoveryNotice { Text(notice).font(.footnote) }
                     Picker("Configuration", selection: Binding(
                         get: { model.store.selectedProfileID ?? "" },
                         set: { id in
@@ -485,6 +573,7 @@ struct ConfigView: View {
                             catch { model.importError = error.localizedDescription }
                         }
                     )) {
+                        if model.store.selectedProfileID == nil { Text("Choose configuration").tag("") }
                         ForEach(model.store.profiles) { profile in Text(profile.name).tag(profile.id) }
                     }
                     .pickerStyle(.menu)
@@ -619,15 +708,13 @@ struct ConfigView: View {
         }
         .confirmationDialog("Import link as", isPresented: $showURLKind, titleVisibility: .visible) {
             Button("Configuration") {
-                model.importURLText = pendingImport?.text ?? ""
+                model.beginURLImport(pendingImport?.text ?? "")
                 pendingImport = nil
                 showURLImport = true
             }
             Button("Subscription") {
-                model.newSubscriptionURL = pendingImport?.text ?? ""
-                model.newSubscriptionName = ""
+                model.beginSubscription(pendingImport?.text ?? "")
                 pendingImport = nil
-                model.showAddSubscription = true
             }
             Button("Cancel", role: .cancel) { pendingImport = nil }
         }
@@ -646,7 +733,7 @@ struct ConfigView: View {
                 model.importFromFile(at: url)
             }
         }
-        .sheet(isPresented: $showURLImport) {
+        .sheet(isPresented: $showURLImport, onDismiss: model.cancelURLImport) {
             NavigationStack {
                 Form {
                     TextField("Shadowrocket .conf URL", text: $model.importURLText)
@@ -655,10 +742,10 @@ struct ConfigView: View {
                 }
                 .navigationTitle("Import from URL")
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { showURLImport = false } }
+                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { model.cancelURLImport(); showURLImport = false } }
                     ToolbarItem(placement: .confirmationAction) {
                         Button(model.importing ? "Importing…" : "Import") {
-                            Task { await model.importFromURL(); if model.importError == nil { showURLImport = false } }
+                            Task { if await model.importFromURL() { showURLImport = false } }
                         }.disabled(model.importing || model.importURLText.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
                 }
@@ -682,7 +769,7 @@ struct ConfigView: View {
         }
         .confirmationDialog("Add sources", isPresented: $showImportOptions, titleVisibility: .visible) {
             Button("From Files…") { model.importNodesFile = false; model.showFileImporter = true }
-            Button("From URL…") { showURLImport = true }
+            Button("From URL…") { model.beginURLImport(); showURLImport = true }
             Button("From clipboard…") {
                 pendingImport = nil; payloadError = nil; clipboardDraft = ""; showClipboardImport = true
             }
@@ -691,7 +778,15 @@ struct ConfigView: View {
         }
         .sheet(isPresented: $model.showAddPolicy) { addPolicySheet }
         .sheet(isPresented: $model.showAddNode) { addNodeSheet }
-        .sheet(isPresented: $model.showAddSubscription) { addSubscriptionSheet }
+        .sheet(isPresented: $model.showAddSubscription, onDismiss: model.clearSubscriptionDraft) { addSubscriptionSheet }
+        .onChange(of: model.store.selectedProfileID) { _ in
+            model.importError = nil
+            model.cancelURLImport()
+            model.clearSubscriptionDraft()
+            model.showAddSubscription = false
+            showURLImport = false
+            pendingImport = nil
+        }
         // Second-click confirmations (TUI: deletion requires confirmation).
         .confirmationDialog(
             "Remove policy rule?", isPresented: Binding(
@@ -740,7 +835,7 @@ struct ConfigView: View {
                 try model.store.installProfile(TunnelProfile(name: "Clipboard configuration", config: candidate.text))
                 model.draft = model.store.content
             } else {
-                model.importReport = try model.importContent(candidate.text, displaySource: "Clipboard or QR code")
+                try model.importContent(candidate.text, displaySource: "Clipboard or QR code")
                 model.importError = nil
             }
             payloadError = nil
@@ -783,14 +878,14 @@ struct ConfigView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
+                if let report = try? ConfigModel.parseImportSummary(imported.content) {
+                    importReportRows(report)
+                }
             }
             if let error = model.importError {
                 Text(error)
                     .font(.footnote)
                     .foregroundStyle(.primary)
-            }
-            if let report = model.importReport {
-                importReportRows(report)
             }
             Button("Import configuration…") { showImportOptions = true }.disabled(model.importing)
         } header: {
@@ -936,6 +1031,7 @@ struct ConfigView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Add") { model.addSubscription() }
+                        .disabled(model.newSubscriptionName.isEmpty || model.newSubscriptionURL.isEmpty)
                 }
             }
         }
@@ -956,10 +1052,19 @@ struct ConfigView: View {
                 }
             }
             Section {
+                if let message = model.store.generationUpgradeMessage { Text(message).font(.footnote) }
                 Button("Generate without connecting") {
+                    let profileID = model.store.selectedProfileID
                     Task {
-                        do { try await model.store.generateFromSources(); model.draft = model.store.content; model.importError = nil }
-                        catch { model.importError = TunnelDiagnostics.sanitized(error.localizedDescription) }
+                        do {
+                            try await model.store.generateFromSources()
+                            guard model.store.selectedProfileID == profileID else { return }
+                            model.draft = model.store.content
+                            model.importError = nil
+                        } catch {
+                            guard model.store.selectedProfileID == profileID else { return }
+                            model.importError = TunnelDiagnostics.sanitized(error.localizedDescription)
+                        }
                     }
                 }.disabled(!model.store.canGenerate || model.store.applying)
                 Button("Edit configuration JSON…") { model.draft = model.store.content; showEditor = true }

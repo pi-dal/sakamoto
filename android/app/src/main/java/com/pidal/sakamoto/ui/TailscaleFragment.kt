@@ -59,7 +59,18 @@ class TailscaleFragment : androidx.fragment.app.Fragment() {
         auth = page.row(authentication, getString(R.string.ts_authkey_title), "", R.drawable.ic_info) { promptStoreKey() }
         page.button(authentication, getString(R.string.ts_open_auth_url)) { openAuthURL() }
         page.button(authentication, getString(R.string.ts_authkey_delete)) {
-            MaterialAlertDialogBuilder(requireContext()).setTitle(R.string.ts_authkey_delete_confirm_title).setMessage(R.string.ts_authkey_delete_confirm_message).setNegativeButton(android.R.string.cancel, null).setPositiveButton(R.string.ts_authkey_delete) { _, _ -> TailscaleAuthKeyStore(requireContext()).deleteAuthKey(); refreshAuthKeyState() }.show()
+            val dialog = MaterialAlertDialogBuilder(requireContext()).setTitle(R.string.ts_authkey_delete_confirm_title)
+                .setMessage(R.string.ts_authkey_delete_confirm_message).setNegativeButton(android.R.string.cancel, null)
+                .setPositiveButton(R.string.ts_authkey_delete, null).show()
+            dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                try {
+                    TailscaleAuthKeyStore(requireContext()).deleteAuthKey()
+                    refreshAuthKeyState()
+                    dialog.dismiss()
+                } catch (_: android.system.ErrnoException) {
+                    dialog.setMessage(getString(R.string.ts_authkey_delete_failed))
+                }
+            }
         }
         page.note(getString(R.string.ts_authkey_note))
         val exitGroup = page.section(getString(R.string.ts_section_exit))
@@ -114,7 +125,10 @@ class TailscaleFragment : androidx.fragment.app.Fragment() {
     }
 
     private fun refreshAuthKeyState() {
-        val key = TailscaleAuthKeyStore(requireContext()).readAuthKey()
+        val key = try { TailscaleAuthKeyStore(requireContext()).readAuthKey() } catch (error: java.io.IOException) {
+            auth?.detail(error.localizedMessage.orEmpty())
+            return
+        }
         auth?.detail(if (key == null) getString(R.string.ts_authkey_absent) else getString(R.string.ts_authkey_stored, com.pidal.sakamoto.runtime.TailscaleAuthKeyMasking.mask(key)))
     }
 

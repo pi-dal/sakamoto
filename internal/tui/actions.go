@@ -629,6 +629,11 @@ func (m *model) toggleSetting(i int) tea.Cmd {
 		return nil
 	}
 	r := m.cfgRows[i]
+	if r.label == "Sync sources to S3" && !m.cfg.S3.Enabled && m.pendingDelete != "s3:confirm" {
+		m.pendingDelete = "s3:confirm"
+		m.notice = "Click again to upload node credentials, subscription URLs and rule sources to your configured bucket"
+		return nil
+	}
 	confirmCloud := r.label == "Sync sources to iCloud" && !m.cfg.ICloud.Enabled
 	confirmConf := r.label == "Include conf and rule includes" && m.cfg.ICloud.Enabled && !m.cfg.ICloud.IncludeConf
 	if (confirmCloud || confirmConf) && m.pendingDelete != "icloud:confirm" {

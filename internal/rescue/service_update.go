@@ -70,6 +70,9 @@ func servicePlist(ctx context.Context, p ServiceUpdatePaths, sys System) (map[st
 	if !oldInfo.Mode().IsRegular() || oldInfo.Size() == 0 || oldInfo.Mode().Perm()&0111 == 0 {
 		return nil, errors.New("previous service executable is unsafe")
 	}
+	if core, _ := env["SAKAMOTO_SING_BOX"].(string); !filepath.IsAbs(core) {
+		return nil, errors.New("installed job requires an explicit absolute sing-box path before updating")
+	}
 	return plist, nil
 }
 func CheckServiceUpdate(ctx context.Context, p ServiceUpdatePaths, sys System) error {
@@ -290,6 +293,13 @@ func UpdateService(ctx context.Context, p ServiceUpdatePaths, sys System) (out S
 	if err = copyServiceExecutable(p.Source, current); err != nil {
 		return out, err
 	}
+	env := plist["EnvironmentVariables"].(map[string]any)
+	coreSource, _ := env["SAKAMOTO_SING_BOX"].(string)
+	corePin := filepath.Join(release, "sing-box")
+	if err = copyServiceExecutable(coreSource, corePin); err != nil {
+		return out, err
+	}
+	env["SAKAMOTO_SING_BOX"] = corePin
 	previousPlist := map[string]any{}
 	for k, v := range plist {
 		previousPlist[k] = v

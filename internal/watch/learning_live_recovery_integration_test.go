@@ -37,7 +37,12 @@ func TestRecoveryRemainsResponsiveDuringOriginVerification(t *testing.T) {
 			if tag == "learning-proxy" {
 				outbound = "proxy"
 			}
-			rules = append(rules, map[string]any{"inbound": []string{tag}, "action": "route", "outbound": outbound})
+			allow := map[string]any{"inbound": []string{tag}, "action": "route", "outbound": outbound}
+			rules = append(rules, allow)
+			if tag == "learning-direct" {
+				allow["clash_mode"] = "Rule"
+				rules = append(rules, map[string]any{"inbound": []string{tag}, "action": "reject"})
+			}
 		}
 	}
 	rules = append(rules, map[string]any{"rule_set": []string{"rs-proxy"}, "action": "route", "outbound": "proxy"})

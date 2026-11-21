@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Copy a validated host source snapshot into the debug app's private storage.
 Run with mise -E android exec -- python3 android/scripts/sync-host.py SERIAL.
-Requires the existing PyYAML and sing-box host tools; never writes secrets to stdout.
+Requires PyYAML, the project Go toolchain and sing-box.
 """
 import argparse
 import copy
@@ -10,15 +10,15 @@ import io
 import json
 import os
 from pathlib import Path
-import re
 import secrets
 import subprocess
 import sys
-import tarfile
+import shlex
 import tempfile
 from datetime import datetime, timezone
 import yaml
 import zipfile
+import uuid
 
 parser = argparse.ArgumentParser()
 parser.add_argument('serial', nargs='?', help='Debug device serial for USB transfer')
@@ -32,8 +32,8 @@ serial = args.serial
 pkg = 'com.pidal.sakamoto'
 adb = ['adb', '-s', serial]
 phone = f'/data/user/0/{pkg}/files'
-settings = yaml.safe_load((root / 'sakamoto.yaml').read_text())
-config = json.loads((root / 'config.json').read_text())
+settings_bytes = (root / 'sakamoto.yaml').read_bytes()
+settings = yaml.safe_load(settings_bytes)
 source = Path(settings['conf']).resolve()
 node_file = Path(settings.get('nodes_file') or root / 'nodes.txt').resolve()
 files = {}
@@ -47,53 +47,92 @@ def collect(path):
         return
     files[dest] = path.read_bytes()
     if path.suffix == '.conf':
-        for line in path.read_text().splitlines():
-            match = re.match(r'\s*include\s*=\s*(.*?)\s*$', line, re.I)
-            if match:
-                for name in match.group(1).split(','):
+        section = ''
+        for line in files[dest].decode('utf-8-sig').splitlines():
+            line = line.strip()
+            if line.startswith('[') and line.endswith(']'):
+                section = line[1:-1].lower()
+                continue
+            if section != 'general':
+                continue
+            key, separator, value = line.partition('=')
+            if separator and key.strip() == 'include':
+                for name in value.split(','):
                     name = name.strip()
                     if name and '://' not in name:
+                        if Path(name).is_absolute() or not (path.parent / name).resolve().is_relative_to(root):
+                            raise RuntimeError('Mobile includes must be relative to the source tree')
                         collect(path.parent / name)
 
-for path in sorted(root.glob('*.conf')) + sorted((root / 'sources/current').rglob('*.conf')):
-    collect(path)
 collect(source)
 collect(node_file)
-links = [line.strip() for line in node_file.read_text().splitlines() if line.strip() and not line.lstrip().startswith('#')]
+source_key = 'imports/local/' + str(source.relative_to(root))
+node_key = 'imports/local/' + str(node_file.relative_to(root))
+source_text = files[source_key].decode('utf-8')
+node_text = files[node_key].decode('utf-8')
+links = [line.strip() for line in node_text.splitlines() if line.strip() and not line.lstrip().startswith('#')]
 state_result = subprocess.run(adb + ['exec-out', 'run-as', pkg, 'cat', 'files/sakamoto-config.json'], capture_output=True) if serial else subprocess.CompletedProcess([], 1, b'')
 try:
     previous = json.loads(state_result.stdout) if state_result.returncode == 0 and state_result.stdout.strip() else {}
-except json.JSONDecodeError:
-    previous = {}
+except json.JSONDecodeError as error:
+    raise RuntimeError('Device configuration is unreadable') from error
+if previous.get('sourceNeedsGenerate') or previous.get('sourceConfIsUrl'):
+    raise RuntimeError('Device has pending source edits or an HTTPS source. Reconcile these in Config before USB sync.')
+revision = previous.pop('packageRevision', '')
+if revision and str(uuid.UUID(revision)) != revision:
+    raise RuntimeError('Invalid device package revision')
+previous_root = f'files/package-revisions/{revision}/' if revision else 'files/'
 # Refuse to overwrite device-local edits of runtime policy/exit/defaults.
-prior_snapshot = subprocess.run(adb + ['exec-out', 'run-as', pkg, 'cat', 'files/imports/local/config.json'], capture_output=True) if serial else subprocess.CompletedProcess([], 1, b'')
+prior_snapshot = subprocess.run(adb + ['exec-out', 'run-as', pkg, 'cat', previous_root + 'imports/local/config.json'], capture_output=True) if serial else subprocess.CompletedProcess([], 1, b'')
 if prior_snapshot.returncode == 0 and prior_snapshot.stdout.strip() and previous.get('generatedContent'):
     if json.loads(previous.get('generatedContent') or '{}') != json.loads(prior_snapshot.stdout):
         raise RuntimeError('Device tunnel configuration was edited; reconcile before replacing it with a host snapshot')
 # Preserve device edits: this command never resolves divergent source state.
 for field, expected in [('nodes', links), ('policy', settings.get('policy') or []), ('subscriptions', settings.get('subscriptions') or [])]:
-    if previous.get(field) and previous[field] != expected:
+    if field in previous and previous[field] != expected:
         raise RuntimeError(f'Device {field} differs; reconcile before replacing the host snapshot')
 for name, data in files.items():
     if not previous:
         break
-    existing = subprocess.run(adb + ['exec-out', 'run-as', pkg, 'cat', 'files/' + name], capture_output=True)
+    existing = subprocess.run(adb + ['exec-out', 'run-as', pkg, 'cat', shlex.quote(previous_root + name)], capture_output=True)
     if existing.returncode == 0 and existing.stdout != data:
         raise RuntimeError('Device source differs from host; reconcile before replacing snapshot')
-for rule in config.get('route', {}).get('rule_set', []):
-    if rule.get('path'):
-        path = Path(rule['path'])
-        if not path.is_absolute():
-            path = root / path
-        dest = 'rules/' + path.name
-        data = path.read_bytes()
-        if dest in files and files[dest] != data:
-            raise RuntimeError('Rule set filename collision')
-        files[dest] = data
-        rule['path'] = phone + '/' + dest
-# Host loopback DNS takeover and interface names cannot travel to Android.
-config['inbounds'] = [item for item in config.get('inbounds', []) if item.get('tag') != 'protected-dns']
-config['route']['rules'] = [rule for rule in config['route']['rules'] if 'protected-dns' not in rule.get('inbound', [])]
+# Compile the bytes used in the package before handing anything to a device.
+with tempfile.TemporaryDirectory(prefix='sakamoto-export-') as tmp:
+    work = Path(tmp)
+    for name, data in files.items():
+        target = work / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+    sidecar = work / 'sakamoto.yaml'
+    sidecar.write_bytes(settings_bytes)
+    legacy = work / 'sr.json'
+    if settings.get('allow_hosts'):
+        legacy.write_bytes(Path(settings.get('srjson') or Path.home() / 'Documents/Shadowrocket.json').read_bytes())
+    # Config.Load migrates older sidecars using just the previous final tag.
+    if 'experiment' not in settings and (root / 'config.json').is_file():
+        prior_final = json.loads((root / 'config.json').read_bytes()).get('route', {}).get('final')
+        (work / 'config.json').write_text(json.dumps({'route': {'final': prior_final}}))
+    repo = Path(__file__).resolve().parents[2]
+    result = subprocess.run(['go', 'run', './tools/main.go', '-mobile-export', sidecar, work / source_key,
+                             work / node_key, legacy], cwd=repo, capture_output=True)
+    if result.returncode:
+        raise RuntimeError('Could not generate and validate the selected mobile sources')
+    config = json.loads((work / 'config.json').read_bytes())
+    metadata = json.loads((work / 'mobile-policy.json').read_bytes())
+    host_generation = json.loads((work / 'mobile-generation.json').read_bytes()) if args.export_ios else None
+    group_source = (work / 'groups.json').read_text()
+    guard_file = work / 'mobile-dns-guard.json'
+    dns_guard = json.loads(guard_file.read_bytes()) if guard_file.exists() else None
+    for rule in config['route'].get('rule_set', []):
+        if rule.get('path'):
+            path = (work / rule['path']).resolve()
+            if not path.is_relative_to(work / 'rules'):
+                raise RuntimeError('Generated rule file outside the private build directory')
+            dest = str(path.relative_to(work))
+            files[dest] = path.read_bytes()
+            rule['path'] = phone + '/' + dest
+# Providers choose their own TUN interface name.
 for inbound in config['inbounds']:
     if inbound['type'] == 'tun':
         inbound.pop('interface_name', None)
@@ -105,14 +144,28 @@ for service in config.get('services', []):
         service['listen'] = '127.0.0.1'
 # Keep host-owned policy/chain intent distinct from device runtime state.
 # Never include the host API secret, cloud settings or unrelated YAML fields.
-metadata = {key: settings[key] for key in (
-    'chain_enabled', 'chain_exit', 'socks_exit', 'fallbacks', 'fallback_enabled', 'recover_after',
-    'block_quic', 'block_stun', 'experiment', 'strict_route', 'tun_stack'
-) if key in settings}
 files['imports/local/policy.json'] = json.dumps(settings.get('policy') or [], indent=2).encode()
 files['imports/local/chain.json'] = json.dumps(metadata, indent=2).encode()
-state = dict(previous, sourceNeedsGenerate=False, hostMetadata=json.dumps(metadata, separators=(',', ':')), generatedContent=json.dumps(config, separators=(',', ':')), sourceConfName=source.name,
-             sourceConfPath=str(source.relative_to(root)), sourceConfIsUrl=False, sourceConfContent=source.read_text(),
+regional = settings.get('regional_dns') or {}
+if regional.get('domains'):
+    regional = {k: regional[k] for k in ('domains', 'resolver_ip', 'tls_name', 'relay', 'relay_fingerprint')}
+else:
+    regional = {}
+local_regional = previous.get('regionalDNS') or {}
+origin = previous.get('regionalDNSOrigin', 'legacy') if local_regional else 'package'
+if origin == 'device':
+    if regional and regional != local_regional:
+        raise RuntimeError('Device regional DNS differs from host; reconcile before replacing snapshot')
+    regional = local_regional
+elif origin != 'package' and regional != local_regional:
+    raise RuntimeError('Open Regional DNS and save or clear the existing settings before syncing a different policy')
+if regional and (args.export or serial):
+    # A required root entry makes older Android importers reject the package
+    # before they can replace the incoming regional policy with device defaults.
+    files['regional-dns.json'] = json.dumps(regional).encode()
+# Build a fresh profile. Profile-specific overrides from the installed manifest belong to that revision.
+state = dict(routeSourceVersion=1, modeCacheID=str(uuid.uuid4()), scopedExperiment=True, sourceGroupExclusions=json.loads(group_source), regionalDNS=regional, regionalDNSOrigin=origin, sourceNeedsGenerate=False, hostMetadata=json.dumps(metadata, separators=(',', ':')), generatedContent=json.dumps(config, separators=(',', ':')), sourceConfName=source.name,
+             sourceConfPath=str(source.relative_to(root)), sourceConfIsUrl=False, sourceConfContent=source_text,
              nodes=links, policy=settings.get('policy') or [], subscriptions=settings.get('subscriptions') or [],
              hostSnapshotAt=datetime.now(timezone.utc).isoformat(timespec='seconds'))
 files['sakamoto-config.json'] = json.dumps(state, separators=(',', ':')).encode()
@@ -128,7 +181,9 @@ with tempfile.TemporaryDirectory(prefix='sakamoto-sync-check-') as tmp:
             rule['path'] = str(path)
     path = Path(tmp) / 'config.json'
     path.write_text(json.dumps(local)); path.chmod(0o600)
-    result = subprocess.run(['sing-box', 'check', '-D', tmp, '-c', str(path)], capture_output=True)
+    profile = Path(tmp) / 'regional.json'
+    profile.write_text(json.dumps(regional)); profile.chmod(0o600)
+    result = subprocess.run(['go', 'run', './tools/main.go', '-mobile-check', path, profile], cwd=repo, capture_output=True)
     if result.returncode:
         raise RuntimeError('Adapted config failed sing-box validation; nothing transferred')
 # iOS profiles contain the exact runtime config and every local rule file.
@@ -145,12 +200,19 @@ if args.export_ios:
         if name.startswith('imports/local/') and name.endswith('.conf'):
             source_files[name.removeprefix('imports/local/')] = data.decode('utf-8')
     main_conf = str(source.relative_to(root))
-    source_files['nodes.txt'] = node_file.read_text()
+    source_files['groups.json'] = group_source
+    source_files['nodes.txt'] = node_text
     source_files['policy.json'] = json.dumps(settings.get('policy') or [])
     source_files['subscriptions.json'] = json.dumps(settings.get('subscriptions') or [])
     source_bundle = dict(version=1, main_conf=main_conf, files=source_files)
-    package = dict(format='sakamoto-tunnel-v1', name=source.stem,
-                   sourceBundleJSON=json.dumps(source_bundle, separators=(',', ':')),
+    bundle_json = json.dumps(source_bundle, separators=(',', ':'))
+    validation = subprocess.run(['go', 'run', './tools/main.go', '-ios-sources'], cwd=repo,
+                                input=bundle_json.encode(), capture_output=True)
+    if validation.returncode:
+        raise RuntimeError('Invalid iOS source snapshot; check relative .conf includes and source limits before exporting')
+    package = dict(routeSourceVersion=1, hostGeneration=host_generation, format='sakamoto-tunnel-v3' if host_generation['nodes'] or host_generation['fingerprint'] else 'sakamoto-tunnel-v2' if dns_guard or regional else 'sakamoto-tunnel-v1', name=source.stem,
+                   dnsGuard=dns_guard, regionalDNS=regional or None,
+                   sourceFinal=metadata['sourceFinal'], sourceBundleJSON=bundle_json,
                    hostMetadataJSON=json.dumps(metadata, separators=(',', ':')),
                    config=json.dumps(config, separators=(',', ':')),
                    files={name: base64.b64encode(data).decode() for name, data in files.items() if name.startswith('rules/')},
@@ -171,19 +233,25 @@ if args.export:
                 archive.writestr(name, data)
     print('Validated private tunnel package exported; import it from Android Config')
     sys.exit(0)
-# Keep a private rollback copy and transfer in one archive, never through /sdcard.
-if previous:
-    subprocess.run(adb + ['shell', 'run-as', pkg, 'sh', '-c', '"umask 077; cp files/sakamoto-config.json files/host-sync-backup.json"'], check=True, capture_output=True)
+# Stage one immutable archive privately. Only the app's transactional importer
+# can publish a new manifest, after checking the transfer and the current base.
+transfer = str(uuid.uuid4())
+remote = f'cache/host-sync-{transfer}.zip'
+base = hashlib.sha256(state_result.stdout).hexdigest() if state_result.returncode == 0 else 'absent'
 stream = io.BytesIO()
-with tarfile.open(fileobj=stream, mode='w') as archive:
+with zipfile.ZipFile(stream, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
     for name, data in files.items():
-        item = tarfile.TarInfo(name); item.size = len(data); item.mode = 0o600
-        archive.addfile(item, io.BytesIO(data))
-subprocess.run(adb + ['shell', 'run-as', pkg, 'sh', '-c', '"umask 077; cd files; tar xf -"'], input=stream.getvalue(), check=True, capture_output=True)
-for name, data in files.items():
-    actual = subprocess.check_output(adb + ['exec-out', 'run-as', pkg, 'cat', 'files/' + name])
-    if hashlib.sha256(actual).digest() != hashlib.sha256(data).digest():
-        raise RuntimeError('Transferred file hash differs')
-print(f'PASS: {len(links)} nodes, {sum(name.endswith(".conf") for name in files)} conf files, {sum(name.endswith(".srs") for name in files)} rule sets; every file SHA-256 verified')
-print(f'User policy: {len(state["policy"])} overrides; route policy: {len(config["route"]["rules"])} rules; chain metadata and exit outbound preserved')
-print('Host snapshot updated. Reopen Config to view sources; reload/reconnect to apply runtime changes.')
+        archive.writestr(name, data)
+payload = stream.getvalue()
+checksum = hashlib.sha256(payload).hexdigest()
+try:
+    subprocess.run(adb + ['shell', f"run-as {pkg} sh -c 'umask 077; cat > {remote}'"],
+                   input=payload, check=True, capture_output=True)
+    result = subprocess.run(adb + ['shell', 'content', 'call', '--uri', f'content://{pkg}.hostsync',
+                            '--method', 'install', '--arg', transfer, '--extra', 'sha256:s:' + checksum,
+                            '--extra', 'base:s:' + base], capture_output=True, text=True, check=True)
+    if f'installed={transfer}' not in result.stdout:
+        raise RuntimeError('USB import was not confirmed. Check the active configuration and the debug app version.')
+finally:
+    subprocess.run(adb + ['shell', 'run-as', pkg, 'rm', '-f', remote], capture_output=True)
+print('PASS: USB archive verified and installed. Reconnect to apply the imported configuration.')

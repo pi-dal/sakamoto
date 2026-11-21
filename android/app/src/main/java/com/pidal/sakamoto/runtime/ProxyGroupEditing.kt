@@ -8,12 +8,17 @@ data class ProxyGroupEdit(val tag: String, val type: String = "selector", val me
 
 object ProxyGroupEditing {
     fun followsGeneratedNodes(edit: ProxyGroupEdit): Boolean = edit.type == "urltest" && edit.tag in setOf("RealityAuto", "OthersAuto")
-    fun automaticCandidates(content: String, tag: String): List<String> = rows(content).filter { row ->
-        row.optString("type") !in setOf("selector", "urltest", "direct", "block", "dns", "socks") && row.has("tag")
-    }.filter { row ->
-        val reality = row.optJSONObject("tls")?.optJSONObject("reality")?.optBoolean("enabled") == true || row.getString("tag").contains("reality", true)
-        (tag == "RealityAuto" && reality) || (tag == "OthersAuto" && !reality)
-    }.map { it.getString("tag") }
+    fun automaticCandidates(content: String, tag: String): List<String> {
+        val outbounds = rows(content)
+        val entries = outbounds.firstOrNull { it.optString("tag") == "ManualPick" }?.let { strings(it, "outbounds") }?.toSet()
+        return outbounds.mapNotNull { row ->
+            val name = row.optString("tag")
+            val type = row.optString("type")
+            if (name.isEmpty() || entries?.contains(name) == false || type in setOf("", "selector", "urltest", "direct", "block", "dns")) return@mapNotNull null
+            val reality = type != "socks" && (row.optJSONObject("tls")?.optJSONObject("reality")?.optBoolean("enabled") == true || name.contains("reality", true))
+            name.takeIf { tag == (if (reality) "RealityAuto" else "OthersAuto") }
+        }
+    }
     fun recording(content: String, edit: ProxyGroupEdit, previous: ProxyGroupEdit? = null): ProxyGroupEdit {
         if (!followsGeneratedNodes(edit)) return edit
         val candidates = automaticCandidates(content, edit.tag)

@@ -243,7 +243,7 @@ public enum TailscaleAction: String, Sendable, CaseIterable {
 /// repository. Implementations must not return the key from a description or
 /// debug printer.
 public protocol TailscaleAuthKeyStoring: AnyObject, Sendable {
-    func readAuthKey() -> String?
+    func readAuthKey() throws -> String?
     func storeAuthKey(_ key: String) throws
     func deleteAuthKey() throws
     var hasAuthKey: Bool { get }
@@ -257,6 +257,19 @@ public protocol TailscaleAuthKeyStoring: AnyObject, Sendable {
 /// (same trust boundary as the upstream client passing profile configs into
 /// the extension); it is never written to the repository or to logs.
 public enum TailscaleConfigInjection {
+    public static func withoutAuthKey(_ content: String) throws -> String {
+        guard var root = try JSONSerialization.jsonObject(with: Data(content.utf8)) as? [String: Any] else { throw TailscaleConfigError.rootNotObject }
+        guard var endpoints = root["endpoints"] as? [[String: Any]], endpoints.contains(where: { $0["type"] as? String == "tailscale" && $0["auth_key"] != nil }) else { return content }
+        for i in endpoints.indices where endpoints[i]["type"] as? String == "tailscale" { endpoints[i].removeValue(forKey: "auth_key") }
+        root["endpoints"] = endpoints
+        return String(decoding: try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys]), as: UTF8.self)
+    }
+
+    public static func forTunnel(_ content: String, loadKey: () throws -> String?) throws -> String {
+        guard TailscaleEndpointProvisioning.isEnabled(in: content) else { return content }
+        return try inject(authKey: loadKey() ?? "", into: content)
+    }
+
     public static func inject(authKey: String, into configJSON: String) throws -> String {
         guard !authKey.isEmpty else { return configJSON }
         guard let data = configJSON.data(using: .utf8) else {

@@ -18,7 +18,10 @@ func ParseNodeLink(raw string) (NodeEntry, error) {
 	if raw == "" || strings.ContainsAny(raw, "\r\n") {
 		return NodeEntry{}, fmt.Errorf("a node share link must fit on one line")
 	}
-	nodes := parseShareLines([]string{raw})
+	nodes, err := parseShareLines([]string{raw})
+	if err != nil {
+		return NodeEntry{}, err
+	}
 	if len(nodes) != 1 {
 		return NodeEntry{}, fmt.Errorf("unsupported or invalid node share link")
 	}

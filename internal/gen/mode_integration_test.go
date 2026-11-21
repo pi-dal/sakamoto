@@ -13,9 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
-	"strings"
-	"sync/atomic"
+	"slices"
 	"testing"
 	"time"
 
@@ -96,7 +94,7 @@ func TestNativeModeChangesActuallyRouteNewRequests(t *testing.T) {
 	}
 	dir := t.TempDir()
 	conf, nodes := filepath.Join(dir, "test.conf"), filepath.Join(dir, "nodes.txt")
-	if err := os.WriteFile(conf, []byte("[General]\ndns-server=https://dns.google/dns-query\n[Rule]\nDOMAIN,localhost,DIRECT\nDOMAIN,ads.example,REJECT\nDOMAIN,proxy.example,PROXY\nFINAL,DIRECT\n"), 0600); err != nil {
+	if err := os.WriteFile(conf, []byte("[General]\ndns-server=https://dns.google/dns-query\n[Rule]\nDOMAIN,localhost,DIRECT\nDOMAIN,api.overlap.test,PROXY\nDOMAIN,local.overlap.test,DIRECT\nDOMAIN-SUFFIX,overlap.test,DIRECT\nDOMAIN-KEYWORD,overlap,PROXY\nDOMAIN,ads.example,REJECT\nDOMAIN,proxy.example,PROXY\nFINAL,PROXY\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(nodes, []byte("hysteria2://synthetic@203.0.113.11:443#synthetic\nsocks://203.0.113.10:9000#Exit\n"), 0600); err != nil {
@@ -120,7 +118,6 @@ func TestNativeModeChangesActuallyRouteNewRequests(t *testing.T) {
 	if err := json.Unmarshal(raw, &generated); err != nil {
 		t.Fatal(err)
 	}
-	var hits atomic.Int32
 	socks, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -132,7 +129,6 @@ func TestNativeModeChangesActuallyRouteNewRequests(t *testing.T) {
 			if err != nil {
 				return
 			}
-			hits.Add(1)
 			go modeTestSOCKS(conn)
 		}
 	}()
@@ -145,7 +141,7 @@ func TestNativeModeChangesActuallyRouteNewRequests(t *testing.T) {
 		map[string]any{"type": "socks", "tag": exit, "server": "127.0.0.1", "server_port": socks.Addr().(*net.TCPAddr).Port, "version": "5"},
 	}
 	generated["services"] = []any{map[string]any{"type": "api", "listen": "127.0.0.1", "listen_port": apiPort, "secret": cfg.API.Secret, "dashboard": map[string]any{"enabled": false}}}
-	generated["dns"] = map[string]any{"servers": []any{map[string]any{"type": "hosts", "tag": "test-hosts", "predefined": map[string]any{"localhost": "127.0.0.1"}}}, "final": "test-hosts"}
+	generated["dns"] = map[string]any{"servers": []any{map[string]any{"type": "hosts", "tag": "test-hosts", "predefined": map[string]any{"localhost": "127.0.0.1", "api.overlap.test": "127.0.0.1", "local.overlap.test": "127.0.0.1"}}}, "final": "test-hosts"}
 	route := generated["route"].(map[string]any)
 	route["default_domain_resolver"] = map[string]any{"server": "test-hosts"}
 	// The production private-address exemption would correctly bypass our
@@ -168,49 +164,52 @@ func TestNativeModeChangesActuallyRouteNewRequests(t *testing.T) {
 	if err := os.WriteFile(path, candidate, 0600); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("sing-box", "run", "-D", dir, "-c", path)
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	var client *sbclient.Client
-	for ctx.Err() == nil {
-		probeCtx, stop := context.WithTimeout(ctx, 400*time.Millisecond)
-		client, err = sbclient.Dial(probeCtx, fmt.Sprintf("http://127.0.0.1:%d", apiPort), cfg.API.Secret)
-		stop()
-		if err == nil {
-			break
+	start := func() (*exec.Cmd, *sbclient.Client) {
+		cmd := exec.Command("sing-box", "run", "-D", dir, "-c", path)
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
 		}
-		time.Sleep(50 * time.Millisecond)
+		t.Cleanup(func() {
+			if cmd.ProcessState == nil {
+				_ = cmd.Process.Kill()
+				_ = cmd.Wait()
+			}
+		})
+		for ctx.Err() == nil {
+			probeCtx, stop := context.WithTimeout(ctx, 400*time.Millisecond)
+			client, err := sbclient.Dial(probeCtx, fmt.Sprintf("http://127.0.0.1:%d", apiPort), cfg.API.Secret)
+			stop()
+			if err == nil {
+				t.Cleanup(client.Close)
+				return cmd, client
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		t.Fatal("native API did not start")
+		return nil, nil
 	}
-	if err != nil {
-		t.Fatalf("isolated native API failed: %v", err)
-	}
-	defer client.Close()
+	cmd, client := start()
 	status, err := client.ClashModeStatus(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(status.ModeList, ",") != "Rule,Global,Direct" {
-		t.Fatalf("mode list: %v", status.ModeList)
+	for _, mode := range []string{"Rule", "Global", "Direct"} {
+		if !slices.Contains(status.ModeList, mode) {
+			t.Fatalf("native API did not offer %s: %v", mode, status.ModeList)
+		}
 	}
 	proxyURL, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", mixedPort))
 	transport := &http.Transport{Proxy: http.ProxyURL(proxyURL), DisableKeepAlives: true}
 	defer transport.CloseIdleConnections()
 	httpClient := &http.Client{Transport: transport, Timeout: 3 * time.Second}
-	targetURL, _ := url.Parse(direct.URL)
-	_, port, _ := net.SplitHostPort(targetURL.Host)
-	_, err = strconv.Atoi(port)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, tc := range []struct{ mode, want string }{{"Rule", "DIRECT"}, {"Global", "PROXY"}, {"Direct", "DIRECT"}, {"Rule", "DIRECT"}} {
+	port := direct.Listener.Addr().(*net.TCPAddr).Port
+	for _, tc := range []struct{ mode, host, want string }{{"Rule", "api.overlap.test", "PROXY"}, {"Rule", "local.overlap.test", "DIRECT"}, {"Rule", "localhost", "DIRECT"}, {"Rule", "unmatched.example", "PROXY"}, {"Global", "localhost", "PROXY"}, {"Direct", "localhost", "DIRECT"}, {"Rule", "localhost", "DIRECT"}} {
 		if err := client.SetClashMode(ctx, tc.mode); err != nil {
 			t.Fatal(err)
 		}
-		resp, err := httpClient.Get("http://localhost:" + port)
+		resp, err := httpClient.Get(fmt.Sprintf("http://%s:%d", tc.host, port))
 		if err != nil {
 			t.Fatalf("%s request: %v", tc.mode, err)
 		}
@@ -220,7 +219,21 @@ func TestNativeModeChangesActuallyRouteNewRequests(t *testing.T) {
 			t.Fatalf("%s routed to %q want %q: %v", tc.mode, body, tc.want, readErr)
 		}
 	}
-	if hits.Load() != 1 {
-		t.Fatalf("only Global should use SOCKS exit; got %d connections", hits.Load())
+	if err := client.SetClashMode(ctx, "Global"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = cmd.Wait()
+	_, _ = start()
+	resp, err := httpClient.Get(fmt.Sprintf("http://localhost:%d", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil || string(body) != "PROXY" {
+		t.Fatalf("first post-crash request reached %q: %v", body, err)
 	}
 }

@@ -2,20 +2,21 @@ import Foundation
 
 /// Shared atomic nodes.txt import. Parsing errors never contain source links.
 public enum NodeFileImport {
-    public static func parse(_ data: Data, validate: (String) throws -> StagedNode) throws -> [StagedNode] {
+    public static func parse(_ data: Data, allowEmpty: Bool = false, validate: (String) throws -> StagedNode) throws -> [StagedNode] {
         guard data.count <= ICloudSyncLimits.maxSourceBytes else { throw Failure("Node file exceeds the 32 MiB limit") }
         guard let text = String(data: data, encoding: .utf8) else { throw Failure("Node file must be UTF-8 text") }
         let textWithoutBOM = text.hasPrefix("\u{FEFF}") ? String(text.dropFirst()) : text
         var nodes: [StagedNode] = []
         var seen: Set<String> = []
-        for (index, line) in textWithoutBOM.components(separatedBy: .newlines).enumerated() {
+        let lines = textWithoutBOM.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+        for (index, line) in lines.enumerated() {
             let link = line.trimmingCharacters(in: .whitespaces)
             guard !link.isEmpty, !link.hasPrefix("#") else { continue }
             guard seen.insert(link).inserted else { continue }
             do { nodes.append(try validate(link)) }
             catch { throw Failure("Invalid node at line \(index + 1). No nodes were imported.") }
         }
-        guard !nodes.isEmpty else { throw Failure("No node links found in the file") }
+        guard allowEmpty || !nodes.isEmpty else { throw Failure("No node links found in the file") }
         return nodes
     }
 

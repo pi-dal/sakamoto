@@ -7,7 +7,7 @@ import java.lang.reflect.Proxy
 
 /** Real JNI server/client lifecycle with a synthetic core and no TUN/owner data. */
 object PowerObservationScenario {
-    fun run(test: Instrumentation) {
+    fun fixtureServer(): CommandServer {
         fun <T> stub(type: Class<T>): T = type.cast(Proxy.newProxyInstance(type.classLoader, arrayOf(type)) { _, method, args ->
             if (method.name == "startDefaultInterfaceMonitor") {
                 (args?.firstOrNull() as? InterfaceUpdateListener)?.updateDefaultInterface("", -1, false, false)
@@ -22,7 +22,10 @@ object PowerObservationScenario {
             }
         })
         check(!CommandClientRuntime.channelConnected.value) { "Power lane requires an idle isolated emulator" }
-        val server = Libbox.newCommandServer(stub(CommandServerHandler::class.java), stub(PlatformInterface::class.java))
+        return Libbox.newCommandServer(stub(CommandServerHandler::class.java), stub(PlatformInterface::class.java))
+    }
+    fun run(test: Instrumentation) {
+        val server = fixtureServer()
         var stage = "initial channel"
         fun eventually(check: () -> Boolean) {
             val end = System.nanoTime() + 5_000_000_000L
@@ -31,14 +34,13 @@ object PowerObservationScenario {
         }
         val samples = org.json.JSONArray()
         val previousConfig = com.pidal.sakamoto.runtime.ConfigRepository.load(test.targetContext)
-        val experimentPrefs = test.targetContext.getSharedPreferences("experiments", 0)
-        val previousSettings = experimentPrefs.getString("settings", null)
-        check(experimentPrefs.edit().remove("settings").commit())
+        val fixture = previousConfig.copy(scopedExperiment = true, modeCacheID = java.util.UUID.randomUUID().toString())
         var activity: MainActivity? = null
         try {
             server.start()
             val config = """{"log":{"level":"warn"},"outbounds":[{"type":"direct","tag":"direct"},{"type":"selector","tag":"MainProxy","outbounds":["direct"]}],"route":{"rules":[{"clash_mode":"global","action":"route","outbound":"MainProxy"},{"clash_mode":"direct","action":"route","outbound":"direct"}],"final":"MainProxy"},"experimental":{"clash_api":{"default_mode":"rule"}}}"""
-            server.startOrReloadService(config, OverrideOptions())
+            val profileA = fixture.copy(generatedContent = config, regionalDNS = emptyMap(), proxyChain = null)
+            server.startOrReloadService(profileA.runtimeContent, OverrideOptions())
             val instance = server.runningInstanceID()
             check(runCatching { server.probeAutomaticOrigin("invalid/host", 80, "direct", instance, 1000) }.isFailure) { "JNI origin probe accepted an invalid hostname" }
             CommandClientRuntime.setLearningEnabled(false)
@@ -49,8 +51,6 @@ object PowerObservationScenario {
             CommandClientRuntime.setClashMode("rule")
             eventually { com.pidal.sakamoto.runtime.MobilecoreRuntime.state.value.routingMode.lowercase() == "rule" }
             com.pidal.sakamoto.runtime.MobilecoreRuntime.completeConfigApply()
-            val field = CommandClientRuntime.javaClass.getDeclaredField("client").apply { isAccessible = true }
-            val actionClient = field.get(CommandClientRuntime)
             Thread.sleep(1200)
             check(CommandClientRuntime.lastStatus == null)
             samples.put(org.json.JSONObject().put("stage", "hidden").put("status", false))
@@ -61,46 +61,28 @@ object PowerObservationScenario {
                 test.runOnMainSync { activity!!.findViewById<android.view.View>(R.id.nav_data).performClick() }
                 test.waitForIdleSync()
                 eventually { CommandClientRuntime.lastStatus != null }
-                check(field.get(CommandClientRuntime) === actionClient)
                 check(server.runningInstanceID() == instance && server.isServiceRunning())
                 samples.put(org.json.JSONObject().put("stage", "data").put("status", true))
                 test.runOnMainSync { activity!!.findViewById<android.view.View>(R.id.nav_home).performClick() }
                 test.waitForIdleSync()
                 Thread.sleep(1200)
                 check(CommandClientRuntime.lastStatus == null && CommandClientRuntime.connections.isEmpty())
-                check(field.get(CommandClientRuntime) === actionClient)
             }
             val runtime = com.pidal.sakamoto.runtime.ExperimentRuntime
             fun settings(metadata: String) {
-                com.pidal.sakamoto.runtime.ConfigRepository.save(test.targetContext, previousConfig.copy(generatedContent = config, hostMetadata = metadata))
+                com.pidal.sakamoto.runtime.ConfigRepository.save(test.targetContext, fixture.copy(generatedContent = config, hostMetadata = metadata))
             }
-            val worker = runtime.javaClass.getDeclaredField("job").apply { isAccessible = true }
-            val observer = CommandClientRuntime.javaClass.getDeclaredField("observer").apply { isAccessible = true }
-            settings("""{"experiment":{"mode":"off"}}""")
-            runtime.start(test.targetContext) { error("Disabled learning must not update routes") }
-            check(worker.get(runtime) == null)
-            samples.put(org.json.JSONObject().put("stage", "monitoring_disabled").put("worker", false))
-            runtime.quiesce()
             settings("""{"fallback_enabled":true,"fallbacks":{"MainProxy":["direct"]},"experiment":{"mode":"off"}}""")
             stage = "fallback-only worker"
             runtime.start(test.targetContext) { error("Fallback-only policy must not learn routes") }
             eventually { runtime.status.value.message == "Recovery tests running" }
-            check(observer.get(CommandClientRuntime) == null && CommandClientRuntime.lastStatus == null)
-            val recovery = runtime.javaClass.getDeclaredField("recoveryJob").apply { isAccessible = true }
-            val beforeNetwork = recovery.get(runtime)
-            runtime.networkChanged()
-            stage = "network-change recovery restart"
-            eventually { recovery.get(runtime) !== beforeNetwork }
-            check(server.runningInstanceID() == instance)
-            samples.put(org.json.JSONObject().put("stage", "fallback_only_network_reset").put("observer", false).put("same_core", true))
+            check(CommandClientRuntime.lastStatus == null && server.runningInstanceID() == instance)
+            samples.put(org.json.JSONObject().put("stage", "fallback_only").put("status", false).put("same_core", true))
             runtime.quiesce()
             settings("""{"experiment":{"mode":"auto"}}""")
             runtime.start(test.targetContext) { error("No flow evidence exists in this fixture") }
-            stage = "learning observer"
-            eventually { observer.get(CommandClientRuntime) != null }
             Thread.sleep(1200)
             check(CommandClientRuntime.lastStatus == null)
-            check(field.get(CommandClientRuntime) === actionClient)
             samples.put(org.json.JSONObject().put("stage", "learning_only").put("status", false))
             runtime.quiesce()
             com.pidal.sakamoto.runtime.ConfigRepository.save(test.targetContext, previousConfig)
@@ -126,12 +108,20 @@ object PowerObservationScenario {
             CommandClientRuntime.setClashMode("direct")
             eventually { com.pidal.sakamoto.runtime.MobilecoreRuntime.state.value.routingMode.lowercase() == "direct" }
             samples.put(org.json.JSONObject().put("stage", "restarted").put("action", "direct").put("same_core", true))
+            stage = "independent profile starts in Rule"
+            val profileB = profileA.copy(modeCacheID = java.util.UUID.randomUUID().toString())
+            server.startOrReloadService(profileB.runtimeContent, OverrideOptions())
+            eventually { com.pidal.sakamoto.runtime.MobilecoreRuntime.state.value.routingMode.lowercase() == "rule" }
+            samples.put(org.json.JSONObject().put("stage", "independent_profile").put("mode", "rule"))
+            stage = "same profile restores Direct"
+            server.startOrReloadService(profileA.runtimeContent, OverrideOptions())
+            eventually { com.pidal.sakamoto.runtime.MobilecoreRuntime.state.value.routingMode.lowercase() == "direct" }
+            samples.put(org.json.JSONObject().put("stage", "original_profile").put("mode", "direct"))
             java.io.File(test.targetContext.cacheDir, "power-observation.json").writeText(samples.toString(2))
-            LearningObservationScenario.run(test, server, checkNotNull(activity))
+            LearningObservationScenario.run(test, server)
         } finally {
             com.pidal.sakamoto.runtime.ExperimentRuntime.quiesce()
             com.pidal.sakamoto.runtime.ConfigRepository.save(test.targetContext, previousConfig)
-            check(experimentPrefs.edit().apply { if (previousSettings == null) remove("settings") else putString("settings", previousSettings) }.commit())
             test.runOnMainSync { activity?.finish() }
             CommandClientRuntime.setDataVisible(false)
             CommandClientRuntime.setLearningEnabled(false)

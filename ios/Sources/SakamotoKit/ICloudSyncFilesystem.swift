@@ -56,11 +56,19 @@ public protocol ICloudFilesystem: Sendable {
     /// Bounded source enumeration for first-device conf discovery.
     func sourceNames(under root: String) throws -> [String]
 
+    func validateDestination(_ url: URL) throws
+    func replace(_ data: Data, atPath path: String, matching expected: Data?) throws
+
     /// Whether the provider has finished uploading the current file.
     func uploadConfirmed(atPath path: String) throws -> Bool
 }
 
 public extension ICloudFilesystem {
+    func validateDestination(_ url: URL) throws {}
+    func replace(_ data: Data, atPath path: String, matching expected: Data?) throws {
+        guard try contents(atPath: path) == expected else { throw ICloudSyncError.filesystem("Cloud copy changed. Sync again.") }
+        try writeAtomic(data, toPath: path)
+    }
     func sourceNames(under root: String) throws -> [String] { [] }
     func uploadConfirmed(atPath path: String) throws -> Bool { true }
 }
@@ -280,6 +288,13 @@ public final class CloudFilesystem: ICloudFilesystem, @unchecked Sendable {
     private let fileManager: FileManager
     private let coordinator: NSFileCoordinator
 
+    public func validateDestination(_ url: URL) throws {
+        let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isUbiquitousItemKey])
+        guard values.isDirectory == true, values.isUbiquitousItem == true else {
+            throw ICloudSyncError.filesystem("Choose the shared folder in iCloud Drive.")
+        }
+    }
+
     public init(fileManager: FileManager = .default, coordinator: NSFileCoordinator = NSFileCoordinator()) {
         self.fileManager = fileManager
         self.coordinator = coordinator
@@ -361,6 +376,20 @@ public final class CloudFilesystem: ICloudFilesystem, @unchecked Sendable {
 
     public func writeAtomic(_ data: Data, toPath path: String) throws {
         try ensureDirectory(atPath: (path as NSString).deletingLastPathComponent)
+        try coordinatedWrite(data, toPath: path, check: { _ in })
+    }
+
+    public func replace(_ data: Data, atPath path: String, matching expected: Data?) throws {
+        try ensureDirectory(atPath: (path as NSString).deletingLastPathComponent)
+        try coordinatedWrite(data, toPath: path) { target in
+            let existing: Data?
+            do { existing = try Data(contentsOf: target) }
+            catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile { existing = nil }
+            guard existing == expected else { throw ICloudSyncError.filesystem("Cloud copy changed. Sync again.") }
+        }
+    }
+
+    private func coordinatedWrite(_ data: Data, toPath path: String, check: (URL) throws -> Void) throws {
         var writeError: NSError?
         var thrown: Error?
         let url = URL(fileURLWithPath: path)
@@ -370,6 +399,7 @@ public final class CloudFilesystem: ICloudFilesystem, @unchecked Sendable {
             error: &writeError,
         ) { target in
             do {
+                try check(target)
                 // Data.write(options: .atomic) = temp + rename; then force
                 // the private mode the sync contract promises (0600).
                 try data.write(to: target, options: .atomic)
