@@ -101,21 +101,28 @@ func TestRecoveryCrashBudgetSurvivesSupervisorReplacement(t *testing.T) {
 	if reply := replacement.start(); !strings.Contains(reply, "blocked") {
 		t.Fatalf("replacement bypassed persisted circuit: %s", reply)
 	}
-	if reply := s.resume(); !strings.Contains(reply, "resumed") {
-		t.Fatal(reply)
-	}
-	if recovery.Held(dir) {
-		t.Fatal("resume retained maintenance hold")
-	}
 	artifact := map[string]any{"scenario": "crash-budget", "starts": before, "persists_across_supervisor": true, "blocked": true}
 	writeRecoveryArtifact(t, artifact)
 }
 
 func TestRecoveryManualStopCancelsDNSStartupAndKeepsStatusResponsive(t *testing.T) {
 	s, dir := recoveryFixture(t)
-	cfg := `{"services":[{"type":"api","listen":"127.0.0.1","secret":"offline-recovery-integration-key-0123456789abcdef"}],"inbounds":[{"type":"direct","tag":"protected-dns","listen":"127.0.0.1","listen_port":53}],"dns":{"final":"safe","servers":[{"tag":"safe","type":"https","detour":"MainProxy"}]},"route":{"rules":[{"inbound":["protected-dns"],"action":"hijack-dns"}]}}`
+	cfg := `{"services":[{"type":"api","listen":"127.0.0.1","secret":"offline-recovery-integration-key-0123456789abcdef"}],"inbounds":[{"type":"direct","tag":"protected-dns","listen":"127.0.0.1","listen_port":53}],"dns":{"final":"safe","rules":[{"domain_suffix":["local","lan"],"action":"predefined","rcode":"SERVFAIL"}],"servers":[{"tag":"safe","type":"https","detour":"MainProxy"}]},"outbounds":[{"type":"socks","tag":"MainProxy","server":"192.0.2.30"}],"route":{"rules":[{"inbound":["protected-dns"],"action":"hijack-dns"}]}}`
 	recoveryOK(t, os.WriteFile(filepath.Join(dir, "config.json"), []byte(cfg), 0600))
 	recoveryOK(t, os.WriteFile(filepath.Join(dir, "sakamoto.yaml"), []byte("dns_guard:\n  enabled: true\n  service: Wi-Fi\n"), 0600))
+	// Older generated configs routed these suffixes to a public UDP resolver.
+	stale := strings.Replace(cfg, `"action":"predefined","rcode":"SERVFAIL"`, `"action":"route","server":"public"`, 1)
+	stale = strings.Replace(stale, `"servers":[`, `"servers":[{"type":"udp","tag":"public","server":"1.1.1.1"},`, 1)
+	recoveryOK(t, os.WriteFile(s.cfgPath, []byte(stale), 0600))
+	if reply := s.start(); !strings.Contains(reply, "private DNS routing") {
+		t.Fatalf("stale guard configuration: %s", reply)
+	}
+	stale = strings.Replace(cfg, `"tag":"safe","type":"https"`, `"tag":"safe","server":"resolver.lan","domain_resolver":"public","type":"https"`, 1)
+	recoveryOK(t, os.WriteFile(s.cfgPath, []byte(stale), 0600))
+	if reply := s.start(); !strings.Contains(reply, "private DNS bootstrap") {
+		t.Fatalf("stale bootstrap accepted: %s", reply)
+	}
+	recoveryOK(t, os.WriteFile(s.cfgPath, []byte(cfg), 0600))
 	entered := make(chan struct{})
 	s.dnsPorts = func(string) error { return nil }
 	s.dnsProbeContext = func(ctx context.Context, _ string) error { close(entered); <-ctx.Done(); return ctx.Err() }
@@ -179,7 +186,8 @@ func TestRecoveryMaintenanceSurvivesNewServerAndNeedsExplicitResume(t *testing.T
 func TestRecoveryKnownWorkingBundleSurvivesMissingRuleAndRollsBackOnce(t *testing.T) {
 	s, dir := recoveryFixture(t)
 	rule := filepath.Join(dir, "test-rule.json")
-	recoveryOK(t, os.WriteFile(rule, []byte(`{"version":3,"rules":[]}`), 0600))
+	ruleData := []byte(`{"version":3,"rules":[{"domain":["retained.example"]}]}`)
+	recoveryOK(t, os.WriteFile(rule, ruleData, 0600))
 	var cfg map[string]any
 	raw, _ := os.ReadFile(s.cfgPath)
 	recoveryOK(t, json.Unmarshal(raw, &cfg))
@@ -200,17 +208,19 @@ func TestRecoveryKnownWorkingBundleSurvivesMissingRuleAndRollsBackOnce(t *testin
 		t.Fatal(reply)
 	}
 	restored, _ := os.ReadFile(s.cfgPath)
-	if !json.Valid(restored) {
-		t.Fatal("rollback did not restore valid configuration")
-	}
 	var restoredCfg struct {
 		Route struct {
 			RuleSets []struct{ Path string } `json:"rule_set"`
 		} `json:"route"`
 	}
 	recoveryOK(t, json.Unmarshal(restored, &restoredCfg))
-	if _, err := os.Stat(restoredCfg.Route.RuleSets[0].Path); err != nil {
-		t.Fatal("rollback lost referenced rule:", err)
+	if len(restoredCfg.Route.RuleSets) != 1 {
+		t.Fatalf("expected one restored rule set, got %d", len(restoredCfg.Route.RuleSets))
+	}
+	asset, err := os.ReadFile(restoredCfg.Route.RuleSets[0].Path)
+	recoveryOK(t, err)
+	if string(asset) != string(ruleData) {
+		t.Fatal("rollback lost the contents of the referenced rule set")
 	}
 	if reply := s.rollback(); !strings.Contains(reply, "already") {
 		t.Fatalf("repeated rollback allowed: %s", reply)

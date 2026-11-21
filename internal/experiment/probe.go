@@ -86,9 +86,13 @@ func PrepareProbe(raw []byte) ([]byte, error) {
 					at = 1
 				}
 			}
-			rules = append(rules, nil)
-			copy(rules[at+1:], rules[at:])
-			rules[at] = map[string]any{"inbound": []string{tag}, "action": "route", "outbound": exit}
+			allow := map[string]any{"inbound": []string{tag}, "action": "route", "outbound": exit}
+			insert := []any{allow}
+			if tag == directProbeTag {
+				allow["clash_mode"] = "Rule"
+				insert = append(insert, map[string]any{"inbound": []string{tag}, "action": "reject"})
+			}
+			rules = append(rules[:at:at], append(insert, rules[at:]...)...)
 		}
 	}
 	data["inbounds"] = inbounds
@@ -116,6 +120,7 @@ func probeURL(raw []byte, tag string) (*url.URL, error) {
 		Route struct {
 			Rules []struct {
 				Inbound          []string
+				Mode             string `json:"clash_mode"`
 				Action, Outbound string
 			}
 		} `json:"route"`
@@ -142,9 +147,18 @@ func probeURL(raw []byte, tag string) (*url.URL, error) {
 				return nil, err
 			}
 		}
-		for _, r := range data.Route.Rules {
+		for i, r := range data.Route.Rules {
 			if len(r.Inbound) == 1 && r.Inbound[0] == tag && r.Action == "route" && r.Outbound == expected {
-				return &url.URL{Scheme: "socks5h", Host: net.JoinHostPort(in.Listen, strconv.Itoa(in.Port)), User: url.UserPassword(probeUser, in.Users[0].Password)}, nil
+				if tag == directProbeTag {
+					if r.Mode != "Rule" || i+1 == len(data.Route.Rules) {
+						break
+					}
+					deny := data.Route.Rules[i+1]
+					if len(deny.Inbound) != 1 || deny.Inbound[0] != tag || deny.Action != "reject" || deny.Mode != "" {
+						break
+					}
+				}
+				return endpoint, nil
 			}
 		}
 	}

@@ -100,6 +100,17 @@ type RecoverySession struct {
 	ticket    string
 }
 
+// SaveApplyRollback snapshots the last running profile and its rule files before an
+// explicit replacement. The caller supplies a private root scoped to the import.
+func SaveApplyRollback(root, content, metadata, workingDirectory string) error {
+	candidate, err := restorepoint.CaptureMobile(root, content, metadata, workingDirectory)
+	if err != nil {
+		return err
+	}
+	defer candidate.Close()
+	return candidate.Promote()
+}
+
 func NewRecoverySession(root string) (*RecoverySession, error) {
 	journal, err := recovery.NewMobile(filepath.Join(root, "recovery", "mobile"))
 	if err != nil {
@@ -120,6 +131,9 @@ func (s *RecoverySession) Begin(manual bool) (string, error) {
 	defer s.lifecycle.Unlock()
 	if s.canceled {
 		return "", errors.New("recovery session stopped")
+	}
+	if err := restorepoint.DiscardLegacyMobileSecrets(s.root); err != nil {
+		return "", err
 	}
 	return s.journal.Begin(manual)
 }

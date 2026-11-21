@@ -198,7 +198,11 @@ func (s *Server) prepareConfiguration(ctx context.Context, options RepairOptions
 		if e = check.Close(); e != nil {
 			return p, e
 		}
-		if err = checkNativeConfiguration(ctx, filepath.Join(p.point.Dir, "engine"), s.workDir, checkPath); err != nil {
+		binary, err := retainedEngine(p.point)
+		if err != nil {
+			return p, repairIssue("fallback_unavailable", err)
+		}
+		if err = checkNativeConfiguration(ctx, binary, s.workDir, checkPath); err != nil {
 			return p, repairIssue("fallback_unavailable", err)
 		}
 		return p, nil

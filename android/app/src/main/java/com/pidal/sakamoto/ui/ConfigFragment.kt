@@ -15,31 +15,45 @@ import com.pidal.sakamoto.runtime.ConfigRepository
 import com.pidal.sakamoto.runtime.MobilecoreRuntime
 import io.nekohasekai.mobilecore.Mobilecore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 /** Index of real editing workflows with an explicit, acknowledged apply action. */
-class ConfigFragment : androidx.fragment.app.Fragment() {
+class ConfigFragment(private val sourceClient: okhttp3.OkHttpClient = okhttp3.OkHttpClient.Builder()
+    .followRedirects(false).followSslRedirects(false).readTimeout(20, java.util.concurrent.TimeUnit.SECONDS).build()) : androidx.fragment.app.Fragment() {
     private var sourceRow: GroupedPage.SettingRow? = null
     private var stateRow: GroupedPage.SettingRow? = null
     private var applyButton: GroupedPage.SettingRow? = null
-    private var importing = false
+    internal var importing = false
+        private set
     private var importButton: GroupedPage.SettingRow? = null
     private val clipboardGate = ClipboardImportGate()
     private var clipboardOffer: Snackbar? = null
     private val clipboardFocusListener = android.view.ViewTreeObserver.OnWindowFocusChangeListener { focused ->
         if (focused && lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) probeClipboard()
     }
+    private var scanReceipt: String? = null
+    private var pickerReceipt: String? = null
+    private fun receipt() = ConfigRepository.manifestReceipt(requireContext())
     private val qrScanner = registerForActivityResult(com.journeyapps.barcodescanner.ScanContract()) { result ->
+        val origin = scanReceipt
+        scanReceipt = null
         if (result.originalIntent?.getBooleanExtra(com.google.zxing.client.android.Intents.Scan.MISSING_CAMERA_PERMISSION, false) == true) importFeedback(R.string.ux_import_camera_denied)
-        else result.contents?.let { routeImport(it) }
+        else result.contents?.let { routeImport(it, origin) }
     }
     private val packagePicker = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
+        val origin = pickerReceipt
+        pickerReceipt = null
         if (uri != null) viewLifecycleOwner.lifecycleScope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    requireContext().contentResolver.openInputStream(uri)?.use { com.pidal.sakamoto.runtime.TunnelPackage.import(requireContext(), it) }
+                    val context = requireContext().applicationContext
+                    val expected = ConfigRepository.loadAt(context, origin) ?: error(getString(R.string.editor_conflict))
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        com.pidal.sakamoto.runtime.TunnelPackage.import(context, input, expected) { ensureActive() }
+                    }
                         ?: error(getString(R.string.tunnel_package_read_failed))
                 }
                 render()
@@ -54,19 +68,22 @@ class ConfigFragment : androidx.fragment.app.Fragment() {
         val source = page.section()
         sourceRow = page.setting(source, getString(R.string.source_current_conf), icon = R.drawable.ic_link) { open(SourceFilesFragment(), R.string.source_files) }
         importButton = page.setting(source, getString(R.string.config_import_title), icon = R.drawable.ic_download) {
+            val expected = ConfigRepository.load(requireContext())
             EditDialogs.text(requireContext(), getString(R.string.config_import_hint), "") { url ->
                 val input = url.trim()
                 require(input.startsWith("https://") || input.startsWith("http://")) { getString(R.string.import_error_scheme) }
                 Mobilecore.validateSourceURL(input)
-                importFromUrl(input)
+                importFromUrl(input, expected)
             }
         }
         page.setting(source, getString(R.string.ux_import_clipboard), icon = R.drawable.ic_download) {
+            val origin = receipt()
             val clipboard = requireContext().getSystemService(android.content.ClipboardManager::class.java)
             val text = clipboard.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.text?.toString()
-            if (text == null) importFeedback(R.string.ux_import_invalid) else routeImport(text)
+            if (text == null) importFeedback(R.string.ux_import_invalid) else routeImport(text, origin)
         }
         page.setting(source, getString(R.string.ux_import_qr), icon = R.drawable.ic_node) {
+            scanReceipt = receipt()
             qrScanner.launch(com.journeyapps.barcodescanner.ScanOptions().apply {
                 setDesiredBarcodeFormats(com.journeyapps.barcodescanner.ScanOptions.QR_CODE)
                 setPrompt(getString(R.string.ux_import_scan_prompt))
@@ -76,6 +93,7 @@ class ConfigFragment : androidx.fragment.app.Fragment() {
             })
         }
         page.setting(source, getString(R.string.tunnel_package_import), icon = R.drawable.ic_download) {
+            pickerReceipt = receipt()
             packagePicker.launch(arrayOf("application/zip", "application/octet-stream"))
         }
         val manage = page.section(getString(R.string.config_manage_section))
@@ -101,12 +119,14 @@ class ConfigFragment : androidx.fragment.app.Fragment() {
                 .setMessage(detail).setPositiveButton(android.R.string.ok, null).show()
         }
         applyButton = page.setting(apply, getString(R.string.apply_saved)) {
+            val expected = ConfigRepository.load(requireContext())
             MaterialAlertDialogBuilder(requireContext()).setTitle(R.string.config_apply_confirm_title).setMessage(R.string.config_apply_confirm_message)
-                .setNegativeButton(android.R.string.cancel, null).setPositiveButton(R.string.apply_saved) { _, _ -> apply() }.show()
+                .setNegativeButton(android.R.string.cancel, null).setPositiveButton(R.string.apply_saved) { _, _ -> apply(expected) }.show()
         }
         page.setting(apply, getString(R.string.edit_generated_config)) {
-            EditDialogs.text(requireContext(), getString(R.string.edit_generated_config), ConfigRepository.load(requireContext()).generatedContent, multiline = true) {
-                ConfigRepository.saveGeneratedEdit(requireContext(), it); render()
+            val expected = ConfigRepository.load(requireContext())
+            EditDialogs.text(requireContext(), getString(R.string.edit_generated_config), expected.generatedContent, multiline = true) {
+                ConfigRepository.saveGeneratedEdit(requireContext(), it, expected = expected); render()
             }
         }
         render()
@@ -140,12 +160,13 @@ class ConfigFragment : androidx.fragment.app.Fragment() {
     private fun probeClipboard() {
         if (view?.hasWindowFocus() != true) return
         val context = context ?: return
+        val origin = receipt()
         val clipboard = context.getSystemService(android.content.ClipboardManager::class.java) ?: return
         val text = clipboard.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.text?.toString() ?: return
         val candidate = try { ImportPayload.detect(text) } catch (_: Exception) { return }
         val identity = clipboardIdentity(candidate.text)
         if (clipboardGate.decide(identity) != ClipboardImportGate.Decision.OFFER) return
-        showClipboardOffer(candidate, identity)
+        showClipboardOffer(candidate, identity, origin)
     }
 
     /** Stable content key for dedup — clipboard text never persists in memory beyond the route. */
@@ -153,7 +174,7 @@ class ConfigFragment : androidx.fragment.app.Fragment() {
         java.security.MessageDigest.getInstance("SHA-256")
             .digest(text.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
 
-    private fun showClipboardOffer(candidate: ImportPayload.Candidate, identity: String) {
+    private fun showClipboardOffer(candidate: ImportPayload.Candidate, identity: String, origin: String) {
         val view = view ?: return
         val message = when (candidate.kind) {
             ImportPayload.Kind.NODE -> R.string.ux_clipboard_offer_node
@@ -164,7 +185,7 @@ class ConfigFragment : androidx.fragment.app.Fragment() {
         val snackbar = Snackbar.make(view, message, Snackbar.LENGTH_LONG)
             .setAction(R.string.ux_clipboard_import) {
                 clipboardGate.userResolved(identity)
-                routeImport(candidate.text)
+                routeImport(candidate.text, origin)
             }
             .addCallback(object : Snackbar.Callback() {
                 override fun onDismissed(dismissed: Snackbar, event: Int) {
@@ -179,24 +200,27 @@ class ConfigFragment : androidx.fragment.app.Fragment() {
         snackbar.show()
     }
 
-    private fun routeImport(raw: String) {
+    private fun routeImport(raw: String, origin: String?) {
         try {
+            val expected = ConfigRepository.loadAt(requireContext(), origin) ?: return importFeedback(R.string.editor_conflict)
             val candidate = ImportPayload.detect(raw)
             when (candidate.kind) {
                 ImportPayload.Kind.NODE -> {
                     Mobilecore.parseShareLink(candidate.text)
-                    AddNodeSheet().apply { arguments = Bundle().apply { putString("prefill", candidate.text) } }
+                    AddNodeSheet().apply { arguments = Bundle().apply { putString("prefill", candidate.text); putString("origin", origin) } }
                         .show(parentFragmentManager, "import-node")
                 }
                 ImportPayload.Kind.URL -> MaterialAlertDialogBuilder(requireContext())
                     .setTitle(R.string.ux_import_url_title)
                     .setItems(arrayOf(getString(R.string.ux_import_url_config), getString(R.string.ux_import_url_subscription))) { _, index ->
-                        if (index == 0) importFromUrl(candidate.text)
+                        if (ConfigRepository.load(requireContext()) != expected) importFeedback(R.string.editor_conflict)
+                        else if (index == 0) importFromUrl(candidate.text, expected)
                         else AddSubscriptionSheet().apply {
-                            arguments = Bundle().apply { putString("prefill", candidate.text) }
+                            arguments = Bundle().apply { putString("prefill", candidate.text); putString("origin", origin) }
                         }.show(parentFragmentManager, "import-subscription")
                     }.setNegativeButton(android.R.string.cancel, null).show()
                 ImportPayload.Kind.CONFIG_JSON, ImportPayload.Kind.CONF -> {
+                    val current = expected
                     if (candidate.kind == ImportPayload.Kind.CONFIG_JSON) {
                         Mobilecore.validateConfigJSON(candidate.text)
                         io.nekohasekai.libbox.Libbox.checkConfig(candidate.text)
@@ -207,12 +231,11 @@ class ConfigFragment : androidx.fragment.app.Fragment() {
                         .setNegativeButton(android.R.string.cancel, null)
                         .setPositiveButton(R.string.save) { _, _ ->
                             try {
-                                if (candidate.kind == ImportPayload.Kind.CONFIG_JSON) ConfigRepository.saveGeneratedEdit(requireContext(), candidate.text)
+                                if (candidate.kind == ImportPayload.Kind.CONFIG_JSON) ConfigRepository.saveGeneratedEdit(requireContext(), candidate.text, expected = current)
                                 else {
-                                    val current = ConfigRepository.load(requireContext())
                                     ConfigRepository.save(requireContext(), current.copy(sourceConfContent = candidate.text,
                                         sourceConfName = getString(R.string.ux_import_source_name), sourceConfIsUrl = false,
-                                        sourceConfPath = "", hostSnapshotAt = "", sourceNeedsGenerate = true))
+                                        sourceConfPath = "", hostSnapshotAt = "", sourceNeedsGenerate = true), current)
                                     MobilecoreRuntime.configEvent("modified")
                                 }
                                 render(); importFeedback(R.string.ux_import_saved)
@@ -226,6 +249,10 @@ class ConfigFragment : androidx.fragment.app.Fragment() {
     private fun open(fragment: androidx.fragment.app.Fragment, title: Int) { (requireActivity() as MainActivity).openChild(fragment, getString(title)) }
     override fun onViewCreated(view: View, state: Bundle?) {
         super.onViewCreated(view, state)
+        if (state != null) {
+            scanReceipt = state.getString("scanReceipt")
+            pickerReceipt = state.getString("pickerReceipt")
+        }
         view.viewTreeObserver.addOnWindowFocusChangeListener(clipboardFocusListener)
         state?.let { clipboardGate.restore(it.getStringArrayList("clipboardHandled") ?: emptyList(), it.getString("clipboardLast")) }
         parentFragmentManager.setFragmentResultListener("config-updated", viewLifecycleOwner) { _, _ -> render() }
@@ -250,41 +277,38 @@ class ConfigFragment : androidx.fragment.app.Fragment() {
             it.alpha = if (it.isEnabled) 1f else 0.45f
         }
     }
-    private fun apply() {
+    private fun apply(expected: ConfigRepository.StagedConfig) {
+        if (ConfigRepository.load(requireContext()) != expected) return importFeedback(R.string.editor_conflict)
         MobilecoreRuntime.beginConfigApply()
         render()
         viewLifecycleOwner.lifecycleScope.launch {
-            val ok = withContext(Dispatchers.IO) { CommandClientRuntime.reloadService() }
+            val ok = withContext(Dispatchers.IO) { CommandClientRuntime.reloadService(expected) }
             if (!ok) MobilecoreRuntime.configEvent("regenerate_failed")
             render()
         }
     }
-    private fun importFromUrl(url: String) {
+    internal fun importFromUrl(url: String, expected: ConfigRepository.StagedConfig) {
         if (importing) return
+        val context = requireContext().applicationContext
+        check(ConfigRepository.load(context) == expected) { getString(R.string.editor_conflict) }
         importing = true; importButton?.isEnabled = false
         viewLifecycleOwner.lifecycleScope.launch {
             try {
                 val content = withContext(Dispatchers.IO) {
-                    val connection = java.net.URI(url).toURL().openConnection() as java.net.HttpURLConnection
-                    connection.connectTimeout = 10_000; connection.readTimeout = 20_000
-                    try {
-                        check(connection.responseCode == 200) { "HTTP ${connection.responseCode}" }
-                        connection.inputStream.use { input ->
-                            val output = java.io.ByteArrayOutputStream()
-                            val buffer = ByteArray(8192)
-                            while (true) {
-                                val count = input.read(buffer)
-                                if (count < 0) break
-                                require(output.size() + count <= (16 shl 20)) { "Import exceeds 16 MiB" }
-                                output.write(buffer, 0, count)
-                            }
-                            output.toString("UTF-8")
-                        }
-                    } finally { connection.disconnect() }
+                    val request = okhttp3.Request.Builder().url(url).build()
+                    val host = request.url.host.removeSuffix(".")
+                    require(request.url.isHttps && request.url.username.isEmpty() && request.url.password.isEmpty()) { "Remote sources require HTTPS" }
+                    require(expected.regionalDNS["domains"].orEmpty().split(',').none { it.trim().removeSuffix(".").equals(host, true) }) { "Protected source host" }
+                    check(ConfigRepository.load(context) == expected) { getString(R.string.editor_conflict) }
+                    sourceClient.newCall(request).execute().use { response ->
+                        check(response.code == 200) { "HTTP ${response.code}" }
+                        val body = requireNotNull(response.body).source()
+                        require(!body.request((16L shl 20) + 1)) { "Import exceeds 16 MiB" }
+                        body.readUtf8()
+                    }
                 }
                 Mobilecore.parseConfContentJSON(content)
-                val current = ConfigRepository.load(requireContext())
-                ConfigRepository.save(requireContext(), current.copy(sourceConfName = java.net.URI(url).path.substringAfterLast('/'), sourceConfIsUrl = true, sourceConfContent = content, sourceConfPath = "", hostSnapshotAt = "", sourceNeedsGenerate = true))
+                ConfigRepository.save(context, expected.copy(sourceConfName = java.net.URI(url).path.substringAfterLast('/'), sourceConfIsUrl = true, sourceConfContent = content, sourceConfPath = "", hostSnapshotAt = "", sourceNeedsGenerate = true), expected)
                 MobilecoreRuntime.configEvent("modified")
                 view?.let { Snackbar.make(it, R.string.profile_source_imported, Snackbar.LENGTH_LONG).show() }
             } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
@@ -293,6 +317,8 @@ class ConfigFragment : androidx.fragment.app.Fragment() {
         }
     }
     override fun onSaveInstanceState(outState: Bundle) {
+        outState.putString("scanReceipt", scanReceipt)
+        outState.putString("pickerReceipt", pickerReceipt)
         outState.putStringArrayList("clipboardHandled", ArrayList(clipboardGate.handledIdentities))
         outState.putString("clipboardLast", clipboardGate.lastIdentity)
         super.onSaveInstanceState(outState)

@@ -21,7 +21,13 @@ import (
 // host generator forwards them to its report, mobile callers drop them — a
 // notice is never a node.
 func ParseShareLines(lines []string) (nodes []map[string]any, notices []string) {
+	nodes, notices, _ = ParseShareLinesChecked(lines)
+	return nodes, notices
+}
+
+func ParseShareLinesChecked(lines []string) (nodes []map[string]any, notices []string, err error) {
 	var out []map[string]any
+	nested := 0
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -42,7 +48,17 @@ func ParseShareLines(lines []string) (nodes []map[string]any, notices []string) 
 				}
 			}
 		}
-		q, _ := url.ParseQuery(origQ)
+		q, queryErr := url.ParseQuery(origQ)
+		if sch == "hysteria2" || sch == "hy2" {
+			if queryErr != nil {
+				return nil, nil, fmt.Errorf("invalid Hysteria2 link parameters")
+			}
+			for key := range q {
+				if strings.EqualFold(key, "pinSHA256") {
+					return nil, nil, fmt.Errorf("Hysteria2 pinSHA256 certificate pinning is unsupported by this core")
+				}
+			}
+		}
 		tag, _ := url.PathUnescape(origFrag)
 		if tag == "" {
 			tag, _ = url.PathUnescape(q.Get("remarks")) // Shadowrocket uses remarks= instead of the fragment.
@@ -51,7 +67,7 @@ func ParseShareLines(lines []string) (nodes []map[string]any, notices []string) 
 			tag = u.Hostname()
 		}
 		chain := strings.ToUpper(q.Get("chain")) // Shadowrocket chain parameter.
-		if u.User == nil && sch != "vmess" && sch != "sub" {
+		if u.User == nil && sch != "vmess" && sch != "sub" && sch != "socks" && sch != "socks5" {
 			continue
 		}
 		var node map[string]any
@@ -99,7 +115,10 @@ func ParseShareLines(lines []string) (nodes []map[string]any, notices []string) 
 					"headers": map[string]any{"Host": q.Get("host")}}
 			}
 		case "trojan":
-			pw, _ := u.User.Password()
+			pw, explicit := u.User.Password()
+			if !explicit {
+				pw = u.User.Username()
+			}
 			node = map[string]any{"type": "trojan", "tag": tag,
 				"server": u.Hostname(), "server_port": atoi(u.Port(), 443), "password": pw,
 				"tls": map[string]any{"enabled": true, "server_name": orEmpty(q.Get("sni"), u.Hostname())}}
@@ -110,8 +129,11 @@ func ParseShareLines(lines []string) (nodes []map[string]any, notices []string) 
 				node = map[string]any{"type": "vmess", "tag": orEmpty(str(m, "ps"), str(m, "add")),
 					"server": str(m, "add"), "server_port": atoi(str(m, "port"), 443),
 					"uuid": str(m, "id"), "security": orEmpty(str(m, "scy"), "auto"),
-					"alter_id": atoi(str(m, "aid"), 0)}
-			} else if u.Host != "" {
+					"alter_id": atoi(fmt.Sprint(m["aid"]), 0)}
+				if err := ConfigureVMess(node, str(m, "tls"), str(m, "sni"), str(m, "net"), str(m, "host"), str(m, "path"), str(m, "type")); err != nil {
+					return nil, nil, err
+				}
+			} else if u.Host != "" && u.User != nil {
 				node = map[string]any{"type": "vmess", "tag": tag, "server": u.Hostname(),
 					"server_port": atoi(u.Port(), 443), "uuid": u.User.Username(),
 					"security": "auto", "alter_id": atoi(q.Get("alterId"), 0)}
@@ -119,6 +141,11 @@ func ParseShareLines(lines []string) (nodes []map[string]any, notices []string) 
 					node["uuid"] = pw // SR: userinfo=method:uuid
 					node["security"] = orEmpty(u.User.Username(), "auto")
 				}
+				if err := ConfigureVMess(node, orEmpty(q.Get("tls"), q.Get("security")), orEmpty(q.Get("sni"), q.Get("peer")), orEmpty(q.Get("type"), q.Get("obfs")), orEmpty(q.Get("host"), q.Get("obfsParam")), q.Get("path"), ""); err != nil {
+					return nil, nil, err
+				}
+			} else {
+				return nil, nil, fmt.Errorf("invalid VMess link")
 			}
 		case "tuic":
 			pw, _ := u.User.Password()
@@ -143,18 +170,23 @@ func ParseShareLines(lines []string) (nodes []map[string]any, notices []string) 
 				"tls": map[string]any{"enabled": true,
 					"server_name": orEmpty(q.Get("peer"), orEmpty(q.Get("sni"), u.Hostname()))}}
 		case "socks", "socks5":
-			pw, _ := u.User.Password()
+			if u.Hostname() == "" {
+				return nil, nil, fmt.Errorf("SOCKS link requires a server")
+			}
 			node = map[string]any{"type": "socks", "tag": tag,
-				"server": u.Hostname(), "server_port": atoi(u.Port(), 1080), "version": "5",
-				"username": u.User.Username(), "password": pw}
+				"server": u.Hostname(), "server_port": atoi(u.Port(), 1080), "version": "5"}
+			if u.User != nil {
+				node["username"] = u.User.Username()
+				if pw, ok := u.User.Password(); ok {
+					node["password"] = pw
+				}
+			}
 		case "sub":
 			// Report nested subscription links; configure them in sakamoto.yaml.
-			if dec, err := b64decode(u.Host); err == nil {
-				notices = append(notices, fmt.Sprintf("  · nested sub:// subscription: %s\n", string(dec)))
-			}
+			nested++
 		}
 		// Shadowrocket obfs= selects websocket or gRPC transport.
-		if node != nil && node["type"] != "hysteria2" && node["type"] != "tuic" {
+		if node != nil && node["type"] != "hysteria2" && node["type"] != "tuic" && node["type"] != "vmess" {
 			switch q.Get("obfs") {
 			case "websocket", "ws":
 				node["transport"] = map[string]any{"type": "ws", "path": orEmpty(q.Get("path"), "/")}
@@ -174,7 +206,10 @@ func ParseShareLines(lines []string) (nodes []map[string]any, notices []string) 
 		}
 		out = append(out, node)
 	}
-	return out, notices
+	if nested > 0 {
+		notices = append(notices, fmt.Sprintf("  · skipped %d nested subscriptions\n", nested))
+	}
+	return out, notices, nil
 }
 
 // NodeLinkInfo is the credential-free view of one share link, safe to expose
@@ -216,7 +251,10 @@ func ParseShareLinkInfo(raw string) (*NodeLinkInfo, error) {
 	if IsSubLink(raw) {
 		return nil, ErrSubLink
 	}
-	nodes, _ := ParseShareLines([]string{raw})
+	nodes, _, err := ParseShareLinesChecked([]string{raw})
+	if err != nil {
+		return nil, err
+	}
 	if len(nodes) != 1 {
 		return nil, fmt.Errorf("unsupported or invalid node share link")
 	}

@@ -41,6 +41,9 @@ public enum TunnelConfigurationReceiptStore {
               let data = try? JSONEncoder().encode(receipt) else { return }
         defaults?.set(data, forKey: key)
     }
+    public static func clear(defaults: UserDefaults? = UserDefaults(suiteName: SystemSurfaceStore.groupIdentifier)) {
+        defaults?.removeObject(forKey: key)
+    }
     public static func read(defaults: UserDefaults? = UserDefaults(suiteName: SystemSurfaceStore.groupIdentifier)) -> TunnelConfigurationReceipt? {
         defaults?.data(forKey: key).flatMap { try? JSONDecoder().decode(TunnelConfigurationReceipt.self, from: $0) }
     }

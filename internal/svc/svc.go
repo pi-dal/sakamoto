@@ -28,38 +28,41 @@ func SockPath() string { return filepath.Join(config.DefaultDir(), SockName) }
 
 // Server is the root supervisor process.
 type Server struct {
-	cfgPath          string
-	workDir          string
-	mu               sync.Mutex
-	lifecycle        sync.Mutex
-	repairMu         sync.Mutex
-	repairing        bool
-	child            *exec.Cmd
-	childDone        chan struct{}
-	dnsRun           sysdns.Runner
-	dnsActivateRun   func(context.Context, ...string) (string, error)
-	dnsProbeContext  func(context.Context, string) error
-	dnsPorts         func(string) error
-	vpnConnected     func() bool
-	command          func(string, string, string) *exec.Cmd
-	dnsStatus        string
-	dnsWait          time.Duration
-	started          time.Time
-	restarts         int
-	logs             []string
-	cancelStart      context.CancelFunc
-	retryDelay       time.Duration
-	stablePeriod     time.Duration
-	circuit          recovery.Circuit
-	stateErr         error
-	version          string
-	epoch            func(context.Context) (time.Time, error)
-	retryGen         int
-	activeConfigHash string
-	stopRequested    bool
-	retryOwner       *exec.Cmd
-	retryOwnerGen    int
-	retryActive      bool
+	cfgPath                string
+	workDir                string
+	mu                     sync.Mutex
+	lifecycle              sync.Mutex
+	repairMu               sync.Mutex
+	repairing              bool
+	child                  *exec.Cmd
+	childDone              chan struct{}
+	dnsRun                 sysdns.Runner
+	dnsActivateRun         func(context.Context, ...string) (string, error)
+	dnsProbeContext        func(context.Context, string) error
+	dnsPorts               func(string) error
+	vpnConnected           func() bool
+	command                func(string, string, string) *exec.Cmd
+	dnsStatus              string
+	dnsWait                time.Duration
+	started                time.Time
+	restarts               int
+	logs                   []string
+	cancelStart            context.CancelFunc
+	retryDelay             time.Duration
+	stablePeriod           time.Duration
+	circuit                recovery.Circuit
+	stateErr               error
+	version                string
+	epoch                  func(context.Context) (time.Time, error)
+	retryGen               int
+	activeConfigHash       string
+	activeInputDigest      string
+	protectedRuntimeParent string
+	protectedStateParent   string
+	stopRequested          bool
+	retryOwner             *exec.Cmd
+	retryOwnerGen          int
+	retryActive            bool
 }
 
 func NewServer(cfgPath, workDir string) *Server {
@@ -73,6 +76,10 @@ func NewServer(cfgPath, workDir string) *Server {
 			cmd.Dir = dir
 			return cmd
 		},
+	}
+	if os.Geteuid() == 0 {
+		s.protectedRuntimeParent = "/private/var/run"
+		s.protectedStateParent = "/private/var/db"
 	}
 	s.circuit, s.stateErr = recovery.LoadCircuit(workDir)
 	s.epoch = s.coreEpoch
@@ -325,10 +332,49 @@ func (s *Server) startChecked(expected *exec.Cmd, generation int, guardGeneratio
 	if s.vpnConnected() {
 		return "start failed: disconnect Shadowrocket VPN first; two TUNs cannot run together"
 	}
-	if err := validateAPIService(s.cfgPath); err != nil {
+	binary, err := s.selectedBinary()
+	if err != nil {
 		return "start failed: " + err.Error()
 	}
-	dnsCfg, guard, err := s.dnsPlan()
+	if guardInputs {
+		if s.runtimeHash() != s.activeConfigHash {
+			return "start failed: staged configuration differs from the applied runtime; explicit activation required"
+		}
+	}
+	cmd := s.command(binary, s.cfgPath, s.workDir)
+	candidate, captureErr := s.captureRuntime(cmd)
+	if captureErr != nil {
+		return "start failed: recovery snapshot: " + captureErr.Error()
+	}
+	defer func() {
+		if candidate != nil {
+			candidate.Close()
+		}
+	}()
+	if guardInputs && s.activeInputDigest != "" && candidate.InputDigest() != s.activeInputDigest {
+		return "start failed: rule assets changed; explicit activation required"
+	}
+	configPath, configDir := s.cfgPath, s.workDir
+	var snapshot string
+	if s.protectedRuntimeParent != "" {
+		// The macOS runtime directory and its ancestors are system-owned. Never
+		// put the checked generation below the user-managed working directory.
+		snapshot, err = candidate.Materialize(s.protectedRuntimeParent, s.protectedStateParent)
+		if err != nil {
+			return "start failed: could not capture private core inputs"
+		}
+		defer func() {
+			if snapshot != "" {
+				_ = os.RemoveAll(snapshot)
+			}
+		}()
+		configDir, configPath = snapshot, filepath.Join(snapshot, "config.json")
+		cmd = s.command(binary, configPath, s.workDir)
+	}
+	if err := validateAPIService(configPath); err != nil {
+		return "start failed: " + err.Error()
+	}
+	dnsCfg, guard, err := dnsPlanFor(configDir, configPath)
 	if err != nil {
 		return "start failed: " + err.Error()
 	}
@@ -349,25 +395,6 @@ func (s *Server) startChecked(expected *exec.Cmd, generation int, guardGeneratio
 	if ctx.Err() != nil || recovery.Held(s.workDir) {
 		return "start canceled"
 	}
-	binary, err := s.selectedBinary()
-	if err != nil {
-		return "start failed: " + err.Error()
-	}
-	if guardInputs {
-		if s.runtimeHash() != s.activeConfigHash {
-			return "start failed: staged configuration differs from the applied runtime; explicit activation required"
-		}
-	}
-	cmd := s.command(binary, s.cfgPath, s.workDir)
-	candidate, captureErr := s.captureRuntime(cmd)
-	if captureErr != nil {
-		return "start failed: recovery snapshot: " + captureErr.Error()
-	}
-	defer func() {
-		if candidate != nil {
-			candidate.Close()
-		}
-	}()
 	cmd.Stdout, cmd.Stderr = logWriter{s}, logWriter{s}
 	if ctx.Err() != nil || recovery.Held(s.workDir) {
 		return "start canceled"
@@ -376,9 +403,14 @@ func (s *Server) startChecked(expected *exec.Cmd, generation int, guardGeneratio
 		return "start failed: " + err.Error()
 	}
 	done := make(chan struct{})
+	if snapshot != "" {
+		go func(dir string) { <-done; _ = os.RemoveAll(dir) }(snapshot)
+		snapshot = ""
+	}
 	s.mu.Lock()
 	s.child, s.childDone, s.started = cmd, done, time.Now()
 	s.activeConfigHash = candidate.Fingerprint()
+	s.activeInputDigest = candidate.InputDigest()
 	s.restarts++
 	gen := s.restarts
 	s.dnsStatus = "off"
@@ -434,6 +466,14 @@ func (s *Server) startChecked(expected *exec.Cmd, generation int, guardGeneratio
 // singBoxExecutable supports Apple Silicon, Intel, and non-default Homebrew
 // prefixes. The installer pins the resolved path in the launchd environment.
 func singBoxExecutable() string {
+	if os.Geteuid() == 0 {
+		// A missing or replaced privileged dependency must never trigger PATH lookup.
+		binary := os.Getenv("SAKAMOTO_SING_BOX")
+		if filepath.IsAbs(binary) && protectedExecutable(binary) {
+			return binary
+		}
+		return "/dev/null"
+	}
 	if binary := os.Getenv("SAKAMOTO_SING_BOX"); binary != "" {
 		if info, err := os.Stat(binary); err == nil && !info.IsDir() && info.Mode().Perm()&0111 != 0 {
 			return binary
@@ -445,6 +485,33 @@ func singBoxExecutable() string {
 		}
 	}
 	return "sing-box"
+}
+
+// protectedExecutable checks the entire path, including the executable itself.
+func protectedExecutable(path string) bool {
+	if filepath.Clean(path) != path {
+		return false
+	}
+	for current := path; ; current = filepath.Dir(current) {
+		info, err := os.Lstat(current)
+		if err != nil || info.Mode().Perm()&0022 != 0 {
+			return false
+		}
+		st, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || st.Uid != 0 {
+			return false
+		}
+		if current == path {
+			if !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 {
+				return false
+			}
+		} else if !info.IsDir() {
+			return false
+		}
+		if current == "/" {
+			return true
+		}
+	}
 }
 
 // validateAPIService fails closed before a root child could expose an API with

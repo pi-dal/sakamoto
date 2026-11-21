@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"time"
 
 	"github.com/pi-dal/sakamoto/internal/config"
@@ -37,9 +40,14 @@ func dnsPlanFor(dir, path string) (*config.Config, bool, error) {
 			Type, Tag, Listen string
 			Port              int `json:"listen_port"`
 		} `json:"inbounds"`
-		DNS struct {
-			Final   string                               `json:"final"`
-			Servers []struct{ Tag, Type, Detour string } `json:"servers"`
+		Outbounds []dnsOutbound
+		DNS       struct {
+			Final   string `json:"final"`
+			Servers []struct {
+				Tag, Type, Detour, Server string
+				Resolver                  json.RawMessage `json:"domain_resolver"`
+			} `json:"servers"`
+			Rules []map[string]any `json:"rules"`
 		} `json:"dns"`
 		Route struct {
 			Rules []struct {
@@ -60,14 +68,76 @@ func dnsPlanFor(dir, path string) (*config.Config, bool, error) {
 	resolver := false
 	for _, d := range core.DNS.Servers {
 		if d.Tag == core.DNS.Final && (d.Type == "https" || d.Type == "tls") && d.Detour != "" && d.Detour != "direct" {
-			resolver = true
+			resolver = protectedDetour(core.Outbounds, d.Detour)
 		}
+	}
+	private := map[string]bool{}
+	hosts := map[string]bool{}
+	magic := false
+	for _, s := range core.DNS.Servers {
+		ip, err := netip.ParseAddr(s.Server)
+		private[s.Tag] = err == nil && ip.Unmap().IsPrivate() && s.Type == "udp" && s.Detour == ""
+		hosts[s.Tag] = s.Type == "hosts"
+		if s.Tag == "ts-dns" {
+			magic = s.Type == "udp" && s.Server == "100.100.100.100" && s.Detour == ""
+		}
+	}
+	for _, s := range core.DNS.Servers {
+		name := config.BootstrapName(s.Server)
+		magicName := magic && (name == "ts.net" || strings.HasSuffix(name, ".ts.net"))
+		if name == "" || (!magicName && !cfg.IsLocalDNSName(name)) {
+			continue
+		}
+		var resolver string
+		if json.Unmarshal(s.Resolver, &resolver) != nil {
+			var options struct{ Server string }
+			if json.Unmarshal(s.Resolver, &options) == nil {
+				resolver = options.Server
+			}
+		}
+		if (magicName && resolver != "ts-dns") || (!magicName && !private[resolver]) {
+			return nil, false, fmt.Errorf("unsafe private DNS bootstrap; regenerate before connecting")
+		}
+	}
+	rules := core.DNS.Rules
+	if cfg.RegionalDNS.Domains != "" {
+		// Verify authenticated these four exact-name rules and checked overlap.
+		if len(rules) < 4 || rules[0]["preferred_by"] != nil {
+			return nil, false, fmt.Errorf("unexpected regional DNS precedence")
+		}
+		rules = rules[4:]
+	}
+	if len(cfg.DNSGuard.LocalDomains) > 0 && !protectedPrivateRules(rules, cfg.DNSGuard.LocalDomains, private, hosts, magic) {
+		return nil, false, fmt.Errorf("private DNS routing differs from protected settings; regenerate before connecting")
 	}
 	hijack := len(core.Route.Rules) > 0 && core.Route.Rules[0].Action == "hijack-dns" && len(core.Route.Rules[0].Inbound) == 1 && core.Route.Rules[0].Inbound[0] == "protected-dns"
 	if !listener || !resolver || !hijack {
 		return nil, false, fmt.Errorf("protected DNS needs a regenerated config with native listener and proxy resolver")
 	}
 	return cfg, true, nil
+}
+
+// Check precedence as well as the destination. An earlier public rule can
+// consume the query before the private suffix rule is evaluated.
+func protectedPrivateRules(rules []map[string]any, suffixes []string, private, hosts map[string]bool, magic bool) bool {
+	names := make([]any, len(suffixes))
+	for i, s := range suffixes {
+		names[i] = s
+	}
+	for _, r := range rules {
+		server, _ := r["server"].(string)
+		if len(r) == 3 && r["domain"] != nil && r["action"] == "route" && hosts[server] {
+			continue
+		}
+		if magic && reflect.DeepEqual(r, map[string]any{"domain_suffix": []any{"ts.net"}, "server": "ts-dns"}) {
+			continue
+		}
+		if len(r) != 3 || !reflect.DeepEqual(r["domain_suffix"], names) {
+			return false
+		}
+		return (r["action"] == "route" && private[server]) || (r["action"] == "predefined" && r["rcode"] == "SERVFAIL")
+	}
+	return false
 }
 
 // protectDNS is invoked after child Start while the lifecycle lock is held.

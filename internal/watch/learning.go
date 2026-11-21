@@ -90,6 +90,32 @@ func (w *Watcher) learnCandidate(ctx context.Context, candidate experiment.Candi
 	}
 	probeCtx, stopProbes := context.WithTimeout(ctx, 25*time.Second)
 	defer stopProbes()
+	client, err := w.dialFn(probeCtx)
+	if err != nil {
+		result.Detail = "cannot confirm traffic mode"
+		return
+	}
+	defer client.Close()
+	modes, _ := client.SubscribeClashMode(probeCtx)
+	select {
+	case mode := <-modes:
+		if mode == nil || !strings.EqualFold(mode.Mode, "Rule") {
+			result.Detail = "learning requires Rule mode"
+			return
+		}
+	case <-probeCtx.Done():
+		return
+	}
+	// Cancellation closes in-flight HTTP requests. The core also refuses new
+	// direct-probe dials outside Rule, independently of stream latency.
+	go func() {
+		for mode := range modes {
+			if mode == nil || !strings.EqualFold(mode.Mode, "Rule") {
+				break
+			}
+		}
+		stopProbes()
+	}()
 	w.emit("info", "auto %s: checking direct and proxy origin reachability", candidate.Domain)
 	// Both requests use the real native routing exits and carry no app cookies.
 	direct := make(chan experiment.ProbeResult, 1)
@@ -150,7 +176,7 @@ func (w *Watcher) learnCandidate(ctx context.Context, candidate experiment.Candi
 		return
 	}
 	verified := false
-	verifyCtx, stop := context.WithTimeout(ctx, 10*time.Second)
+	verifyCtx, stop := context.WithTimeout(probeCtx, 10*time.Second)
 	defer stop()
 	for verifyCtx.Err() == nil {
 		result.Proxy = experiment.ProbeRoute(verifyCtx, raw, candidate)
@@ -166,7 +192,7 @@ func (w *Watcher) learnCandidate(ctx context.Context, candidate experiment.Candi
 	current, readErr := os.ReadFile(filepath.Join(dir, "config.json"))
 	afterEpoch, epochErr := w.learningCoreEpoch(ctx)
 	latest, loadErr := config.Load(w.cfgPath)
-	if verified && !recovery.Held(dir) && ctx.Err() == nil && readErr == nil && string(current) == string(raw) && epochErr == nil && afterEpoch.Equal(epoch) && loadErr == nil && candidateEnabled(latest, candidate) {
+	if verified && !recovery.Held(dir) && probeCtx.Err() == nil && readErr == nil && string(current) == string(raw) && epochErr == nil && afterEpoch.Equal(epoch) && loadErr == nil && candidateEnabled(latest, candidate) {
 		if err = experiment.CommitLiveRules(dir, next); err == nil {
 			result.State = "verified"
 			result.Detail = "direct checks failed; target verified after live rule update; core and existing connections retained"

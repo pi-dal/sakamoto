@@ -17,10 +17,13 @@ import (
 	"github.com/pi-dal/sakamoto/pkg/mobileconf"
 )
 
-func parseShareLinks(path string) []map[string]any {
+func parseShareLinks(path string) ([]map[string]any, error) {
 	f, err := os.Open(path)
+	if os.IsNotExist(err) || path == "" {
+		return nil, nil
+	}
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer func() { _ = f.Close() }()
 	var lines []string
@@ -28,18 +31,21 @@ func parseShareLinks(path string) []map[string]any {
 	for sc.Scan() {
 		lines = append(lines, sc.Text())
 	}
+	if err := sc.Err(); err != nil {
+		return nil, err
+	}
 	return parseShareLines(lines)
 }
 
 // parseShareLines delegates to the shared implementation in pkg/mobileconf,
 // which also backs the iOS manual-node validation. Notices (nested sub://
 // links) keep flowing to the host report as before.
-func parseShareLines(lines []string) []map[string]any {
-	nodes, notices := mobileconf.ParseShareLines(lines)
+func parseShareLines(lines []string) ([]map[string]any, error) {
+	nodes, notices, err := mobileconf.ParseShareLinesChecked(lines)
 	for _, notice := range notices {
 		reportf("%s", notice)
 	}
-	return nodes
+	return nodes, err
 }
 
 // ---------------- Subscription fetching ----------------
@@ -86,6 +92,9 @@ func fetchSub(src config.SubSource, hc *http.Client) ([]map[string]any, error) {
 			switch o["type"] { // Keep only leaf protocol nodes.
 			case "selector", "urltest", "direct", "block", "dns", "", nil:
 			default:
+				if settings, ok := o["tls"].(map[string]any); ok && settings["insecure"] == true {
+					return nil, fmt.Errorf("subscription requests unverified TLS")
+				}
 				nodes = append(nodes, o)
 			}
 		}
@@ -97,7 +106,25 @@ func fetchSub(src config.SubSource, hc *http.Client) ([]map[string]any, error) {
 			return nil, fmt.Errorf("subscription %s YAML parse failed: %w", src.Name, err)
 		}
 		for _, p := range c.Proxies {
+			// Clash fingerprint pins the certificate. The native TLS option pins
+			// the public key, which has different verification semantics.
+			for key, value := range p {
+				if strings.EqualFold(key, "fingerprint") && value != nil && value != "" {
+					return nil, fmt.Errorf("unsupported Clash certificate fingerprint")
+				}
+			}
 			if n := clashToOutbound(p); n != nil {
+				if n["type"] == "vmess" {
+					ws, _ := p["ws-opts"].(map[string]any)
+					headers, _ := ws["headers"].(map[string]any)
+					tlsMode := ""
+					if p["tls"] != nil {
+						tlsMode = fmt.Sprint(p["tls"])
+					}
+					if err := mobileconf.ConfigureVMess(n, tlsMode, str(p, "servername"), str(p, "network"), str(headers, "Host"), str(ws, "path"), ""); err != nil {
+						return nil, err
+					}
+				}
 				nodes = append(nodes, n)
 			}
 		}
@@ -105,7 +132,10 @@ func fetchSub(src config.SubSource, hc *http.Client) ([]map[string]any, error) {
 		if dec, err := base64.StdEncoding.DecodeString(txt); err == nil {
 			txt = string(dec)
 		}
-		nodes = parseShareLines(strings.Split(txt, "\n"))
+		nodes, err = parseShareLines(strings.Split(txt, "\n"))
+		if err != nil {
+			return nil, err
+		}
 	}
 	if len(nodes) == 0 {
 		return nil, fmt.Errorf("subscription %s contains no supported nodes (%s)", src.Name, format)

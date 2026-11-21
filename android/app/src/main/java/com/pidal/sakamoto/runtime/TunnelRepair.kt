@@ -33,9 +33,7 @@ object TunnelRepair {
                 val instance = TunnelBoxService.verifiedInstance()
                 if (!current()) return@withContext
                 if (instance > 0) MobilecoreRuntime.recordCoreIdentity(instance)
-                val profileReady = checkOnly || (instance > 0 && !restart) || ConfigRepository.readGeneratedContent(context) != null || runCatching {
-                    Mobilecore.newRecoverySession(context.filesDir.absolutePath).retainedConfig()
-                }.isSuccess
+                val profileReady = checkOnly || (instance > 0 && !restart) || ConfigRepository.readGeneratedContent(context) != null
                 val decision = Mobilecore.repairRuntimeJSON(context.filesDir.absolutePath, observed, instance > 0, checkOnly, restart, profileReady)
                 publish(decision)
                 val action = JSONObject(decision).getString("action")
@@ -70,7 +68,9 @@ object TunnelRepair {
                 publish(result("degraded", action, false, "Core startup is unconfirmed. Disconnect to cancel, or check Android VPN settings."))
             }
         } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-        catch (error: Exception) {
+        catch (legacy: TunnelPackage.LegacyRouteSource) {
+            publish(result("failed", "none", false, legacy.message.orEmpty()))
+        } catch (error: Exception) {
             publish(result("failed", "none", false, "Repair could not confirm the core. Disconnect in Android VPN settings, then review the saved configuration."))
         } finally {
             synchronized(lock) { if (current()) MobilecoreRuntime.recordRepair(MobilecoreRuntime.state.value.repairResult, false) }

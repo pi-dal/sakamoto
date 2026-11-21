@@ -253,7 +253,7 @@ class ProfilesFragment : androidx.fragment.app.Fragment() {
                 if (live) check(withContext(Dispatchers.IO) { CommandClientRuntime.selectOutbound(selectedGroup, row.tag) }) { MobilecoreRuntime.state.value.notice ?: getString(R.string.edit_failed) }
                 else {
                     val saved = ConfigRepository.load(requireContext())
-                    ConfigRepository.saveGeneratedEdit(requireContext(), ConfigEdits.groupDefault(saved.generatedContent, selectedGroup, row.tag))
+                    ConfigRepository.saveGeneratedEdit(requireContext(), ConfigEdits.groupDefault(saved.generatedContent, selectedGroup, row.tag), expected = saved)
                     refresh(emptyList())
                 }
                 feedback(getString(if (live) R.string.profile_selection_requested else R.string.saved_pending_apply))

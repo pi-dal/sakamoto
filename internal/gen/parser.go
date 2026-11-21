@@ -101,12 +101,16 @@ func readConfSource(source string, hc *http.Client) ([]byte, error) {
 // imports cache. Parsing itself lives in pkg/mobileconf (shared with the iOS
 // app); this struct keeps the field names the rest of the generator consumes.
 type parsedConf struct {
-	bk      buckets
-	general map[string]string
-	hosts   map[string]string
-	rawRoot string
-	geoip   [][2]string // (cc, target)
-	final   string
+	bk              buckets
+	ordered         []mobileconf.OrderedRule
+	overrides       []mobileconf.OrderedRule
+	prefix          []mobileconf.OrderedRule
+	general         map[string]string
+	hosts           map[string]string
+	rawRoot         string
+	directDomainSet string
+	geoip           [][2]string // (cc, target)
+	final           string
 	// Unsupported sections retained only for the migration report.
 	rewrites []string // [URL Rewrite]
 	mitm     []string // [MITM]
@@ -177,7 +181,7 @@ func parseConfRec(path string, hc *http.Client, seen map[string]bool) (*parsedCo
 		}
 	}
 	if seen[path] {
-		return nil, fmt.Errorf("configuration include cycle: %s", path)
+		return nil, fmt.Errorf("configuration include cycle")
 	}
 	seen[path] = true
 	defer delete(seen, path)
@@ -193,7 +197,7 @@ func parseConfRec(path string, hc *http.Client, seen map[string]bool) (*parsedCo
 		return nil, err
 	}
 	p := &parsedConf{
-		bk: doc.Buckets, general: doc.General, hosts: doc.Hosts,
+		bk: doc.Buckets, ordered: doc.Ordered, general: doc.General, hosts: doc.Hosts,
 		geoip: doc.GeoIP, final: doc.Final,
 		rewrites: doc.Rewrites, mitm: doc.Mitm, proxies: doc.Proxies,
 		pgroups: doc.PGroups, scripts: doc.Scripts,
@@ -203,13 +207,13 @@ func parseConfRec(path string, hc *http.Client, seen map[string]bool) (*parsedCo
 	for _, inc := range doc.Includes {
 		includePath, err := resolveInclude(path, inc)
 		if err != nil {
-			return nil, fmt.Errorf("invalid include %q: %w", inc, err)
+			return nil, fmt.Errorf("invalid include source")
 		}
 		sub, err := parseConfRec(includePath, hc, seen)
 		if err != nil {
 			return nil, fmt.Errorf("cannot merge include %s: %v (keep relative rule files alongside the conf)", displaySource(inc), errString(err))
 		}
-		reportf("  + include: %s\n", inc)
+		reportf("  + merged include\n")
 		for tgt, m := range sub.bk {
 			for k, s := range m {
 				if p.bk[tgt] == nil {
@@ -235,7 +239,11 @@ func parseConfRec(path string, hc *http.Client, seen map[string]bool) (*parsedCo
 				p.hosts[name] = ip
 			}
 		}
+		p.ordered = append(p.ordered, sub.ordered...)
 		p.geoip = append(p.geoip, sub.geoip...)
+		if p.final != "" && sub.final != "" && !strings.EqualFold(p.final, sub.final) {
+			return nil, fmt.Errorf("conflicting FINAL action in included configuration")
+		}
 		if p.final == "" {
 			p.final = sub.final
 		}

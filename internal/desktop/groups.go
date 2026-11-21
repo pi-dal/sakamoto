@@ -55,31 +55,10 @@ func (c *Controller) AutomaticGroups() (AutomaticGroups, error) {
 			return AutomaticGroups{}, errors.New("could not read generated proxy groups; regenerate configuration")
 		}
 	}
-	// ManualPick is the generated entry-node set, including excluded nodes but
-	// excluding chain exits. Do not infer candidates from live URL-test members.
-	entries := map[string]bool{}
-	for _, node := range root.Outbounds {
-		if node["tag"] == "ManualPick" {
-			members, _ := node["outbounds"].([]any)
-			for _, value := range members {
-				if tag, ok := value.(string); ok {
-					entries[tag] = true
-				}
-			}
-		}
-	}
 	for _, groupTag := range []string{"RealityAuto", "OthersAuto"} {
 		group := AutomaticGroup{Tag: groupTag}
 		seen := map[string]bool{}
-		for _, node := range root.Outbounds {
-			tag, _ := node["tag"].(string)
-			category := gen.AutomaticGroupTag(node)
-			if node["type"] == "socks" {
-				category = "OthersAuto"
-			}
-			if !entries[tag] || category != groupTag || seen[tag] {
-				continue
-			}
+		for _, tag := range gen.AutomaticGroupCandidates(root.Outbounds, groupTag) {
 			seen[tag] = true
 			group.Nodes = append(group.Nodes, AutomaticGroupNode{Tag: tag, Present: true, Excluded: slices.Contains(cfg.AutomaticGroupExclusions[groupTag], tag)})
 		}

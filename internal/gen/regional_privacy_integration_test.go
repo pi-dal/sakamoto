@@ -47,6 +47,11 @@ func TestRegionalDNSGenerationAndRecovery(t *testing.T) {
 		return b
 	}
 	base := generate()
+	write(conf, strings.Replace(rules, "FINAL,DIRECT", "FINAL,PROXY", 1))
+	if regionaldns.CheckRecovery(generate(), base) == nil {
+		t.Fatal("accepted a direct fallback after tightening FINAL to PROXY")
+	}
+	write(conf, rules)
 	pin, err := regionaldns.RelayFingerprint(base, "Approved")
 	if err != nil {
 		t.Fatal(err)

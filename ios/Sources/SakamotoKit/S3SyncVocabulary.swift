@@ -8,7 +8,7 @@ public struct S3SyncSettings: Codable, Equatable, Sendable {
     public var prefix = "sakamoto"
     public init() {}
 }
-public struct S3SyncCredentials: Codable, Sendable {
+public struct S3SyncCredentials: Codable, Equatable, Sendable {
     public var accessKey: String
     public var secretKey: String
     public var sessionToken: String

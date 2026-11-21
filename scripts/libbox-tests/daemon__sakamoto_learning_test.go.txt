@@ -79,6 +79,39 @@ func TestSakamotoVerifiedLearningThroughNativeExits(t *testing.T) {
     }
 }
 
+func TestSakamotoModeChangeStopsNativeProbe(t *testing.T) {
+    // Hold the HTTP response so a real request is in flight at the switch.
+    listener, err := net.Listen("tcp", "127.0.0.1:0")
+    if err != nil { t.Fatal(err) }
+    defer listener.Close()
+    service := daemon.NewStartedService(daemon.ServiceOptions{Context: include.Context(context.Background())})
+    defer func(){ service.CloseService(); service.Close() }()
+    config := fmt.Sprintf(`{"log":{"disabled":true},"outbounds":[{"type":"socks","tag":"direct","server":"127.0.0.1","server_port":%d}],"route":{"rules":[{"clash_mode":"Global","action":"reject"}],"final":"direct"}}`, listener.Addr().(*net.TCPAddr).Port)
+    if err := service.StartOrReloadService(context.Background(), config, nil); err != nil { t.Fatal(err) }
+    prober := mobileOriginProber{service, service.RunningInstanceID()}
+    done := make(chan error, 1)
+    go func(){ _, err := prober.ProbeOrigin("origin.example", 80, "direct", 8000); done <- err }()
+    listener.(*net.TCPListener).SetDeadline(time.Now().Add(2*time.Second))
+    conn, err := listener.Accept(); if err != nil { t.Fatal(err) }; defer conn.Close()
+    conn.SetDeadline(time.Now().Add(2*time.Second))
+    var hello [2]byte
+    if _, err := io.ReadFull(conn, hello[:]); err != nil { t.Fatal(err) }
+    if _, err := io.CopyN(io.Discard,conn,int64(hello[1])); err != nil { t.Fatal(err) }
+    if _, err := conn.Write([]byte{5,0}); err != nil { t.Fatal(err) }
+    var head [5]byte
+    if _, err := io.ReadFull(conn,head[:]); err != nil || head[3] != 3 { t.Fatal("expected domain dial",err) }
+    if _, err := io.CopyN(io.Discard,conn,int64(head[4])+2); err != nil { t.Fatal(err) }
+    if _, err := conn.Write([]byte{5,0,0,1,127,0,0,1,0,80}); err != nil { t.Fatal(err) }
+    reader := bufio.NewReader(conn)
+    request, err := http.ReadRequest(reader); if err != nil { t.Fatal(err) }; request.Body.Close()
+    if _, err := service.SetClashMode(context.Background(), &daemon.ClashMode{Mode:"Global"}); err != nil { t.Fatal(err) }
+    select { case err := <-done: if err == nil { t.Fatal("probe survived mode change") }; case <-time.After(time.Second): t.Fatal("probe was not canceled") }
+    if _, err := reader.ReadByte(); err != io.EOF { t.Fatalf("in-flight connection did not close: %v", err) }
+    if _, err := prober.ProbeOrigin("origin.example", 80, "direct", 500); err == nil { t.Fatal("new direct probe accepted") }
+    listener.(*net.TCPListener).SetDeadline(time.Now().Add(100*time.Millisecond))
+    if another, err := listener.Accept(); err == nil { another.Close(); t.Fatal("Global opened a direct socket") }
+}
+
 func TestSakamotoRegionalProbeIsolation(t *testing.T) {
     var code, directConnections, proxyConnections atomic.Int32
     code.Store(200)

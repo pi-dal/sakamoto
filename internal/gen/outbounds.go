@@ -12,14 +12,43 @@ import (
 func AutomaticGroupTag(node map[string]any) string {
 	typeName, _ := node["type"].(string)
 	switch typeName {
-	case "", "selector", "urltest", "direct", "block", "dns", "socks":
+	case "", "selector", "urltest", "direct", "block", "dns":
 		return ""
+	case "socks":
+		return "OthersAuto"
 	}
 	tag, _ := node["tag"].(string)
 	if isReality(node) || strings.Contains(strings.ToLower(tag), "reality") {
 		return "RealityAuto"
 	}
 	return "OthersAuto"
+}
+
+// AutomaticGroupCandidates reads a generated JSON outbound list. ManualPick
+// lists entry nodes, including those excluded from automatic testing.
+func AutomaticGroupCandidates(outbounds []map[string]any, group string) []string {
+	entries := make(map[string]bool)
+	for _, row := range outbounds {
+		if row["tag"] != "ManualPick" {
+			continue
+		}
+		members, _ := row["outbounds"].([]any)
+		for _, value := range members {
+			if tag, ok := value.(string); ok {
+				entries[tag] = true
+			}
+		}
+		break
+	}
+	var candidates []string
+	for _, node := range outbounds {
+		tag, _ := node["tag"].(string)
+		if entries[tag] && AutomaticGroupTag(node) == group {
+			candidates = append(candidates, tag)
+			delete(entries, tag)
+		}
+	}
+	return candidates
 }
 
 func automaticMembers(group string, tags, excluded []string) ([]string, error) {
@@ -53,15 +82,22 @@ func buildOutbounds(o Options, cfg *config.Config, hc *http.Client) ([]map[strin
 		}
 	}
 	// Prefer allowlisted srjson and nodes.txt entries, then subscriptions; deduplicate tags.
-	var nodes []map[string]any
+	nodes, err := parseSRNodes(o.ProfileSRNodes, nil, nil)
+	if err != nil {
+		return nil, nil, "", nil, err
+	}
 	if len(allow) > 0 {
-		imported, err := srJSONNodes(o.SRJSONPath, allow)
+		imported, err := srJSONNodes(o.SRJSONPath, allow, o.CapturedSRNodes)
 		if err != nil {
 			return nil, nil, "", nil, fmt.Errorf("read Shadowrocket export: %w", err)
 		}
 		nodes = append(nodes, imported...)
 	}
-	nodes = append(nodes, parseShareLinks(o.NodesFile)...)
+	manualNodes, readErr := parseShareLinks(o.NodesFile)
+	if readErr != nil {
+		return nil, nil, "", nil, readErr
+	}
+	nodes = append(nodes, manualNodes...)
 	for _, s := range cfg.Subscriptions {
 		imported, err := fetchSub(s, hc)
 		if err != nil {
@@ -143,7 +179,6 @@ func buildOutbounds(o Options, cfg *config.Config, hc *http.Client) ([]map[strin
 			otherTags = append(otherTags, n["tag"].(string))
 		}
 	}
-	var err error
 	realityTags, err = automaticMembers("RealityAuto", realityTags, cfg.AutomaticGroupExclusions["RealityAuto"])
 	if err != nil {
 		return nil, nil, "", nil, err

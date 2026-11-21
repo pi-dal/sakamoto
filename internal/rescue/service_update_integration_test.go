@@ -96,7 +96,7 @@ func TestRepairServiceUpdateRetainsExecutableAndRollsBack(t *testing.T) {
 				rescueOK(t, os.WriteFile(path, []byte(data), 0755))
 			}
 			plistPath := filepath.Join(dir, "daemon.plist")
-			plist, _ := json.Marshal(map[string]any{"Label": "dev.sakamoto.daemon", "ProgramArguments": []string{oldBinary, "daemon"}, "EnvironmentVariables": map[string]string{"SAKAMOTO_DIR": dir}})
+			plist, _ := json.Marshal(map[string]any{"Label": "dev.sakamoto.daemon", "ProgramArguments": []string{oldBinary, "daemon"}, "EnvironmentVariables": map[string]string{"SAKAMOTO_DIR": dir, "SAKAMOTO_SING_BOX": oldBinary}})
 			rescueOK(t, os.WriteFile(plistPath, plist, 0644))
 			statePath := filepath.Join(dir, "os.json")
 			state, _ := json.Marshal(map[string]any{"runtime": dir, "loaded": true, "new": false, "fail_new": fail, "bootouts": 0})
@@ -185,6 +185,19 @@ func TestRepairServiceUpdateRetainsExecutableAndRollsBack(t *testing.T) {
 				Arguments []string `json:"ProgramArguments"`
 			}
 			rescueOK(t, json.Unmarshal(data, &installed))
+			var pins struct {
+				Env map[string]string `json:"EnvironmentVariables"`
+			}
+			rescueOK(t, json.Unmarshal(data, &pins))
+			corePin := pins.Env["SAKAMOTO_SING_BOX"]
+			if filepath.Dir(corePin) != out.Backup {
+				t.Fatal("core does not use protected generation")
+			}
+			coreBytes, readErr := os.ReadFile(corePin)
+			rescueOK(t, readErr)
+			if string(coreBytes) != "old executable" {
+				t.Fatal("incorrect core snapshot")
+			}
 			if !strings.HasPrefix(installed.Arguments[0], install+string(filepath.Separator)) {
 				t.Fatal("service still depends on the app/Homebrew path", installed.Arguments)
 			}

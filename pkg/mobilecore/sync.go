@@ -23,6 +23,25 @@ func ValidateS3SettingsJSON(settings string) error {
 // stay device-local; generated config JSON is never an accepted source name.
 // The caller adopts bundle then saves baseline, never the reverse.
 func SyncSourcesS3JSON(settings, credentials, local, baseline string) (string, error) {
+	request := NewS3SyncRequest()
+	return request.Run(settings, credentials, local, baseline)
+}
+
+// S3SyncRequest binds the caller's lifetime to both signed HTTP requests.
+type S3SyncRequest struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+func NewS3SyncRequest() *S3SyncRequest {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	return &S3SyncRequest{ctx: ctx, cancel: cancel}
+}
+
+func (r *S3SyncRequest) Cancel() { r.cancel() }
+
+func (r *S3SyncRequest) Run(settings, credentials, local, baseline string) (string, error) {
+	defer r.Cancel()
 	var s sourcesync.Settings
 	var c sourcesync.Credentials
 	var base sourcesync.Baseline
@@ -36,9 +55,7 @@ func SyncSourcesS3JSON(settings, credentials, local, baseline string) (string, e
 	if err != nil {
 		return "", err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	result, err := sourcesync.Sync(ctx, s, c, bundle, base, nil)
+	result, err := sourcesync.Sync(r.ctx, s, c, bundle, base, nil)
 	if err != nil {
 		return "", err
 	}

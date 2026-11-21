@@ -76,14 +76,14 @@ object SystemStatusSurface {
         if (job != null) return
         val app = context.applicationContext
         job = CoroutineScope(SupervisorJob() + Dispatchers.Main).launch {
-            val preferenceChanges = callbackFlow<Unit> {
-                val prefs = app.getSharedPreferences("experiments", Context.MODE_PRIVATE)
+            val preferenceChanges = ConfigRepository.changes.map { ExperimentRuntime.preferences(app) }.distinctUntilChanged().flatMapLatest { prefs -> callbackFlow<Unit> {
                 val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
                     if (key == "settings" || key == "learned") trySend(Unit)
                 }
                 prefs.registerOnSharedPreferenceChangeListener(listener)
+                trySend(Unit)
                 awaitClose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
-            }
+            } }
             // Decode settings only on a persisted change, never on each
             // group, traffic or network snapshot.
             val metadata = merge(ConfigRepository.changes.map { Unit }, preferenceChanges)

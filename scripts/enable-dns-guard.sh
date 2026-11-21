@@ -14,9 +14,9 @@ if [[ "$dir" == "$HOME/.config/sakamoto" ]]; then label=dev.pi-dal.sing-box; els
 plist="/Library/LaunchDaemons/$label.plist"
 [[ -f "$plist" ]] || { echo 'Unknown root service layout; perform a reviewed manual upgrade instead.' >&2; exit 1; }
 python3 - "$plist" "$bin" "$dir" "$HOME" <<'PY'
-import os,plistlib,sys
+import filecmp,os,plistlib,sys
 p=plistlib.load(open(sys.argv[1],'rb'));args=p.get('ProgramArguments',[]);env=p.get('EnvironmentVariables',{})
-if len(args)<2 or args[1]!='daemon' or os.path.realpath(args[0])!=os.path.realpath(sys.argv[2]):
+if len(args)<2 or args[1]!='daemon' or not filecmp.cmp(args[0],sys.argv[2],shallow=False):
  raise SystemExit('Root plist does not use this installed CLI; stop before network changes')
 if env.get('SAKAMOTO_DIR') and env['SAKAMOTO_DIR']!=sys.argv[3]:raise SystemExit('Root service directory differs from candidate directory')
 if not env.get('SAKAMOTO_DIR') and sys.argv[3] not in (sys.argv[4]+'/.sakamoto',sys.argv[4]+'/.config/sakamoto'):
@@ -100,11 +100,7 @@ rollback() {
     echo 'Root service restored. Shadowrocket is now connected, so the old TUN will NOT be reconnected.' >&2
     return 0
   fi
-  # The user explicitly requested a protected connection. If it failed while
-  # switching from Shadowrocket, reconnect the saved *unprotected* config;
-  # leaving both VPNs off would repeat the outage.
-  restored="$(sock_cmd connect)" || return 1
-  [[ "$restored" == connected* ]] || { echo 'Old configuration restored but reconnect failed.' >&2; return 1; }
+  echo 'Previous files restored. VPN disconnected. Review the prior DNS policy before reconnecting.' >&2
 }
 committed=false
 trap '[[ "$committed" == true ]] || rollback' EXIT

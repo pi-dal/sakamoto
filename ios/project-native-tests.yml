@@ -7,6 +7,9 @@ targets:
     platform: iOS
     sources:
       - path: AppTests
+      # Compile the shared intents against the legacy widget host as well as the app.
+      - path: Shared/SystemSurfaceIntents.swift
+      - path: Widgets/SystemSurfaceConfiguration.swift
     dependencies:
       - target: Sakamoto
       - framework: Frameworks/Libbox.xcframework

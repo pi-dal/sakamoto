@@ -19,12 +19,19 @@ public struct TunnelStartOptions: Codable, Equatable, Sendable {
     public var experimentJSON: String?
     public var forceTailscaleDERP: Bool?
 
+    #if DEBUG
+    @TaskLocal public static var observePayloadRead: (@Sendable () -> Void)?
+    #endif
+
+    public var routeSourceVersion: Int?
+
     enum CodingKeys: String, CodingKey {
         case configContent
-        case locale, profileID, experimentJSON, forceTailscaleDERP
+        case locale, profileID, experimentJSON, forceTailscaleDERP, routeSourceVersion
     }
 
-    public init(configContent: String, locale: String? = nil, profileID: String? = nil, experimentJSON: String? = nil, forceTailscaleDERP: Bool? = nil) {
+    public init(configContent: String, locale: String? = nil, profileID: String? = nil, experimentJSON: String? = nil, forceTailscaleDERP: Bool? = nil, routeSourceVersion: Int? = nil) {
+        self.routeSourceVersion = routeSourceVersion
         self.configContent = configContent
         self.locale = locale
         self.profileID = profileID; self.experimentJSON = experimentJSON
@@ -34,11 +41,12 @@ public struct TunnelStartOptions: Codable, Equatable, Sendable {
     // MARK: Provider cold/manual start authorization
 
     public enum ResolutionError: LocalizedError {
-        case needsApply, missingConfiguration
+        case needsApply, missingConfiguration, unverifiedInstalledProfile
         public var errorDescription: String? {
             switch self {
             case .needsApply: return "Open sakamoto and apply the selected configuration before automatic connection."
             case .missingConfiguration: return "Missing or invalid configuration in VPN start options."
+            case .unverifiedInstalledProfile: return "The installed VPN configuration could not be verified. To replace it, disconnect when ready, remove the sakamoto VPN configuration in iOS Settings, then return to Config and apply the imported profile."
             }
         }
     }
@@ -55,11 +63,39 @@ public struct TunnelStartOptions: Codable, Equatable, Sendable {
             throw ResolutionError.missingConfiguration
         }
         if requiresApply && explicit == nil { throw ResolutionError.needsApply }
+        if explicit == nil, providerConfiguration["applyTransaction"] != nil {
+            guard let reference = try rollbackReference(for: providerConfiguration), let options = Self(providerConfiguration: reference) else { throw ResolutionError.needsApply }
+            try options.validateRouteSource()
+            return options
+        }
+        if explicit == nil, let id = providerConfiguration["profileID"] as? String, try hasInterruptedApply(for: id) {
+            guard let previous = try confirmed(for: id) else { throw ResolutionError.needsApply }
+            try previous.validateRouteSource()
+            return previous
+        }
         guard let resolved = explicit ?? Self(providerConfiguration: providerConfiguration),
               !resolved.configContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ResolutionError.missingConfiguration
         }
+        try resolved.validateRouteSource()
         return resolved
+    }
+
+    public func startResolvedProfile(startOptions: [String: NSObject]?, saved: [String: Any],
+                                     apply: (UUID?) async throws -> Void) async throws {
+        let transaction = (startOptions?["applyTransaction"] as? String).flatMap(UUID.init(uuidString:))
+        if startOptions?["applyTransaction"] != nil && transaction == nil { throw ResolutionError.needsApply }
+        try await apply(transaction)
+        // The controller owns transactional references. Cold resolution already
+        // chose the committed revision (which may be the predecessor).
+        if saved["applyTransaction"] == nil,
+           (startOptions?[Self.controllerConfirmsKey] as? NSNumber)?.boolValue != true {
+            try confirmStoredReference(saved)
+        }
+    }
+
+    public func validateRouteSource() throws {
+        try TunnelProfile.validateRouteSource(configContent, version: routeSourceVersion)
     }
 
     // MARK: NETunnelProviderProtocol.providerConfiguration
@@ -67,8 +103,38 @@ public struct TunnelStartOptions: Codable, Equatable, Sendable {
     /// The dictionary stored on NETunnelProviderProtocol.providerConfiguration
     /// so a cold provider launch (device reboot, kill switch re-arm) can
     /// resolve its start options without the app running.
+    public static let controllerConfirmsKey = "sakamoto.controllerConfirms"
+
+    public static func finalized(_ transaction: UUID, for profileID: String) throws -> Bool {
+        try ProviderProfileStore.finalized(transaction, for: profileID)
+    }
+
+    public static func hasInterruptedApply(for profileID: String) throws -> Bool {
+        try ProviderProfileStore.interruptedApply(for: profileID)
+    }
+
+    public static func confirmed(for profileID: String) throws -> Self? {
+        try ProviderProfileStore.confirmed(for: profileID)
+    }
+
+    public static func provisionalReference(_ candidate: [String: Any], transaction: UUID, previous: [String: Any]?) throws -> [String: Any] {
+        try ProviderProfileStore.provisionalReference(candidate, transaction: transaction, previous: previous)
+    }
+
+    /// Resolve the committed payload before staging the next preference write.
+    public static func rollbackReference(for saved: [String: Any]) throws -> [String: Any]? {
+        try ProviderProfileStore.rollbackReference(for: saved)
+    }
+
+    public func storedReference() throws -> [String: Any] { try ProviderProfileStore.save(self) }
+
+    @discardableResult public func confirmStoredReference(_ reference: [String: Any], previous: [String: Any]? = nil, transaction: UUID? = nil, afterWrite: () throws -> Void = {}) throws -> Bool {
+        try ProviderProfileStore.confirm(self, reference: reference, previous: previous, transaction: transaction, afterWrite: afterWrite)
+    }
+
     public var providerConfiguration: [String: Any] {
         var dict: [String: Any] = [CodingKeys.configContent.rawValue: configContent]
+        if let routeSourceVersion { dict[CodingKeys.routeSourceVersion.rawValue] = routeSourceVersion }
         if let locale {
             dict[CodingKeys.locale.rawValue] = locale
         }
@@ -82,6 +148,11 @@ public struct TunnelStartOptions: Codable, Equatable, Sendable {
     /// nil when configContent is missing: the provider must fail loudly at
     /// start rather than guess a configuration.
     public init?(providerConfiguration: [String: Any]) {
+        if providerConfiguration["payloadDigest"] != nil {
+            guard let stored = try? ProviderProfileStore.load(providerConfiguration) else { return nil }
+            self = stored
+            return
+        }
         guard let configContent = providerConfiguration[CodingKeys.configContent.rawValue] as? String else {
             return nil
         }
@@ -90,7 +161,8 @@ public struct TunnelStartOptions: Codable, Equatable, Sendable {
             locale: providerConfiguration[CodingKeys.locale.rawValue] as? String,
             profileID: providerConfiguration[CodingKeys.profileID.rawValue] as? String,
             experimentJSON: providerConfiguration[CodingKeys.experimentJSON.rawValue] as? String,
-            forceTailscaleDERP: providerConfiguration[CodingKeys.forceTailscaleDERP.rawValue] as? Bool
+            forceTailscaleDERP: providerConfiguration[CodingKeys.forceTailscaleDERP.rawValue] as? Bool,
+            routeSourceVersion: providerConfiguration[CodingKeys.routeSourceVersion.rawValue] as? Int
         )
     }
 
@@ -102,6 +174,7 @@ public struct TunnelStartOptions: Codable, Equatable, Sendable {
         var dict: [String: NSObject] = [
             CodingKeys.configContent.rawValue: configContent as NSString,
         ]
+        if let routeSourceVersion { dict[CodingKeys.routeSourceVersion.rawValue] = NSNumber(value: routeSourceVersion) }
         if let locale {
             dict[CodingKeys.locale.rawValue] = locale as NSString
         }
@@ -121,7 +194,8 @@ public struct TunnelStartOptions: Codable, Equatable, Sendable {
             locale: startTunnelOptions[CodingKeys.locale.rawValue] as? String,
             profileID: startTunnelOptions[CodingKeys.profileID.rawValue] as? String,
             experimentJSON: startTunnelOptions[CodingKeys.experimentJSON.rawValue] as? String,
-            forceTailscaleDERP: (startTunnelOptions[CodingKeys.forceTailscaleDERP.rawValue] as? NSNumber)?.boolValue
+            forceTailscaleDERP: (startTunnelOptions[CodingKeys.forceTailscaleDERP.rawValue] as? NSNumber)?.boolValue,
+            routeSourceVersion: (startTunnelOptions[CodingKeys.routeSourceVersion.rawValue] as? NSNumber)?.intValue
         )
     }
 }

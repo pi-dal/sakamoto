@@ -55,7 +55,7 @@ object CommandClientRuntime : CommandClientHandler {
         override fun updateClashMode(newMode: String?) = lifecycle { CommandClientRuntime.updateClashMode(newMode) }
     }
     @Volatile private var dataVisible = false
-    @Volatile private var learningEnabled = false
+    private val learningEnabled = java.util.concurrent.atomic.AtomicBoolean()
     private var observer: CommandClient? = null
     private val observerGeneration = java.util.concurrent.atomic.AtomicLong()
     private val observerExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
@@ -69,9 +69,9 @@ object CommandClientRuntime : CommandClientHandler {
         reconfigureObserver()
     }
 
-    @Synchronized fun setLearningEnabled(value: Boolean) {
-        if (learningEnabled == value) return
-        learningEnabled = value
+    fun setLearningEnabled(value: Boolean) {
+        // Learning lifecycle calls can hold the experiment lock while observer callbacks need it.
+        if (learningEnabled.getAndSet(value) == value) return
         reconfigureObserver()
     }
 
@@ -80,7 +80,7 @@ object CommandClientRuntime : CommandClientHandler {
     private fun reconfigureObserver() {
         val generation = observerGeneration.incrementAndGet()
         val data = dataVisible
-        val learning = learningEnabled
+        val learning = learningEnabled.get()
         observerExecutor.execute {
             if (observerGeneration.get() != generation) return@execute
             runCatching { observer?.disconnect() }
@@ -221,9 +221,10 @@ object CommandClientRuntime : CommandClientHandler {
     }
 
     /** Ask the running core to reload with the current staged config. */
-    fun reloadService(): Boolean {
+    fun reloadService(expected: com.pidal.sakamoto.runtime.ConfigRepository.StagedConfig? = null): Boolean {
         return try {
-            (client ?: error("Connect the tunnel before applying configuration")).serviceReload()
+            if (expected != null) com.pidal.sakamoto.bg.TunnelBoxService.applySaved(expected)
+            else (client ?: error("Connect the tunnel before applying configuration")).serviceReload()
             true
         } catch (e: Exception) {
             MobilecoreRuntime.setNotice("reload: ${e.message}")

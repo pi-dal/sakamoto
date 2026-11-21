@@ -31,6 +31,13 @@ func (f *learningStreamCore) GetVersion(context.Context, *emptypb.Empty) (*daemo
 func (f *learningStreamCore) GetStartedAt(context.Context, *emptypb.Empty) (*daemon.StartedAt, error) {
 	return &daemon.StartedAt{StartedAt: f.startedAt}, nil
 }
+func (f *learningStreamCore) SubscribeClashMode(_ *emptypb.Empty, stream grpc.ServerStreamingServer[daemon.ClashMode]) error {
+	if err := stream.Send(&daemon.ClashMode{Mode: "Rule"}); err != nil {
+		return err
+	}
+	<-stream.Context().Done()
+	return nil
+}
 func (f *learningStreamCore) SubscribeGroups(_ *emptypb.Empty, s grpc.ServerStreamingServer[daemon.Groups]) error {
 	if err := s.Send(&daemon.Groups{Group: []*daemon.Group{{Tag: "MainProxy", Selected: "primary"}, {Tag: "primary", Items: []*daemon.GroupItem{{Tag: "node", UrlTestDelay: 1, UrlTestTime: time.Now().Unix()}}}}}); err != nil {
 		return err

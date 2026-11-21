@@ -44,10 +44,10 @@ public enum SystemTunnelControl {
         var current = requests.actionState(observed: NETunnelController.serviceState(for: manager.connection.status))
         guard requests.isCurrent(request) else { return current }
         // Turning an already-stopped VPN off must also disarm on-demand.
-        if case .disconnect = action, manager.isOnDemandEnabled {
-            manager.isOnDemandEnabled = false
-            try await manager.saveToPreferences()
-            try await manager.loadFromPreferences()
+        if case .disconnect = action, current == .stopped {
+            try await AutomaticConnectionPolicy.pause(manager) {
+                guard requests.isCurrent(request) else { throw CancellationError() }
+            }
         }
         current = try await SystemTunnelTransition.prepare(action,
             state: { requests.actionState(observed: NETunnelController.serviceState(for: manager.connection.status)) },
@@ -59,93 +59,89 @@ public enum SystemTunnelControl {
         case .start:
             // A manual On follows the same validated configuration preparation
             // as Home Connect. Pending Apply still blocks unprepared cold starts.
-            let prepared = try prepareConfiguration?()
-            if let prepared {
+            let result: ServiceState
+            if let prepared = try prepareConfiguration?() {
                 guard !prepared.configContent.isEmpty else { throw ControlError.needsSetup }
-                guard isPreparedConfigurationCurrent?(prepared) != false else { throw ControlError.needsApply }
-                manager.protocolConfiguration = NETunnelController.makeProviderProtocol(
-                    bundleIdentifier: providerIdentifier, options: prepared)
-                manager.isEnabled = true
-                try await manager.saveToPreferences()
-                try await manager.loadFromPreferences()
-            } else {
-                try validateStart(manager)
-                if !manager.isEnabled {
-                    manager.isEnabled = true
-                    try await manager.saveToPreferences()
-                    try await manager.loadFromPreferences()
+                let controller = NETunnelController(providerBundleIdentifier: providerIdentifier, manager: manager) { candidate in
+                    requests.isCurrent(request) && (isPreparedConfigurationCurrent?(candidate) ?? true)
                 }
+                try await controller.connect(options: prepared)
+                result = .running
+            } else {
+                // Let the provider resolve the committed transaction at startup.
+                result = try await SystemTunnelTransition.start(
+                    state: { NETunnelController.serviceState(for: manager.connection.status) },
+                    isCurrent: { requests.isCurrent(request) },
+                    start: {
+                        _ = try validatedSavedReference(manager)
+                        try manager.connection.startVPNTunnel(options: nil)
+                        requests.didSubmitStart()
+                    },
+                    reload: { try await manager.loadFromPreferences() })
             }
-            let result = try await SystemTunnelTransition.start(
-                state: { NETunnelController.serviceState(for: manager.connection.status) },
-                isCurrent: { requests.isCurrent(request) },
-                start: {
-                    if let prepared {
-                        guard isPreparedConfigurationCurrent?(prepared) != false else { throw ControlError.needsApply }
-                        // Reject a preference race instead of starting another
-                        // caller's configuration after save/load or stale retry.
-                        guard let proto = manager.protocolConfiguration as? NETunnelProviderProtocol,
-                              TunnelStartOptions(providerConfiguration: proto.providerConfiguration ?? [:]) == prepared else {
-                            throw ControlError.needsApply
-                        }
-                    } else { try validateStart(manager) }
-                    let requestedAt = Date()
-                    try manager.connection.startVPNTunnel(options: prepared?.startTunnelOptions)
-                    requests.didSubmitStart()
-                    SystemSurfaceStore.write(SystemSurfaceStore.read().recordingControlStart(at: requestedAt))
-                },
-                reload: { try await manager.loadFromPreferences() })
-            guard requests.isCurrent(request) else {
-                return requests.actionState(observed: NETunnelController.serviceState(for: manager.connection.status))
+            if requests.isCurrent(request), result == .starting || result == .running {
+                SystemSurfaceStore.write(SystemSurfaceStore.read().recordingControlStart(at: Date()))
             }
             return result
         case .stop:
             // A manual stop must survive the next network request.
-            if manager.isOnDemandEnabled {
-                manager.isOnDemandEnabled = false
-                try await manager.saveToPreferences()
-                try await manager.loadFromPreferences()
-            }
-            return try requests.submit(request, state: { NETunnelController.serviceState(for: manager.connection.status) }) {
-                try SystemTunnelTransition.submit(.disconnect, state: { requests.actionState(observed: NETunnelController.serviceState(for: manager.connection.status)) }, start: {}, stop: {
+            var result = current
+            try await AutomaticConnectionPolicy.pause(manager) {
+                guard requests.isCurrent(request) else { throw CancellationError() }
+                result = try SystemTunnelTransition.submit(.disconnect, state: { requests.actionState(observed: NETunnelController.serviceState(for: manager.connection.status)) }, start: {}, stop: {
                     manager.connection.stopVPNTunnel()
                     requests.didSubmitStop()
                 })
             }
+            return result
         }
     }
 
     public static func automaticConnectionSettings() async throws -> AutomaticConnectionSettings {
-        guard let manager = try await configuredManager() else { return .init() }
+        guard let manager = try await configuredManager() else { throw ControlError.needsSetup }
         return AutomaticConnectionPolicy.settings(from: manager)
     }
 
     public static func setAutomaticConnection(_ settings: AutomaticConnectionSettings) async throws {
         guard let manager = try await configuredManager() else { throw ControlError.needsSetup }
         if settings.mode != .off {
-            guard UserDefaults(suiteName: SystemSurfaceStore.groupIdentifier)?.bool(forKey: "sakamoto.profile.requiresApply") != true else {
-                throw ControlError.needsApply
-            }
-            guard let proto = manager.protocolConfiguration as? NETunnelProviderProtocol,
-                  let options = TunnelStartOptions(providerConfiguration: proto.providerConfiguration ?? [:]),
-                  !options.configContent.isEmpty else { throw ControlError.needsSetup }
-            manager.isEnabled = true
+            let reference = try validatedSavedReference(manager)
+            _ = try TunnelStartOptions.resolveForProvider(startOptions: nil, providerConfiguration: reference, requiresApply: false)
         }
-        try AutomaticConnectionPolicy.apply(settings, to: manager)
-        try await manager.saveToPreferences()
-        try await manager.loadFromPreferences()
+        try await AutomaticConnectionPolicy.updatePreferences(manager) {
+            try AutomaticConnectionPolicy.apply(settings, to: manager)
+            if settings.mode != .off { manager.isEnabled = true }
+        }
     }
 
-    private static func validateStart(_ manager: NETunnelProviderManager) throws {
+    private static func validatedSavedReference(_ manager: NETunnelProviderManager) throws -> [String: Any] {
         guard UserDefaults(suiteName: SystemSurfaceStore.groupIdentifier)?.bool(forKey: "sakamoto.profile.requiresApply") != true else {
             throw ControlError.needsApply
         }
         guard let proto = manager.protocolConfiguration as? NETunnelProviderProtocol,
-              let options = TunnelStartOptions(providerConfiguration: proto.providerConfiguration ?? [:]),
-              !options.configContent.isEmpty else { throw ControlError.needsSetup }
+              proto.providerBundleIdentifier == providerIdentifier,
+              let saved = proto.providerConfiguration else { throw ControlError.needsSetup }
+        guard saved["configContent"] == nil else { throw ControlError.needsApply }
+        // This check runs in the widget host. The provider resolves the revision
+        // and verifies its contents against the digest when the tunnel starts.
+        guard let id = saved["profileID"] as? String, UUID(uuidString: id) != nil,
+              let digest = saved["payloadDigest"] as? String, digest.utf8.count == 64,
+              digest.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) })
+        else { throw ControlError.needsApply }
+        return saved
     }
 
+    #if DEBUG
+    @TaskLocal public static var testManager: NETunnelProviderManager?
+    #endif
+
     private static func configuredManager() async throws -> NETunnelProviderManager? {
+        #if DEBUG
+        if let testManager {
+            try await testManager.loadFromPreferences()
+            return testManager
+        }
+        #endif
         let managers: [NETunnelProviderManager] = try await withCheckedThrowingContinuation { continuation in
             NETunnelProviderManager.loadAllFromPreferences { managers, error in
                 if let error { continuation.resume(throwing: error) }
@@ -168,7 +164,7 @@ public enum SystemTunnelControl {
         public var errorDescription: String? {
             switch self {
             case .needsSetup: return "Open sakamoto and connect once to set up and authorize the VPN."
-            case .needsApply: return "Open sakamoto and apply the selected configuration before connecting from a widget or shortcut."
+            case .needsApply: return "Open Config in sakamoto and apply the selected configuration before connecting."
             case .busy: return "The VPN is stopping. Try again after it finishes."
             }
         }

@@ -125,7 +125,7 @@ func ProxyOutbound(raw []byte) (string, error) {
 
 // AddRule inserts learned names after explicit DIRECT rules but before explicit
 // PROXY rules. It never overrides a source REJECT or DIRECT rule.
-func AddRule(raw []byte, domains []string, outbound string) ([]byte, error) {
+func ReplaceLearnedRule(raw []byte, previous, domains []string, outbound string) ([]byte, error) {
 	var data map[string]any
 	if err := json.Unmarshal(raw, &data); err != nil {
 		return nil, err
@@ -139,7 +139,6 @@ func AddRule(raw []byte, domains []string, outbound string) ([]byte, error) {
 		return nil, errors.New("missing route.rules")
 	}
 	proxyAt := -1
-	oldAt := -1
 	for i, r := range rules {
 		m, ok := r.(map[string]any)
 		if !ok {
@@ -152,9 +151,6 @@ func AddRule(raw []byte, domains []string, outbound string) ([]byte, error) {
 		if m["_auto_proxy"] != nil {
 			return nil, errors.New("invalid auto rule marker")
 		}
-		if m["domain"] != nil && m["outbound"] == outbound && m["action"] == "route" {
-			oldAt = i
-		}
 	}
 	if proxyAt < 0 {
 		return nil, errors.New("missing explicit proxy rule")
@@ -162,9 +158,13 @@ func AddRule(raw []byte, domains []string, outbound string) ([]byte, error) {
 	if rules[proxyAt].(map[string]any)["outbound"] != outbound {
 		return nil, errors.New("proxy outbound changed; refusing auto update")
 	}
-	if oldAt >= 0 {
-		rules = append(rules[:oldAt], rules[oldAt+1:]...)
-		if oldAt < proxyAt {
+	// Older clients persisted learned names immediately before rs-proxy. Only
+	// that position and the committed domain list together identify the slot.
+	if proxyAt > 0 && len(previous) > 0 {
+		rule, _ := rules[proxyAt-1].(map[string]any)
+		names, _ := rule["domain"].([]any)
+		if len(rule) == 3 && rule["action"] == "route" && rule["outbound"] == outbound && sameNames(names, previous) {
+			rules = append(rules[:proxyAt-1], rules[proxyAt:]...)
 			proxyAt--
 		}
 	}
@@ -178,6 +178,24 @@ func AddRule(raw []byte, domains []string, outbound string) ([]byte, error) {
 	}
 	route["rules"] = rules
 	return json.MarshalIndent(data, "", "  ")
+}
+
+func sameNames(names []any, previous []string) bool {
+	if len(names) != len(previous) {
+		return false
+	}
+	counts := make(map[string]int, len(previous))
+	for _, name := range previous {
+		counts[name]++
+	}
+	for _, value := range names {
+		name, ok := value.(string)
+		if !ok || counts[name] == 0 {
+			return false
+		}
+		counts[name]--
+	}
+	return true
 }
 
 // Stage prepares and validates an updated generated config without activating it.
@@ -197,6 +215,7 @@ func Stage(dir, domain, outbound string) (func() error, error) {
 	if len(state.Domains) >= 1000 {
 		return nil, errors.New("auto proxy limit reached")
 	}
+	previous := append([]string(nil), state.Domains...)
 	state.Domains = append(state.Domains, domain)
 	sort.Strings(state.Domains)
 	path := filepath.Join(dir, "config.json")
@@ -204,7 +223,7 @@ func Stage(dir, domain, outbound string) (func() error, error) {
 	if err != nil {
 		return nil, err
 	}
-	newConfig, err := AddRule(old, state.Domains, outbound)
+	newConfig, err := ReplaceLearnedRule(old, previous, state.Domains, outbound)
 	if err != nil {
 		return nil, err
 	}

@@ -22,27 +22,24 @@ import (
 	"github.com/sagernet/sing-box/option"
 )
 
-// GenerateProfileJSON compiles a content-only snapshot in a private temporary
-// directory. It reuses the host parser, subscriptions and in-process SRS writer;
-// it never executes system setup or invokes an external sing-box binary.
-// The caller performs Libbox semantic validation before committing the result.
-func GenerateProfileJSON(bundleJSON, settingsJSON string) (string, error) {
-	return GenerateProfileWithFetcherJSON(bundleJSON, settingsJSON, nil)
+// ValidateProfileSourcesJSON checks the source snapshot before delivery.
+func ValidateProfileSourcesJSON(raw string) error {
+	_, err := decodeSources(raw)
+	return err
 }
 
-// GenerateProfileWithFetcherJSON uses the platform source-fetching adapter.
-func GenerateProfileWithFetcherJSON(bundleJSON, settingsJSON string, fetcher SourceFetcher) (string, error) {
+func decodeSources(bundleJSON string) (sourcesync.Bundle, error) {
 	if len(bundleJSON) > sourcesync.MaxBytes {
-		return "", fmt.Errorf("source bundle exceeds 32 MiB")
+		return sourcesync.Bundle{}, fmt.Errorf("source bundle exceeds 32 MiB")
 	}
 	var bundle sourcesync.Bundle
 	if json.Unmarshal([]byte(bundleJSON), &bundle) != nil || bundle.Version != 1 || len(bundle.Files) > 128 {
-		return "", fmt.Errorf("invalid source snapshot")
+		return sourcesync.Bundle{}, fmt.Errorf("invalid source snapshot")
 	}
 	if bundle.MainConf == "" {
 		for name := range bundle.Files {
 			if strings.HasSuffix(strings.ToLower(name), ".conf") {
-				return "", fmt.Errorf("choose a main conf before generating")
+				return sourcesync.Bundle{}, fmt.Errorf("choose a main conf before generating")
 			}
 		}
 	}
@@ -61,13 +58,23 @@ func GenerateProfileWithFetcherJSON(bundleJSON, settingsJSON string, fetcher Sou
 		}
 	}
 	if err := check.Validate(); err != nil {
-		return "", err
+		return sourcesync.Bundle{}, err
 	}
 	// Validate includes as a closed graph before allowing the host parser to
 	// open anything. Prefixing keeps the original relative topology while
 	// using the shared S3 bundle's dependency/traversal checks.
 	for name, body := range bundle.Files {
 		if strings.HasSuffix(strings.ToLower(name), ".conf") {
+			refs, err := icloud.LocalRuleIncludes([]byte(body))
+			if err != nil {
+				return sourcesync.Bundle{}, err
+			}
+			for _, ref := range refs {
+				child := path.Join(path.Dir(name), ref)
+				if _, ok := bundle.Files[child]; !ok || !strings.HasSuffix(strings.ToLower(child), ".conf") {
+					return sourcesync.Bundle{}, fmt.Errorf("missing or invalid local conf include")
+				}
+			}
 			check.Files[path.Join("conf", name)] = body
 		}
 	}
@@ -75,17 +82,34 @@ func GenerateProfileWithFetcherJSON(bundleJSON, settingsJSON string, fetcher Sou
 		check.MainConf = "conf/" + bundle.MainConf
 	}
 	if err := check.Validate(); err != nil {
-		return "", err
+		return sourcesync.Bundle{}, err
 	}
 	total := 0
 	for name, body := range bundle.Files {
 		total += len(body)
 		if !icloud.ValidSourceName(name) || total > sourcesync.MaxBytes {
-			return "", fmt.Errorf("invalid source snapshot path or size")
+			return sourcesync.Bundle{}, fmt.Errorf("invalid source snapshot path or size")
 		}
 		if name != "nodes.txt" && name != "policy.json" && name != "subscriptions.json" && name != sourcesync.GroupsFile && !strings.HasSuffix(strings.ToLower(name), ".conf") {
-			return "", fmt.Errorf("unsupported source file")
+			return sourcesync.Bundle{}, fmt.Errorf("unsupported source file")
 		}
+	}
+	return bundle, nil
+}
+
+// GenerateProfileJSON compiles a content-only snapshot in a private temporary
+// directory. It reuses the host parser, subscriptions and in-process SRS writer;
+// it never executes system setup or invokes an external sing-box binary.
+// The caller performs Libbox semantic validation before committing the result.
+func GenerateProfileJSON(bundleJSON, settingsJSON string) (string, error) {
+	return GenerateProfileWithFetcherJSON(bundleJSON, settingsJSON, nil)
+}
+
+// GenerateProfileWithFetcherJSON uses the platform source-fetching adapter.
+func GenerateProfileWithFetcherJSON(bundleJSON, settingsJSON string, fetcher SourceFetcher) (string, error) {
+	bundle, err := decodeSources(bundleJSON)
+	if err != nil {
+		return "", err
 	}
 	cfg := config.Default()
 	cfg.TailscaleOptimize = false
@@ -103,10 +127,16 @@ func GenerateProfileWithFetcherJSON(bundleJSON, settingsJSON string, fetcher Sou
 	}
 	cfg.ChainEnabled = false
 	var settings struct {
-		RegionalDNS   *regionaldns.Profile `json:"regionalDNS"`
-		Mode          string               `json:"mode"`
-		Threshold     int                  `json:"threshold"`
-		CFRegionBlock bool                 `json:"cfRegionBlock"`
+		HostGeneration struct {
+			Nodes       []gen.SRNode `json:"nodes"`
+			ChainExit   *string      `json:"chainExit"`
+			Fingerprint string       `json:"fingerprint"`
+		} `json:"hostGeneration"`
+		DNSGuard      *config.MobileDNSGuard `json:"dnsGuard"`
+		RegionalDNS   *regionaldns.Profile   `json:"regionalDNS"`
+		Mode          string                 `json:"mode"`
+		Threshold     int                    `json:"threshold"`
+		CFRegionBlock bool                   `json:"cfRegionBlock"`
 	}
 	if settingsJSON != "" {
 		if json.Unmarshal([]byte(settingsJSON), &settings) != nil {
@@ -116,8 +146,19 @@ func GenerateProfileWithFetcherJSON(bundleJSON, settingsJSON string, fetcher Sou
 		cfg.Experiment.Threshold = settings.Threshold
 		cfg.Experiment.CFRegionBlock = settings.CFRegionBlock
 	}
+	if exit := settings.HostGeneration.ChainExit; exit != nil {
+		cfg.ChainEnabled = true
+		cfg.ChainExit = *exit
+	}
+	cfg.UTLSFingerprint = settings.HostGeneration.Fingerprint
+	if guard := settings.DNSGuard; guard != nil {
+		cfg.DNSGuard.Enabled = true
+		cfg.DNSGuard.LocalDomains = guard.LocalDomains
+		cfg.DNSGuard.BootstrapIP = guard.BootstrapIP
+		cfg.DNSGuard.BootstrapServerName = guard.BootstrapServerName
+	}
 	if settings.RegionalDNS != nil {
-		if err := settings.RegionalDNS.Validate(nil); err != nil {
+		if err := settings.RegionalDNS.Validate(cfg.DNSGuard.LocalDomains); err != nil {
 			return "", err
 		}
 	}
@@ -164,7 +205,8 @@ func GenerateProfileWithFetcherJSON(bundleJSON, settingsJSON string, fetcher Sou
 	cfg.ConfPath = filepath.Join(work, "sources", filepath.FromSlash(main))
 	cfg.NodesFile = filepath.Join(work, "sources", "nodes.txt")
 	out := filepath.Join(work, "runtime")
-	if err := gen.Run(gen.Options{RegionalPreflight: settings.RegionalDNS, ConfPath: cfg.ConfPath, NodesFile: cfg.NodesFile, Cfg: cfg, OutDir: out, Quiet: true, OmitLearningProbe: true, HTTPClient: sourceClient(fetcher)}); err != nil {
+	var sourceFinal string
+	if err := gen.Run(gen.Options{ProfileSRNodes: settings.HostGeneration.Nodes, SourceFinal: &sourceFinal, MobileProvider: true, RegionalPreflight: settings.RegionalDNS, ConfPath: cfg.ConfPath, NodesFile: cfg.NodesFile, Cfg: cfg, OutDir: out, Quiet: true, OmitLearningProbe: true, HTTPClient: sourceClient(fetcher)}); err != nil {
 		return "", fmt.Errorf("generation failed: %s", sanitizeGenerationError(err))
 	}
 	raw, err := os.ReadFile(filepath.Join(out, "config.json"))
@@ -251,13 +293,16 @@ func GenerateProfileWithFetcherJSON(bundleJSON, settingsJSON string, fetcher Sou
 	}
 	// Package the original source snapshot, not normalized compilation inputs.
 	packageData := struct {
-		Format           string            `json:"format"`
-		Name             string            `json:"name"`
-		Config           string            `json:"config"`
-		Files            map[string][]byte `json:"files"`
-		SourceBundleJSON string            `json:"sourceBundleJSON"`
-		SourceDigest     string            `json:"sourceDigest"`
-	}{"sakamoto-tunnel-v1", "Generated on device", string(raw), files, bundleJSON, ""}
+		Format             string            `json:"format"`
+		Name               string            `json:"name"`
+		Config             string            `json:"config"`
+		Files              map[string][]byte `json:"files"`
+		SourceBundleJSON   string            `json:"sourceBundleJSON"`
+		SourceFinal        string            `json:"sourceFinal"`
+		SourceDigest       string            `json:"sourceDigest"`
+		RouteSourceVersion int               `json:"routeSourceVersion"`
+	}{Format: "sakamoto-tunnel-v1", Name: "Generated on device", Config: string(raw), Files: files,
+		SourceBundleJSON: bundleJSON, SourceFinal: sourceFinal, RouteSourceVersion: 1}
 	encoded, err := json.Marshal(packageData)
 	return string(encoded), err
 }

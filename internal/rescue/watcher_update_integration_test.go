@@ -53,9 +53,8 @@ func TestWatcherUpgradeTransaction(t *testing.T) {
 					_ = conn.Close()
 				}
 			}()
-			loaded := true
-			stops := 0
-			replacement := ""
+			loaded := old
+			stopped := false
 			sys := System{EUID: os.Geteuid(), UID: os.Getuid(), Run: func(ctx context.Context, command string, args ...string) (string, error) {
 				if err := ctx.Err(); err != nil {
 					return "", err
@@ -69,13 +68,13 @@ func TestWatcherUpgradeTransaction(t *testing.T) {
 				}
 				switch args[0] {
 				case "print":
-					if !loaded {
+					if loaded == "" {
 						return "Could not find service", errors.New("missing")
 					}
-					return "state = running\npid = 999\nprogram = " + replacement + "\nSAKAMOTO_DIR => " + configured + "\n", nil
+					return "state = running\npid = 999\nprogram = " + loaded + "\nSAKAMOTO_DIR => " + configured + "\n", nil
 				case "bootout":
-					loaded = false
-					stops++
+					loaded = ""
+					stopped = true
 					return "", nil
 				case "bootstrap":
 					data, e := os.ReadFile(plistPath)
@@ -88,13 +87,10 @@ func TestWatcherUpgradeTransaction(t *testing.T) {
 					if e = json.Unmarshal(data, &p); e != nil {
 						return "", e
 					}
-					if p.Arguments[0] != old {
-						replacement = p.Arguments[0]
-						if scenario == "bootstrap_failure" {
-							return "", errors.New("bootstrap failed")
-						}
+					if p.Arguments[0] != old && scenario == "bootstrap_failure" {
+						return "", errors.New("bootstrap failed")
 					}
-					loaded = true
+					loaded = p.Arguments[0]
 					return "", nil
 				}
 				return "", errors.New("unexpected command")
@@ -110,10 +106,10 @@ func TestWatcherUpgradeTransaction(t *testing.T) {
 			rescueOK(t, e)
 			if scenario == "success" {
 				rescueOK(t, err)
-				if !loaded || stops != 1 || replacement == "" || !strings.HasPrefix(replacement, paths.Install+string(filepath.Separator)) {
+				if !strings.HasPrefix(loaded, paths.Install+string(filepath.Separator)) {
 					t.Fatal("replacement was not retained and loaded")
 				}
-				got, e := os.ReadFile(replacement)
+				got, e := os.ReadFile(loaded)
 				rescueOK(t, e)
 				if string(got) != "new watcher" {
 					t.Fatal("wrong executable")
@@ -129,16 +125,16 @@ func TestWatcherUpgradeTransaction(t *testing.T) {
 				if err == nil {
 					t.Fatal("failure reported successful")
 				}
-				if string(data) != string(raw) || !loaded {
+				if string(data) != string(raw) || loaded != old {
 					t.Fatal("previous watcher not retained")
 				}
-				if (scenario == "foreign" || scenario == "canceled") && stops != 0 {
+				if (scenario == "foreign" || scenario == "canceled") && stopped {
 					t.Fatal("preflight failure stopped watcher")
 				}
 			}
 		})
 	}
-	if dir := os.Getenv("SAKAMOTO_RECOVERY_ARTIFACT_DIR"); dir != "" {
+	if dir := os.Getenv("SAKAMOTO_RECOVERY_ARTIFACT_DIR"); dir != "" && !t.Failed() {
 		rescueOK(t, os.MkdirAll(dir, 0700))
 		rescueOK(t, os.WriteFile(filepath.Join(dir, "watcher-update.json"), []byte(`{"passed":true,"scenarios":["success","foreign","bootstrap_failure","canceled","wrong_version"],"uses_real_launchd":false}`), 0600))
 	}

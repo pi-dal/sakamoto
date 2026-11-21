@@ -3,12 +3,11 @@ package com.pidal.sakamoto.security
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
-import android.util.Base64
+import java.io.File
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
-import javax.crypto.spec.GCMParameterSpec
 
 /** S3 credentials encrypted with a device-local Android Keystore AES-GCM key. */
 class S3CredentialStore(private val context: Context) {
@@ -17,8 +16,6 @@ class S3CredentialStore(private val context: Context) {
         private const val KEYSTORE_PROVIDER = "AndroidKeyStore"
         private const val KEY_ALIAS = "sakamoto.s3.credentials"
         private const val FILE_NAME = "s3-credentials.bin"
-        private const val GCM_IV_BYTES = 12
-        private const val GCM_TAG_BITS = 128
     }
 
     /** Never renders key material. */
@@ -27,27 +24,7 @@ class S3CredentialStore(private val context: Context) {
 
     fun hasAuthKey(): Boolean = context.getFileStreamPath(FILE_NAME).exists()
 
-    fun readAuthKey(): String? {
-        val file = context.getFileStreamPath(FILE_NAME)
-        if (!file.exists()) return null
-        val blob = try {
-            context.openFileInput(FILE_NAME).use { it.readBytes() }
-        } catch (e: Exception) {
-            return null
-        }
-        if (blob.size <= GCM_IV_BYTES) return null
-        val iv = blob.copyOfRange(0, GCM_IV_BYTES)
-        val ciphertext = blob.copyOfRange(GCM_IV_BYTES, blob.size)
-        return try {
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(Cipher.DECRYPT_MODE, loadOrCreateKey(), GCMParameterSpec(GCM_TAG_BITS, iv))
-            String(cipher.doFinal(ciphertext), Charsets.UTF_8)
-        } catch (e: Exception) {
-            // Wrong key / tampered file: treat as absent; the caller falls
-            // back to the auth-URL login flow. Never log the payload.
-            null
-        }
-    }
+    fun readAuthKey(): String? = readStoredCredential(context.getFileStreamPath(FILE_NAME), KEY_ALIAS)
 
     fun storeAuthKey(key: String) {
         val trimmed = key.trim()
@@ -56,9 +33,17 @@ class S3CredentialStore(private val context: Context) {
         cipher.init(Cipher.ENCRYPT_MODE, loadOrCreateKey())
         val iv = cipher.iv
         val ciphertext = cipher.doFinal(trimmed.toByteArray(Charsets.UTF_8))
-        context.openFileOutput(FILE_NAME, Context.MODE_PRIVATE).use { out ->
-            out.write(iv)
-            out.write(ciphertext)
+        val destination = context.getFileStreamPath(FILE_NAME)
+        val staged = File.createTempFile("s3-credentials-", ".tmp", destination.parentFile)
+        try {
+            staged.outputStream().use { out ->
+                out.write(iv)
+                out.write(ciphertext)
+                out.fd.sync()
+            }
+            android.system.Os.rename(staged.path, destination.path)
+        } finally {
+            staged.delete()
         }
     }
 

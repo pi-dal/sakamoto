@@ -43,12 +43,22 @@ final class ICloudSyncModel: ObservableObject {
 
     private let store: ConfigStore
     private let syncStore: ICloudSyncStore
+    private let localDirectory: URL
     private let defaults: UserDefaults
+    private let cloudFilesystem: ICloudFilesystem
+    private let accessDirectory: (URL) -> Bool
+    private let releaseDirectory: (URL) -> Void
 
     init(store: ConfigStore,
          defaults: UserDefaults = .standard,
          container: ICloudContainer = UbiquityICloudContainer(),
-         clock: ICloudSyncClock = ICloudSystemClock()) {
+         clock: ICloudSyncClock = ICloudSystemClock(),
+         cloudFilesystem: ICloudFilesystem = CloudFilesystem(),
+         accessDirectory: @escaping (URL) -> Bool = { $0.startAccessingSecurityScopedResource() },
+         releaseDirectory: @escaping (URL) -> Void = { $0.stopAccessingSecurityScopedResource() }) {
+        self.cloudFilesystem = cloudFilesystem
+        self.accessDirectory = accessDirectory
+        self.releaseDirectory = releaseDirectory
         self.store = store
         self.defaults = defaults
         if let bookmark = defaults.data(forKey: Self.bookmarkKey) {
@@ -70,30 +80,53 @@ final class ICloudSyncModel: ObservableObject {
             restored = ICloudSyncSettings()
         }
         let localDirectory = Self.makeLocalDirectory(defaults: defaults)
+        self.localDirectory = URL(fileURLWithPath: localDirectory, isDirectory: true)
         self.settings = restored
         self.additionalPathsDraft = restored.additionalSourcePaths.joined(separator: "\n")
         self.syncStore = ICloudSyncStore(
             settings: restored,
             localFilesystem: LocalFilesystem(),
-            cloudFilesystem: CloudFilesystem(),
+            cloudFilesystem: cloudFilesystem,
             container: container,
             clock: clock,
             localDirectory: localDirectory,
         )
+        _ = prepareLocalDirectory()
     }
 
-    /// App-support directory for the baseline state + local source staging
-    /// (the iOS analogue of the macOS runtime dir's icloud-state.json).
+    /// Protect the digest store and retire the private cache used by older versions.
+    private func prepareLocalDirectory() -> Bool {
+        do {
+            let fm = FileManager.default
+            var directory = localDirectory
+            guard try !LocalFilesystem().isSymbolicLink(atPath: directory.path) else {
+                throw ICloudSyncError.symlinkRefused(directory.path)
+            }
+            try fm.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            var attributes = URLResourceValues()
+            attributes.isExcludedFromBackup = true
+            try directory.setResourceValues(attributes)
+            let legacyCache = directory.appendingPathComponent("sources")
+            do { try fm.removeItem(at: legacyCache) }
+            catch let error as CocoaError where error.code == .fileNoSuchFile { }
+            return true
+        } catch {
+            status = .failed(Date(), "Could not protect local sync storage. Unlock this device and retry.")
+            return false
+        }
+    }
+
+    /// App-support directory for the local digest store.
     static func makeLocalDirectory(defaults: UserDefaults) -> String {
+        #if DEBUG
         if let override = defaults.string(forKey: "sakamoto.icloud.sync.localdir"),
            !override.isEmpty {
             return override
         }
+        #endif
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
-        let dir = base.appendingPathComponent("sakamoto-sync", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.path
+        return base.appendingPathComponent("sakamoto-sync", isDirectory: true).path
     }
 
     func selectDirectory(_ result: Result<URL, Error>) {
@@ -106,12 +139,18 @@ final class ICloudSyncModel: ObservableObject {
             notice = "Could not open the selected folder. Try choosing it again."
             return
         }
-        let scoped = url.startAccessingSecurityScopedResource()
+        let scoped = accessDirectory(url)
         guard scoped else {
             notice = "Cannot access this folder. Select the shared folder in iCloud Drive."
             return
         }
-        defer { url.stopAccessingSecurityScopedResource() }
+        defer { releaseDirectory(url) }
+        do {
+            try cloudFilesystem.validateDestination(url)
+        } catch {
+            notice = "Choose the shared folder under iCloud Drive in Files."
+            return
+        }
         do {
             let bookmark = try url.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
             defaults.set(bookmark, forKey: Self.bookmarkKey)
@@ -197,7 +236,7 @@ final class ICloudSyncModel: ObservableObject {
 
     // MARK: The pass
 
-    func syncNow() {
+    func syncNow(conflictChoice: ICloudConflictChoice? = nil) {
         guard !syncing else { return }
         guard settings.enabled else {
             notice = "Sync is disabled — enable it first."
@@ -207,38 +246,49 @@ final class ICloudSyncModel: ObservableObject {
             notice = "Choose the shared folder in iCloud Drive before syncing."
             return
         }
-        store.ensureSourceProfile()
+        guard prepareLocalDirectory() else { return }
+        do { try store.ensureSourceProfile() }
+        catch { status = .failed(Date(), TunnelDiagnostics.sanitized(error.localizedDescription)); return }
         let passSettings = settings
+        let nodesBefore = store.nodesSources
+        let policyBefore = store.policy
+        let importBefore = store.importedSource
+        let profileBefore = store.selectedProfileID
+        let batches = store.selectedProfile?.iCloudAdoptedBatches ?? [:]
+        let sourceBefore = store.selectedProfile?.sourceBundleJSON
+        let mainConf = passSettings.includesConf ? store.sourceBundle.mainConf : ""
+        let (payload, skipped) = buildPayload()
+        let sourcesAreCurrent: @MainActor @Sendable () -> Bool = { [store] in
+            store.selectedProfileID == profileBefore && store.selectedProfile?.sourceBundleJSON == sourceBefore &&
+                (store.selectedProfile?.iCloudAdoptedBatches ?? [:]) == batches &&
+                store.nodesSources == nodesBefore && store.policy == policyBefore && store.importedSource == importBefore
+        }
         syncing = true
         notice = nil
         Task {
             defer { syncing = false }
-            guard directory.startAccessingSecurityScopedResource() else {
+            guard accessDirectory(directory) else {
                 status = .unavailable("Cannot access the selected folder. Choose it again.")
                 return
             }
-            defer { directory.stopAccessingSecurityScopedResource() }
+            defer { releaseDirectory(directory) }
             do { try await syncStore.updateSettings(passSettings) }
             catch { status = .failed(Date(), TunnelDiagnostics.sanitized(error.localizedDescription)); return }
-            let nodesBefore = store.nodesSources
-            let policyBefore = store.policy
-            let importBefore = store.importedSource
-            let profileBefore = store.selectedProfileID
-            let sourceBefore = store.selectedProfile?.sourceBundleJSON
-            let (payload, skipped) = buildPayload()
-            let sourcesAreCurrent: @MainActor @Sendable () -> Bool = { [store] in
-                store.nodesSources == nodesBefore && store.policy == policyBefore && store.importedSource == importBefore && store.selectedProfileID == profileBefore && store.selectedProfile?.sourceBundleJSON == sourceBefore
+            guard sourcesAreCurrent() else {
+                status = .failed(Date(), "Sources or configuration changed. Start sync again.")
+                return
             }
             let outcome = await syncStore.syncNow(
                 staging: payload.entries, directoryURL: directory,
                 downloadNames: ["nodes.txt", "policy.json", "subscriptions.json", AutomaticGroupSources.fileName],
                 sourceScope: profileBefore ?? "unassigned",
-                mainConf: passSettings.includesConf ? store.sourceBundle.mainConf : "",
+                mainConf: mainConf,
                 discoverConf: passSettings.includesConf,
+                conflictChoice: conflictChoice,
                 validateDownload: { name, data in
                     switch name {
                     case "nodes.txt":
-                        if !String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { _ = try NodeFileImport.parse(data, validate: ConfigModel.validateNode) }
+                        _ = try NodeFileImport.parse(data, allowEmpty: true, validate: ConfigModel.validateNode)
                     case "policy.json", "subscriptions.json", AutomaticGroupSources.fileName: try ConfigStore.validateStructuredSource(name: name, data: data)
                     default:
                         if name.lowercased().hasSuffix(".conf") {
@@ -249,16 +299,19 @@ final class ICloudSyncModel: ObservableObject {
                     }
                 },
                 sourcesAreCurrent: { await sourcesAreCurrent() },
-                adoptDownloads: { @MainActor [self] downloads, main in
+                adoptedBatches: batches,
+                adoptDownloads: { @MainActor [self] downloads, main, receipt in
                     guard sourcesAreCurrent() else {
                         throw ICloudSyncError.filesystem("local sources changed during sync. Retry after editing.")
                     }
-                    try adopt(downloads, discoveredMain: main)
+                    try adopt(downloads, discoveredMain: main, receipt: receipt)
                 }
             )
             let effectiveSkipped = skipped.filter { name in !outcome.downloads.contains(where: { $0.name == name }) } + outcome.skipped
             status = outcome.status
-            if case .pending = outcome.status {
+            if conflictChoice != nil, outcome.status.isConflict {
+                notice = "The files changed since your last review. Choose which versions to keep again."
+            } else if case .pending = outcome.status {
                 notice = nil
             } else if !effectiveSkipped.isEmpty {
                 notice = "Skipped: " + effectiveSkipped.joined(separator: "; ")
@@ -269,11 +322,11 @@ final class ICloudSyncModel: ObservableObject {
     }
 
     /// Apply downloads through the exact validation path manual imports use.
-    private func adopt(_ downloads: [ICloudSyncOutcome.Download], discoveredMain: String? = nil) throws {
+    private func adopt(_ downloads: [ICloudSyncOutcome.Download], discoveredMain: String?, receipt: ICloudAdoptionReceipt) throws {
         guard !downloads.isEmpty || discoveredMain != nil else { return }
         var bundle = store.sourceBundle
         if let discoveredMain { bundle.mainConf = discoveredMain }
         for download in downloads { bundle.files[download.name] = String(decoding: download.data, as: UTF8.self) }
-        try store.adoptSourceBundle(bundle)
+        try store.adoptSourceBundle(bundle, receipt: receipt)
     }
 }

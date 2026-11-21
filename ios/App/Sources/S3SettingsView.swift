@@ -1,12 +1,11 @@
 import SwiftUI
+import SakamotoKit
 
 struct S3SettingsView: View {
     @ObservedObject var model: S3SyncModel
     @State private var confirmEnable = false
     @State private var showCredentials = false
-    @State private var accessDraft = ""
-    @State private var secretDraft = ""
-    @State private var tokenDraft = ""
+    @State private var draft = S3SyncCredentials()
 
     var body: some View {
         Form {
@@ -32,7 +31,8 @@ struct S3SettingsView: View {
             }
             Section {
                 Button("Edit credentials…") {
-                    accessDraft = model.accessKey; secretDraft = model.secretKey; tokenDraft = model.sessionToken
+                    guard let saved = model.beginCredentialEdit() else { return }
+                    draft = saved
                     showCredentials = true
                 }
                 .disabled(model.syncing)
@@ -56,9 +56,10 @@ struct S3SettingsView: View {
         .sheet(isPresented: $showCredentials, onDismiss: clearDrafts) {
             NavigationStack {
                 Form {
-                    SecureField("Access key", text: $accessDraft)
-                    SecureField("Secret key", text: $secretDraft)
-                    SecureField("Session token (optional)", text: $tokenDraft)
+                    SecureField("Access key", text: $draft.accessKey)
+                    SecureField("Secret key", text: $draft.secretKey)
+                    SecureField("Session token (optional)", text: $draft.sessionToken)
+                    if model.notice.hasPrefix("Could not save") { Text(model.notice) }
                 }
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                 .navigationTitle("Credentials")
@@ -66,8 +67,7 @@ struct S3SettingsView: View {
                     ToolbarItem(placement: .cancellationAction) { Button("Cancel") { showCredentials = false } }
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Save") {
-                            model.accessKey = accessDraft; model.secretKey = secretDraft; model.sessionToken = tokenDraft
-                            if model.saveSettings() { showCredentials = false }
+                            if model.saveSettings(credentials: draft) { showCredentials = false }
                         }
                     }
                 }
@@ -77,5 +77,8 @@ struct S3SettingsView: View {
         }
     }
 
-    private func clearDrafts() { accessDraft = ""; secretDraft = ""; tokenDraft = "" }
+    private func clearDrafts() {
+        model.endCredentialEdit()
+        draft = S3SyncCredentials()
+    }
 }

@@ -22,15 +22,7 @@ func automaticGroupNodes(raw []byte, group string) ([]string, error) {
 	if err := json.Unmarshal(raw, &root); err != nil {
 		return nil, fmt.Errorf("read generated configuration: %w", err)
 	}
-	var names []string
-	for _, node := range root.Outbounds {
-		if gen.AutomaticGroupTag(node) == group {
-			if tag, ok := node["tag"].(string); ok && tag != "" {
-				names = append(names, tag)
-			}
-		}
-	}
-	return names, nil
+	return gen.AutomaticGroupCandidates(root.Outbounds, group), nil
 }
 
 func (m *model) editAutomaticGroup(index int) {

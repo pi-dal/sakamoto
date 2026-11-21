@@ -7,12 +7,14 @@ public struct ProxyGroupEdit: Codable, Equatable, Identifiable, Sendable {
     public var defaultMember: String
     public var url: String
     public var interval: String
+    public var tolerance: Int?
     /// Non-nil marks a generated automatic group whose membership follows new nodes.
     public var excludedMembers: [String]?
     public var additionalMembers: [String]?
     public var id: String { tag }
-    public init(tag: String, type: String = "selector", members: [String] = [], defaultMember: String = "", url: String = "https://www.gstatic.com/generate_204", interval: String = "3m") {
+    public init(tag: String, type: String = "selector", members: [String] = [], defaultMember: String = "", url: String = "https://www.gstatic.com/generate_204", interval: String = "3m", tolerance: Int? = nil) {
         self.tag = tag; self.type = type; self.members = members; self.defaultMember = defaultMember; self.url = url; self.interval = interval
+        self.tolerance = tolerance
     }
 }
 
@@ -21,9 +23,13 @@ public enum ProxyGroupEditing {
         edit.type == "urltest" && ["RealityAuto", "OthersAuto"].contains(edit.tag)
     }
     public static func automaticCandidates(for tag: String, in content: String) -> [String] {
-        outbounds(content).compactMap { row in
+        let rows = outbounds(content)
+        // ManualPick includes excluded entry nodes and omits the dedicated chain exit.
+        let entries = (rows.first { $0["tag"] as? String == "ManualPick" }?["outbounds"] as? [String]).map(Set.init)
+        return rows.compactMap { row in
             guard let name = row["tag"] as? String, let type = row["type"] as? String,
-                  !["selector", "urltest", "direct", "block", "dns", "socks"].contains(type) else { return nil }
+                  entries?.contains(name) != false, ProxyChainSettings.isChainable(row) else { return nil }
+            if type == "socks" { return tag == "OthersAuto" ? name : nil }
             let tls = row["tls"] as? [String: Any]
             let reality = (tls?["reality"] as? [String: Any])?["enabled"] as? Bool == true || name.lowercased().contains("reality")
             return (tag == "RealityAuto" && reality) || (tag == "OthersAuto" && !reality) ? name : nil
@@ -62,7 +68,7 @@ public enum ProxyGroupEditing {
     public static func groups(_ content: String) -> [ProxyGroupEdit] {
         outbounds(content).filter { ["selector", "urltest"].contains($0["type"] as? String ?? "") }.compactMap { row in
             guard let tag = row["tag"] as? String else { return nil }
-            return ProxyGroupEdit(tag: tag, type: row["type"] as? String ?? "selector", members: row["outbounds"] as? [String] ?? [], defaultMember: row["default"] as? String ?? "", url: row["url"] as? String ?? "https://www.gstatic.com/generate_204", interval: row["interval"] as? String ?? "3m")
+            return ProxyGroupEdit(tag: tag, type: row["type"] as? String ?? "selector", members: row["outbounds"] as? [String] ?? [], defaultMember: row["default"] as? String ?? "", url: row["url"] as? String ?? "https://www.gstatic.com/generate_204", interval: row["interval"] as? String ?? "3m", tolerance: row["tolerance"] as? Int)
         }
     }
     public static func applying(_ edits: [ProxyGroupEdit], to content: String) throws -> String {
@@ -92,6 +98,7 @@ public enum ProxyGroupEditing {
                 guard edit.interval.range(of: #"^(?:[0-9]+(?:\.[0-9]+)?(?:ms|s|m|h))+$"#, options: .regularExpression) != nil,
                       edit.interval.contains(where: { $0.isNumber && $0 != "0" }) else { throw TunnelProfile.InvalidProfile("Enter a positive test interval, such as 30s, 3m or 1h.") }
                 row.removeValue(forKey: "default"); row["url"] = edit.url; row["interval"] = edit.interval
+                if let tolerance = edit.tolerance { row["tolerance"] = tolerance }
             }
             if let index { rows[index] = row } else { rows.append(row) }
         }

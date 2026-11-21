@@ -46,9 +46,11 @@ public struct TunnelObservation: Equatable, Sendable {
 /// reports may move the observation to Running/Stopped.
 public protocol TunnelControlling: AnyObject, Sendable {
     /// [ Connect ]: install/start the tunnel with the given generated
-    /// config. Throws on NE errors; it never reports success for a request
-    /// that was only queued.
+    /// config. Return after the running provider confirms the requested configuration.
     @MainActor func connect(options: TunnelStartOptions) async throws
+
+    /// Finish the local Apply commit while the controller can still restore the prior route.
+    @MainActor func apply(options: TunnelStartOptions, starting: Bool, transaction: UUID?, commit: @MainActor () throws -> Void) async throws
 
     /// [ Disconnect ]: stop the tunnel.
     @MainActor func disconnect() async throws
@@ -75,6 +77,11 @@ public protocol TunnelControlling: AnyObject, Sendable {
 }
 
 public extension TunnelControlling {
+    @MainActor func apply(options: TunnelStartOptions, starting: Bool, transaction: UUID?, commit: @MainActor () throws -> Void) async throws {
+        if starting { try await connect(options: options) }
+        else { try await reload(options: options) }
+        try commit()
+    }
     func status() async throws -> ServiceState { try await ping().serviceState }
     func reload(options: TunnelStartOptions) async throws { try await reload(configContent: options.configContent) }
     func recoverExperiment() async throws { throw TunnelProfile.InvalidProfile("Experiment recovery is unavailable on this transport") }

@@ -64,7 +64,7 @@ func TestNativeLearningVerifiesRecoveryAndRollsBack(t *testing.T) {
 				"log":       map[string]any{"level": "error"},
 				"outbounds": []any{map[string]any{"type": "socks", "tag": "direct", "server": "127.0.0.1", "server_port": directPort}, map[string]any{"type": "socks", "tag": "exit", "server": "127.0.0.1", "server_port": proxyPort}, map[string]any{"type": "direct", "tag": "stream-direct"}},
 				"inbounds":  []any{map[string]any{"type": "direct", "tag": "protected-dns", "listen": "127.0.0.1", "listen_port": learningPort(t)}, map[string]any{"type": "direct", "tag": "stream", "listen": "127.0.0.1", "listen_port": streamPort, "override_address": "127.0.0.1", "override_port": echoPort}},
-				"route":     map[string]any{"final": "direct", "rules": []any{map[string]any{"inbound": []string{"protected-dns"}, "action": "hijack-dns"}, map[string]any{"inbound": []string{"stream"}, "action": "route", "outbound": "stream-direct"}, map[string]any{"rule_set": []string{"rs-proxy"}, "action": "route", "outbound": "exit"}}, "rule_set": []any{map[string]any{"type": "inline", "tag": "rs-proxy", "rules": []any{map[string]any{"domain": []string{"explicit.example"}}}}}},
+				"route":     map[string]any{"final": "direct", "rules": []any{map[string]any{"inbound": []string{"protected-dns"}, "action": "hijack-dns"}, map[string]any{"inbound": []string{"stream"}, "action": "route", "outbound": "stream-direct"}, map[string]any{"clash_mode": "Global", "action": "route", "outbound": "exit"}, map[string]any{"rule_set": []string{"rs-proxy"}, "action": "route", "outbound": "exit"}}, "rule_set": []any{map[string]any{"type": "inline", "tag": "rs-proxy", "rules": []any{map[string]any{"domain": []string{"explicit.example"}}}}}},
 				"services":  []any{map[string]any{"type": "api", "listen": "127.0.0.1", "listen_port": api, "secret": cfg.API.Secret}},
 			})
 			prepared, err := experiment.PrepareProbe(raw)
@@ -159,6 +159,16 @@ func TestNativeLearningVerifiesRecoveryAndRollsBack(t *testing.T) {
 			if tc.name == "proxy_recovers" {
 				client, e := sbclient.Dial(ctx, cfg.API.URL, cfg.API.Secret)
 				if e != nil {
+					t.Fatal(e)
+				}
+				if e = client.SetClashMode(ctx, "Global"); e != nil {
+					t.Fatal(e)
+				}
+				candidate := experiment.Candidate{Domain: "origin.example", Port: "80"}
+				if probe := experiment.Probe(ctx, prepared, candidate, false); probe.HTTPStatus != 0 || probe.Error == "" {
+					t.Fatalf("Global allowed direct probe: %+v", probe)
+				}
+				if e = client.SetClashMode(ctx, "Rule"); e != nil {
 					t.Fatal(e)
 				}
 				statusCtx, stopStatus := context.WithTimeout(ctx, 2300*time.Millisecond)

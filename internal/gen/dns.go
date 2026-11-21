@@ -3,7 +3,9 @@ package gen
 import (
 	"fmt"
 	"net/netip"
+	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/pi-dal/sakamoto/internal/config"
@@ -25,20 +27,39 @@ type dnsResolvers struct {
 	lan                  string
 }
 
-func buildDNS(p *parsedConf, cfg *config.Config, nodes []map[string]any, exitTag string, ts tailscaleInfo) dnsAssembly {
-	resolvers := buildResolvers(p, cfg, exitTag)
-	setNodeResolvers(nodes, cfg, ts, resolvers)
+func buildDNS(p *parsedConf, cfg *config.Config, nodes []map[string]any, exitTag string, ts tailscaleInfo) (dnsAssembly, error) {
+	resolvers, err := buildResolvers(p, cfg, exitTag)
+	if err != nil {
+		return dnsAssembly{}, err
+	}
+	if err := setNodeResolvers(nodes, cfg, ts, resolvers); err != nil {
+		return dnsAssembly{}, err
+	}
+	if cfg.DNSGuard.Enabled {
+		for _, server := range resolvers.servers {
+			if server["detour"] == nil {
+				continue
+			}
+			host, _ := server["server"].(string)
+			resolver, err := protectedBootstrap(host, cfg, ts, resolvers)
+			if err != nil {
+				return dnsAssembly{}, err
+			}
+			server["domain_resolver"] = resolver
+		}
+	}
 	rules := buildDNSRules(p, cfg, ts, exitTag, &resolvers)
 	ordinary := resolvers.localPublic
 	if cfg.DNSGuard.Enabled {
 		ordinary = resolvers.primary
 	}
-	return dnsAssembly{resolvers.servers, rules, resolvers.primary, ordinary}
+	return dnsAssembly{resolvers.servers, rules, resolvers.primary, ordinary}, nil
 }
 
-func buildResolvers(p *parsedConf, cfg *config.Config, exitTag string) dnsResolvers {
+func buildResolvers(p *parsedConf, cfg *config.Config, exitTag string) (dnsResolvers, error) {
 	var dnsServers []map[string]any
 	localTags, remoteTags := []string{}, []string{}
+	lanResolver := ""
 	localPublic := "" // First public UDP resolver; private DNS can disappear with a VPN.
 	addServer := func(tag, typ, server string, detour bool) {
 		s := map[string]any{"tag": tag, "type": typ, "server": server}
@@ -50,40 +71,53 @@ func buildResolvers(p *parsedConf, cfg *config.Config, exitTag string) dnsResolv
 		}
 		dnsServers = append(dnsServers, s)
 	}
-	for _, d := range splitCSV(p.general["dns-server"]) {
+	for _, d := range append(splitCSV(p.general["dns-server"]), splitCSV(p.general["fallback-dns-server"])...) {
 		viaProxy := strings.HasSuffix(d, "#proxy")
 		d = strings.TrimSuffix(d, "#proxy")
 		switch {
-		case strings.HasPrefix(d, "https://"):
-			host := strings.TrimPrefix(d, "https://")
-			host = strings.SplitN(host, "/", 2)[0] // Keep the host; the default path is /dns-query.
+		case strings.HasPrefix(strings.ToLower(d), "https://"):
+			u, err := url.Parse(d)
+			// Error text must never include account identifiers from a DoH URL.
+			if err != nil || u.Hostname() == "" || u.User != nil || strings.ContainsAny(d, "?#") || strings.HasSuffix(u.Host, ":") {
+				return dnsResolvers{}, fmt.Errorf("invalid or unsupported DoH URL components")
+			}
 			tag := fmt.Sprintf("remote%d", len(remoteTags))
 			remoteTags = append(remoteTags, tag)
-			addServer(tag, "https", host, viaProxy)
+			addServer(tag, "https", u.Hostname(), viaProxy)
+			s := dnsServers[len(dnsServers)-1]
+			if port := u.Port(); port != "" {
+				n, err := strconv.ParseUint(port, 10, 16)
+				if err != nil || n == 0 {
+					return dnsResolvers{}, fmt.Errorf("invalid DoH port")
+				}
+				s["server_port"] = n
+			}
+			if path := u.EscapedPath(); path != "" {
+				s["path"] = path
+			}
 		case strings.HasPrefix(d, "tls://"):
 			tag := fmt.Sprintf("remote%d", len(remoteTags))
 			remoteTags = append(remoteTags, tag)
 			addServer(tag, "tls", strings.TrimPrefix(d, "tls://"), viaProxy)
+		case viaProxy:
+			tag := fmt.Sprintf("remote%d", len(remoteTags))
+			remoteTags = append(remoteTags, tag)
+			addServer(tag, "udp", d, true)
 		default: // Bare IP: add to the local UDP resolver pool.
 			tag := fmt.Sprintf("local%d", len(localTags))
 			localTags = append(localTags, tag)
-			if localPublic == "" {
-				if a, err := netip.ParseAddr(strings.SplitN(d, ":", 2)[0]); err == nil && !a.IsPrivate() {
+			if a, err := netip.ParseAddr(d); err == nil {
+				a = a.Unmap()
+				if a.IsPrivate() {
+					if lanResolver == "" {
+						lanResolver = tag
+					}
+				} else if localPublic == "" && a.IsGlobalUnicast() {
 					localPublic = tag
 				}
 			}
 			addServer(tag, "udp", d, false)
 		}
-	}
-	for _, d := range splitCSV(p.general["fallback-dns-server"]) { // Include fallback resolvers in the local pool.
-		tag := fmt.Sprintf("local%d", len(localTags))
-		localTags = append(localTags, tag)
-		if localPublic == "" {
-			if a, err := netip.ParseAddr(strings.SplitN(d, ":", 2)[0]); err == nil && !a.IsPrivate() {
-				localPublic = tag
-			}
-		}
-		addServer(tag, "udp", strings.TrimPrefix(strings.TrimPrefix(d, "tls://"), "https://"), false)
 	}
 	if len(localTags) == 0 {
 		localTags = []string{"local0"}
@@ -95,7 +129,7 @@ func buildResolvers(p *parsedConf, cfg *config.Config, exitTag string) dnsResolv
 	}
 	// Pin DoH bootstrap resolution to public local DNS.
 	for _, s := range dnsServers {
-		if s["detour"] != nil {
+		if s["detour"] != nil || s["type"] == "https" || s["type"] == "tls" {
 			s["domain_resolver"] = localPublic
 		}
 	}
@@ -105,7 +139,6 @@ func buildResolvers(p *parsedConf, cfg *config.Config, exitTag string) dnsResolv
 		dnsServers[len(dnsServers)-1]["domain_resolver"] = localPublic
 	}
 	// Preserve the imported private resolver only for explicit LAN namespaces.
-	lanResolver := localTags[0]
 	if cfg.DNSGuard.Enabled {
 		const bootstrap = "dns-bootstrap"
 		dnsServers = append(dnsServers, map[string]any{
@@ -121,26 +154,37 @@ func buildResolvers(p *parsedConf, cfg *config.Config, exitTag string) dnsResolv
 			}
 		}
 	}
-	return dnsResolvers{dnsServers, remoteTags[0], localPublic, lanResolver}
+	return dnsResolvers{dnsServers, remoteTags[0], localPublic, lanResolver}, nil
 }
 
-func setNodeResolvers(nodes []map[string]any, cfg *config.Config, ts tailscaleInfo, resolvers dnsResolvers) {
+func setNodeResolvers(nodes []map[string]any, cfg *config.Config, ts tailscaleInfo, resolvers dnsResolvers) error {
 	// Resolve proxy server hostnames separately to avoid a detour bootstrap loop.
 	for _, n := range nodes {
 		n["domain_resolver"] = resolvers.localPublic
 		if cfg.DNSGuard.Enabled {
 			host, _ := n["server"].(string)
-			host = strings.ToLower(host)
-			for _, suffix := range cfg.DNSGuard.LocalDomains {
-				if host == strings.ToLower(suffix) || strings.HasSuffix(host, "."+strings.ToLower(suffix)) {
-					n["domain_resolver"] = resolvers.lan
-				}
+			resolver, err := protectedBootstrap(host, cfg, ts, resolvers)
+			if err != nil {
+				return err
 			}
-			if ts.Present && (host == "ts.net" || strings.HasSuffix(host, ".ts.net")) {
-				n["domain_resolver"] = "ts-dns"
-			}
+			n["domain_resolver"] = resolver
 		}
 	}
+	return nil
+}
+
+func protectedBootstrap(host string, cfg *config.Config, ts tailscaleInfo, resolvers dnsResolvers) (string, error) {
+	host = config.BootstrapName(host)
+	if ts.Present && (host == "ts.net" || strings.HasSuffix(host, ".ts.net")) {
+		return "ts-dns", nil
+	}
+	if cfg.IsLocalDNSName(host) {
+		if resolvers.lan == "" {
+			return "", fmt.Errorf("private hostname requires a configured private DNS resolver")
+		}
+		return resolvers.lan, nil
+	}
+	return resolvers.localPublic, nil
 }
 
 func dnsDirectRuleSet(p *parsedConf) string {
@@ -149,8 +193,8 @@ func dnsDirectRuleSet(p *parsedConf) string {
 	if !ok || len(direct["domain"])+len(direct["domain_suffix"])+len(direct["domain_keyword"]) == 0 {
 		return ""
 	}
-	if len(direct["ip_cidr"]) > 0 {
-		return "rs-direct-domains"
+	if p.directDomainSet != "" {
+		return p.directDomainSet
 	}
 	return "rs-direct"
 }
@@ -165,7 +209,10 @@ func buildDNSRules(p *parsedConf, cfg *config.Config, ts tailscaleInfo, exitTag 
 			for key, value := range server {
 				global[key] = value
 			}
-			global["tag"], global["detour"], global["domain_resolver"] = globalDNS, exitTag, resolvers.localPublic
+			global["tag"], global["detour"] = globalDNS, exitTag
+			if global["domain_resolver"] == nil {
+				global["domain_resolver"] = resolvers.localPublic
+			}
 			resolvers.servers = append(resolvers.servers, global)
 			break
 		}
@@ -190,7 +237,11 @@ func buildDNSRules(p *parsedConf, cfg *config.Config, ts tailscaleInfo, exitTag 
 	// Protected DNS takes precedence over traffic mode: only explicit private
 	// namespaces and MagicDNS use LAN resolvers; public DNS stays on proxy DoH.
 	if cfg.DNSGuard.Enabled && len(cfg.DNSGuard.LocalDomains) > 0 {
-		dnsRules = append(dnsRules, map[string]any{"domain_suffix": cfg.DNSGuard.LocalDomains, "server": resolvers.lan, "action": "route"})
+		local := map[string]any{"domain_suffix": cfg.DNSGuard.LocalDomains, "action": "predefined", "rcode": "SERVFAIL"}
+		if resolvers.lan != "" {
+			local = map[string]any{"domain_suffix": cfg.DNSGuard.LocalDomains, "action": "route", "server": resolvers.lan}
+		}
+		dnsRules = append(dnsRules, local)
 	}
 	if !cfg.DNSGuard.Enabled {
 		dnsRules = append(dnsRules, map[string]any{"clash_mode": "Direct", "action": "route", "server": resolvers.localPublic})

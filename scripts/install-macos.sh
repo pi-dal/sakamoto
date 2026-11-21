@@ -31,19 +31,38 @@ if [[ ! -t 0 ]]; then echo 'Run interactively to approve installing a root Launc
 read -r -p "Install sakamoto daemon (root), watcher and independent offline rescue for $user in $dir? [y/N] " answer
 [[ "$answer" == y || "$answer" == Y ]] || exit 0
 SAKAMOTO_DIR="$dir" /bin/bash "$root/scripts/install-rescue.sh"
+# Snapshot the administratively approved executables under a root-owned parent.
+# A subsequent Homebrew upgrade must not replace either executable of a live job.
+parent='/Library/PrivilegedHelperTools'
+if [[ ! -e "$parent" ]]; then sudo /usr/bin/install -d -o root -g wheel -m 755 "$parent"; fi
+for ancestor in /Library "$parent"; do
+  mode="$(/usr/bin/stat -f '%Lp' "$ancestor")"
+  [[ -d "$ancestor" && ! -L "$ancestor" && "$(/usr/bin/stat -f '%u' "$ancestor")" == 0 ]] && (( (8#$mode & 022) == 0 )) || { echo 'Unsafe privileged installation directory' >&2; exit 1; }
+done
+release="$(sudo /usr/bin/mktemp -d "$parent/sakamoto-service.XXXXXX")"
+sudo /usr/bin/install -o root -g wheel -m 755 "$bin" "$release/sakamoto"
+sudo /usr/bin/install -o root -g wheel -m 755 "$sing_box" "$release/sing-box"
+sudo /usr/bin/codesign --verify --strict "$release/sakamoto"
+sudo /usr/bin/codesign --verify --strict "$release/sing-box"
+sudo /bin/chmod 755 "$release"
+"$release/sing-box" check -D "$dir" -c "$dir/config.json"
+"$release/sakamoto" version >/dev/null
+privileged_bin="$release/sakamoto"
+sing_box="$release/sing-box"
 umask 077
 mkdir -p "$dir/logs" "$home/Library/LaunchAgents"
 chmod 700 "$dir" "$dir/logs"
 tmp_plist="$(mktemp /tmp/sakamoto-daemon.XXXXXX)"
 trap 'rm -f "$tmp_plist"' EXIT
-python3 - "$root" "$home" "$user" "$dir" "$bin" "$sing_box" "$tmp_plist" <<'PY'
+python3 - "$root" "$home" "$user" "$dir" "$bin" "$sing_box" "$tmp_plist" "$privileged_bin" <<'PY'
 import html,pathlib,sys
-root,home,user,directory,binary,sing_box,tmp=map(pathlib.Path,sys.argv[1:])
+root,home,user,directory,binary,sing_box,tmp,privileged_bin=map(pathlib.Path,sys.argv[1:])
 values={'@HOME@':str(home),'@USER@':str(user),'@DIR@':str(directory),'@BIN@':str(binary),'@SING_BOX@':str(sing_box)}
 for source,target in [
  ('dev.sakamoto.daemon.plist.in',tmp),
  ('dev.sakamoto.watch.plist.in',home/'Library/LaunchAgents/dev.sakamoto.watch.plist'),
 ]:
+ values['@BIN@']=str(privileged_bin if target==tmp else binary)
  text=(root/'launchd'/source).read_text()
  for key,value in values.items():text=text.replace(key,html.escape(value,quote=True))
  target.write_text(text)

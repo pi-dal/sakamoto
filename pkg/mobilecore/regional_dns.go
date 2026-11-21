@@ -1,10 +1,21 @@
 package mobilecore
 
-import "github.com/pi-dal/sakamoto/pkg/regionaldns"
+import (
+	"github.com/pi-dal/sakamoto/internal/restorepoint"
+	"github.com/pi-dal/sakamoto/pkg/regionaldns"
+)
 
 // CheckRegionalDNSRecovery refuses snapshots with different effective privacy settings.
 func CheckRegionalDNSRecovery(current, retained string) error {
-	return regionaldns.CheckRecovery([]byte(current), []byte(retained))
+	want, err := restorepoint.MobilePolicyContent(current)
+	if err != nil {
+		return err
+	}
+	got, err := restorepoint.MobilePolicyContent(retained)
+	if err != nil {
+		return err
+	}
+	return regionaldns.CheckRecovery(want, got)
 }
 
 // RegionalRelayFingerprint captures the selected node during an explicit settings save.

@@ -25,6 +25,8 @@
     <string name="editor_save_hint">Save at the top right. Back returns without saving; unsaved changes require confirmation.</string>
     <string name="experiments_title">Experiments</string>
     <string name="experiments_entry_note">Unmatched policy, learned routes and fallback recovery</string>
+    <string name="experiment_upgrade_consent">Learning probes are off after upgrading this profile. To allow them, choose auto under Unmatched policy, confirm, and apply your changes. You can also enable Cloudflare learning separately.</string>
+    <string name="experiment_legacy_final">This older profile keeps its saved FINAL route. Choose on and apply to proxy unmatched traffic. To recover the original source FINAL, export and import the profile again.</string>
     <string name="experiment_mode">Unmatched policy</string>
     <string name="experiment_threshold">Direct failure threshold (1–20)</string>
     <string name="experiment_checks">Recent checks</string>
@@ -38,6 +40,7 @@
     <string name="experiment_auto_confirm">Enable automatic route learning?</string>
     <string name="experiment_auto_note">Only correlated unmatched-direct TCP timeouts with fresh healthy proxy tests qualify. Learning validates and reloads the tunnel, interrupting active connections. It is local to this phone and can be reversed.</string>
     <string name="experiment_signal_limits">off/auto leave unmatched traffic direct; on uses the proxy exit. Explicit direct/reject policy keeps priority. Cloudflare learning requires an explicit regional-block signal in core logs; encrypted browser error pages and generic 403s cannot be inferred.</string>
+    <string name="fallback_upgrade_consent">Automatic fallback is off after upgrading this profile. To let this phone test and switch proxy exits, turn on Automatic fallback on this phone, then apply changes or reconnect.</string>
     <string name="experiment_fallback">Automatic fallback on this phone</string>
     <string name="experiment_recovery_rounds">Healthy rounds before recovery (1–20)</string>
     <string name="experiment_recover">Recover now</string>
@@ -136,6 +139,12 @@
     <string name="tun_stack">TUN stack</string>
     <string name="strict_routing">Strict routing</string>
     <string name="edit_generated_config">Edit saved tunnel JSON</string>
+    <string name="previous_recovery_files">Recovery files from previous profiles</string>
+    <string name="export_recovery_copy">Save a copy</string>
+    <string name="export_recovery_hint">Choose where to save the complete file. It may contain node credentials.</string>
+    <string name="source_archive_copy">Archive copy</string>
+    <string name="source_archive_hint">Archive copy keeps the complete file on this device and frees its name for the next recovery copy.</string>
+    <string name="source_recovery_conflict">In Source Files, open nodes-before-sync.txt and tap Archive copy. Then retry.</string>
     <string name="source_metadata_readonly">This is host snapshot metadata. Edit policy or proxy settings from their dedicated pages; the snapshot is retained for comparison.</string>
     <string name="source_edit_limit">This source is too large for the mobile editor. Edit it on the computer and synchronize it again. The current file is preserved.</string>
     <string name="edit">Edit</string>
@@ -430,6 +439,7 @@
     <string name="ts_authkey_absent">Not stored — the auth-URL login flow is used.</string>
     <string name="ts_authkey_store">Store key</string>
     <string name="ts_authkey_delete">Remove key</string>
+    <string name="ts_authkey_delete_failed">Could not delete the saved key. Retry deletion or cancel.</string>
     <string name="ts_authkey_delete_confirm_title">Remove stored auth key?</string>
     <string name="ts_authkey_delete_confirm_message">The encrypted key will be deleted from Android Keystore.</string>
     <string name="ts_choose_exit_node">Choose exit node</string>
@@ -565,7 +575,7 @@
     <string name="location_map_edit_route">Edit route on map</string>
     <string name="location_map_advanced">Advanced coordinates · WGS84</string>
     <string name="location_map_advanced_route">Advanced route coordinates · WGS84</string>
-    <string name="location_map_search_hint">Search a place or address</string>
+    <string name="location_map_search_hint">Search a place or address with Photon</string>
     <string name="location_map_search">Search</string>
     <string name="location_map_searching">Searching places…</string>
     <string name="location_map_choose_result">Choose a place</string>

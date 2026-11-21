@@ -5,12 +5,21 @@ import SakamotoKit
 /// extension profile and remains local; no UI-process monitoring is required.
 struct ExperimentView: View {
     @ObservedObject var model: SettingsModel
+    var body: some View {
+        ProfileExperimentView(model: model, profileID: model.store.selectedProfileID)
+            .id(model.store.selectedProfileID)
+    }
+}
+
+private struct ProfileExperimentView: View {
+    @ObservedObject var model: SettingsModel
+    let profileID: String?
     @State private var settings = ExperimentSettings()
     @State private var runtime = ExperimentRuntimeState()
     @State private var error: String?
     @State private var busy = false
     @State private var confirmAuto = false
-    @State private var selectedID: String?
+    @State private var runtimeUnavailable = false
     @State private var priorityGroup = ""
     @State private var priorityMembers = ""
     @State private var confirmApply = false
@@ -71,6 +80,7 @@ struct ExperimentView: View {
                         let members = priorityMembers.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                         update { $0.fallbacks[group] = members }
                     }
+                    .disabled(priorityGroup.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || priorityMembers.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
                 Button("Run recovery tests") { Task { await perform { try await model.tunnel.recoverExperiment() } } }
                     .disabled(busy || !model.channelActive || !appliedProfile)
@@ -92,7 +102,8 @@ struct ExperimentView: View {
                 Text("Learned domains stay local to this profile. Source DIRECT and REJECT rules keep priority.").font(.footnote).foregroundStyle(.secondary)
             }
             Section("Recent checks") {
-                if runtime.history.isEmpty { Text("No origin checks yet").foregroundStyle(.secondary) }
+                if runtimeUnavailable { Text("Experiment history is unavailable.") }
+                else if runtime.history.isEmpty { Text("No origin checks yet").foregroundStyle(.secondary) }
                 if !recentFailures.isEmpty {
                     Button {
                         selectedFailures = Set(recentFailures.map(\.domain))
@@ -133,7 +144,6 @@ struct ExperimentView: View {
         }
         .sakamotoInspectTag("ExperimentView")
         .onAppear { loadSettings() }
-        .onChange(of: model.store.selectedProfileID) { _ in loadSettings() }
         .task {
             model.activate()
             while !Task.isCancelled {
@@ -172,6 +182,10 @@ struct ExperimentView: View {
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Add \(selectedFailures.count)") {
+                            guard profileID == model.store.selectedProfileID else { return }
+                            readRuntime()
+                            guard !runtimeUnavailable, !selectedFailures.isEmpty,
+                                  selectedFailures.isSubset(of: Set(recentFailures.map(\.domain))) else { return }
                             do {
                                 try model.store.addProxyPolicyRules(Array(selectedFailures))
                                 error = nil
@@ -213,20 +227,27 @@ struct ExperimentView: View {
         case .off: return "Turn on Auto to let the running VPN verify correlated failures and learn routes locally."
         }
     }
-    private func loadSettings() { settings = model.store.experimentSettings; selectedID = model.store.selectedProfileID; readRuntime() }
+    private func loadSettings() { settings = model.store.experimentSettings; readRuntime() }
     private func update(_ edit: (inout ExperimentSettings) -> Void) {
-        guard selectedID == model.store.selectedProfileID else { loadSettings(); return }
+        guard profileID == model.store.selectedProfileID else { return }
         var next = settings; edit(&next)
         do { try model.store.saveExperimentSettings(next); settings = next; error = nil }
         catch { self.error = TunnelDiagnostics.sanitized(error.localizedDescription) }
     }
     private func readRuntime() {
-        guard let id = model.store.selectedProfileID, let root = try? AppPaths.sharedDirectory() else { runtime = ExperimentRuntimeState(); return }
-        do { runtime = try ExperimentFiles.read(profileID: id, root: root) }
-        catch { self.error = "Experiment status could not be read; previous data kept." }
+        guard let profileID, profileID == model.store.selectedProfileID else { return }
+        do {
+            runtime = try ExperimentFiles.read(profileID: profileID, root: AppPaths.sharedDirectory())
+            runtimeUnavailable = false
+        } catch {
+            runtime = ExperimentRuntimeState()
+            runtimeUnavailable = true
+            selectedFailures.removeAll()
+            showFailurePicker = false
+        }
     }
     @MainActor private func perform(_ action: () async throws -> Void) async {
-        guard !busy else { return }; busy = true; defer { busy = false; readRuntime() }
+        guard !busy, profileID == model.store.selectedProfileID else { return }; busy = true; defer { busy = false; readRuntime() }
         do { try await action(); error = nil } catch { self.error = TunnelDiagnostics.sanitized(error.localizedDescription) }
     }
 }

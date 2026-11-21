@@ -86,7 +86,43 @@ def patch(root):
         "type Instance struct {\n\tregionalProbePolicy *regionalProbePolicy\n", "probe policy ownership")
     native = replace_once(native, "\ti := &Instance{\n",
         "\tpolicy, err := newRegionalProbePolicy(options.DNS, options.Outbounds, options.Endpoints)\n\tif err != nil { cancel(); return nil, err }\n\ti := &Instance{\n\t\tregionalProbePolicy: policy,\n", "probe policy binding")
+    manager_path = root / "experimental/clashmode/manager.go"
+    manager = replace_once(manager_path.read_text(), '\tmode         string\n', '''\tmodeAccess   sync.Mutex
+\tprobeContext context.Context
+\tcancelProbes context.CancelFunc
+\tmode         string
+''', "mode lifetime")
+    manager = replace_once(manager, '\t\t\tm.mode = mode\n', '\t\t\tm.changeMode(mode)\n', "restored traffic mode")
+    manager = replace_once(manager, 'func (m *Manager) Mode() string {\n', '''func (m *Manager) Mode() string {
+\tm.modeAccess.Lock()
+\tdefer m.modeAccess.Unlock()
+''', "mode read")
+    manager = replace_once(manager, 'func (m *Manager) SetMode(newMode string) {', '''// Each continuous period in Rule mode has a separate socket lifetime.
+func (m *Manager) RuleProbeContext() (context.Context, bool) {
+\tm.modeAccess.Lock()
+\tdefer m.modeAccess.Unlock()
+\tif !strings.EqualFold(m.mode, "Rule") { return nil, false }
+\tif m.probeContext == nil { m.probeContext, m.cancelProbes = context.WithCancel(m.ctx) }
+\treturn m.probeContext, true
+}
+
+func (m *Manager) changeMode(mode string) bool {
+\tm.modeAccess.Lock()
+\tdefer m.modeAccess.Unlock()
+\tif mode == m.mode { return false }
+\tif m.cancelProbes != nil {
+\t\tm.cancelProbes()
+\t\tm.cancelProbes = nil
+\t\tm.probeContext = nil
+\t}
+\tm.mode = mode
+\treturn true
+}
+
+func (m *Manager) SetMode(newMode string) {''', "mode change and probe cancellation")
+    manager = replace_once(manager, '\tif newMode == m.mode {\n\t\treturn\n\t}\n\tm.mode = newMode\n', '\tif !m.changeMode(newMode) {\n\t\treturn\n\t}\n', "mode change dispatch")
     # Validate every upstream anchor before writing. Never edit GOMODCACHE.
+    manager_path.write_text(manager)
     instance.write_text(native)
     server.write_text(source)
     monitor.write_text(network)

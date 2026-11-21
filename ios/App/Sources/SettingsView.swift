@@ -87,13 +87,18 @@ final class SettingsModel: ObservableObject {
     }
 
     func setExperiment(_ enabled: Bool) {
-        apply("Experiment \(enabled ? "on" : "off")") { try SettingsOverrides.setExperiment(enabled, in: $0) }
+        var settings = store.experimentSettings
+        settings.mode = enabled ? .on : .off
+        do {
+            try store.saveExperimentSettings(settings)
+            refreshSemantics()
+        } catch { notice = Notice(kind: .error, text: error.localizedDescription) }
     }
 
     private func apply(_ label: String, _ transform: (String) throws -> String) {
         do {
             let next = try transform(store.content)
-            store.save(next)
+            try store.save(next)
             notice = Notice(kind: .info, text: "\(label) saved — apply configuration to take effect")
             refreshSemantics()
         } catch {
@@ -161,6 +166,7 @@ struct SettingsView: View {
     var sourcesOnly = false
 
     @State private var confirmSyncEnable = false
+    @State private var resolveSyncConflict = false
     @State private var showSyncDirectoryPicker = false
     @State private var confirmApply = false
     @State private var showModes = false
@@ -403,9 +409,15 @@ struct SettingsView: View {
                     Text("Conflict — not overwritten: " + names.joined(separator: ", "))
                         .font(.footnote)
                         .foregroundStyle(.primary)
-                    Text("Both sides changed without a shared baseline. Keep the copy you want staged here, then sync again.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                    Button("Resolve conflicting files…") { resolveSyncConflict = true }
+                        .disabled(sync.syncing)
+                        .confirmationDialog("Which copies do you want to keep?", isPresented: $resolveSyncConflict, titleVisibility: .visible) {
+                            Button("Replace device copies with iCloud copies", role: .destructive) { sync.syncNow(conflictChoice: .useCloud) }
+                            Button("Replace iCloud copies with device copies", role: .destructive) { sync.syncNow(conflictChoice: .useDevice) }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("This choice applies to: " + names.joined(separator: ", "))
+                        }
                 }
                 DisclosureGroup("Sync options") {
                     Toggle("Include rule configuration", isOn: Binding(

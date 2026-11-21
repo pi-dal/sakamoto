@@ -19,7 +19,7 @@ struct HomeView: View {
                     Button("Apply selected configuration") { Task { await model.store.regenerateAndApply(tunnel: model.tunnel) } }
                 }
                 if model.store.selectedProfile?.sourcesChanged == true {
-                    Label("Sources changed — generate in Config",  systemImage: "exclamationmark.circle").font(.footnote).foregroundStyle(.secondary)
+                    Label(model.store.canConnect ? "Connect uses the last generated configuration. Apply source changes in Config." : "Generate your sources in Config to connect.",  systemImage: "exclamationmark.circle").font(.footnote).foregroundStyle(.secondary)
                 }
                 modeButton.sakamotoInspectTag("RoutingMode")
                 Button(model.repairing ? "Checking and repairing VPN…" : "Check and repair VPN") {
